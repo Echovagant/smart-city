@@ -8,9 +8,11 @@ __pycache__/
 .ruff_cache/
 
 # Virtualenv (the pre-built venv at backend-python/venv/ was checked into
-# the init commit by accident; Step 7 below untracks it from the index.
-# Keep this line active to prevent re-tracking venv contents in the future.)
+# the init commit by accident; commit d52eff0 untracked it. Renamed to
+# .venv/ on 2026-06-22 to match VSCode's Ctrl+Shift+P "Create Environment"
+# default. Both names are ignored so a future plan can use either.)
 venv/
+.venv/
 
 # Local environment overrides (NEVER commit the real .env)
 .env
