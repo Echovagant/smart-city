@@ -4,7 +4,9 @@ from pydantic_settings import BaseSettings
 import os
 import uvicorn
 import json
+from pathlib import Path
 from typing import List, Dict, Any
+from data_processor import DataProcessorError, get_data_processor
 
 # 配置管理
 class Settings(BaseSettings):
@@ -44,6 +46,31 @@ app.add_middleware(
 os.makedirs(settings.data_dir, exist_ok=True)
 os.makedirs(settings.geojson_dir, exist_ok=True)
 
+# 初始化数据处理器；data_dir 来自 .env，缺省时回退到 backend-python/data
+processor = get_data_processor(settings.data_dir)
+
+# GeoJSON 文件路径（来自 settings.geojson_dir；user-provided OSM data）。
+_buildings_path = Path(settings.geojson_dir) / "buildings.geojson"
+_roads_path = Path(settings.geojson_dir) / "roads.geojson"
+
+# 启动时缓存已加载的 GeoJSON；如加载失败则在第一次请求时再试并返回 5xx。
+_buildings_cache: Dict[str, Any] = None
+_roads_cache: Dict[str, Any] = None
+
+
+def _load_buildings() -> Dict[str, Any]:
+    global _buildings_cache
+    if _buildings_cache is None:
+        _buildings_cache = processor.load_geojson(str(_buildings_path))
+    return _buildings_cache
+
+
+def _load_roads() -> Dict[str, Any]:
+    global _roads_cache
+    if _roads_cache is None:
+        _roads_cache = processor.load_geojson(str(_roads_path))
+    return _roads_cache
+
 # 根路由
 @app.get("/")
 async def root():
@@ -60,66 +87,58 @@ async def health_check():
 
 # 模拟数据接口
 @app.get("/api/buildings")
-async def get_buildings():
-    """获取建筑数据"""
-    # 这里将返回模拟数据，实际应用中应该从数据库或文件中读取
-    return {
-        "type": "FeatureCollection",
-        "features": [
-            {
-                "type": "Feature",
-                "properties": {
-                    "name": "商业中心",
-                    "height": 150,
-                    "type": "commercial",
-                    "address": "市中心商业区"
-                },
-                "geometry": {
-                    "type": "Polygon",
-                    "coordinates": [[
-                        [116.404, 39.915],
-                        [116.406, 39.915],
-                        [116.406, 39.917],
-                        [116.404, 39.917],
-                        [116.404, 39.915]
-                    ]]
-                }
-            }
-        ]
-    }
+async def get_buildings(bbox: str = None):
+    """获取建筑数据。
+
+    可选 query 参数 bbox=min_lon,min_lat,max_lon,max_lat 用来按范围过滤。
+    """
+    try:
+        data = _load_buildings()
+        if bbox:
+            try:
+                parts = [float(x) for x in bbox.split(",")]
+                if len(parts) != 4:
+                    raise ValueError
+                return processor.filter_features_by_bbox(data, parts)
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail="bbox 必须是 4 个逗号分隔的数字：min_lon,min_lat,max_lon,max_lat",
+                )
+        return data
+    except DataProcessorError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
 
 @app.get("/api/roads")
-async def get_roads():
-    """获取道路数据"""
-    # 模拟道路数据
-    return {
-        "type": "FeatureCollection",
-        "features": [
-            {
-                "type": "Feature",
-                "properties": {
-                    "name": "主干道",
-                    "width": 30,
-                    "type": "primary"
-                },
-                "geometry": {
-                    "type": "LineString",
-                    "coordinates": [
-                        [116.400, 39.915],
-                        [116.408, 39.915]
-                    ]
-                }
-            }
-        ]
-    }
+async def get_roads(bbox: str = None):
+    """获取道路数据。可选 bbox query 参数。"""
+    try:
+        data = _load_roads()
+        if bbox:
+            try:
+                parts = [float(x) for x in bbox.split(",")]
+                if len(parts) != 4:
+                    raise ValueError
+                return processor.filter_features_by_bbox(data, parts)
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail="bbox 必须是 4 个逗号分隔的数字：min_lon,min_lat,max_lon,max_lat",
+                )
+        return data
+    except DataProcessorError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
 
 @app.get("/api/traffic-status")
 async def get_traffic_status():
-    """获取交通状态"""
+    """获取交通状态（占位实现：返回固定值；后续接入实时数据时改造）。"""
+    # OSM 不带实时流量；这里保留一个稳定的占位响应，前端 plan 007 会调用它。
     return {
         "status": "normal",
         "congestion_level": 0.3,
-        "update_time": "2024-04-24T10:00:00Z"
+        "update_time": "2024-04-24T10:00:00Z",
     }
 
 if __name__ == "__main__":
