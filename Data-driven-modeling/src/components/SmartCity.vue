@@ -75,16 +75,15 @@ const cityConfig = {
 // 初始化Cesium - 使用最简单的配置
 const initCesium = () => {
   if (!cesiumContainer.value) return
-  
-  // 关键：不使用Cesium.Ion
-  Cesium.Ion.defaultAccessToken = ''
-  
+
   // 创建一个非常基础的viewer实例
   viewer.value = new Cesium.Viewer(cesiumContainer.value, {
     timeline: false,
     animation: false,
     baseLayerPicker: true, // 启用基础图层选择器，让用户可以选择地图
-    imageryProvider: undefined, // 不预先设置，让Cesium使用默认的离线地图
+    imageryProvider: new Cesium.OpenStreetMapImageryProvider({
+      url: 'https://tile.openstreetmap.org/'
+    }),
     terrainProvider: undefined,
     // 禁用可能导致问题的功能
     useDefaultRenderLoop: true,
@@ -128,17 +127,16 @@ const optimizePerformance = () => {
 // 加载真实GeoJSON建筑数据（替换随机生成的建筑）
 const loadGeoJSONBuildings = async () => {
   try {
-    // 加载public/data/buildings.geojson
-    const dataSource = await viewer.value.dataSources.add(
-      Cesium.GeoJsonDataSource.load('/data/buildings.geojson') // 路径对应public下的文件
-    )
+    // 加载后端 /api/buildings GeoJSON
+    const dataSource = await Cesium.GeoJsonDataSource.load('/api/buildings')
 
     if (!isMounted) return
 
     const entities = dataSource.entities.values
     entities.forEach(entity => {
-      // 从GeoJSON的properties中获取高度（如果没有则默认30米）
-      const height = entity.properties.height?.getValue() || 30
+      if (!isMounted) return
+      // 从GeoJSON的properties中获取高度（OSM常用字段为 height 或 building:levels）
+      const height = entity.properties.height?.getValue() || entity.properties['building:levels']?.getValue() * 3 || 30
       // 随机选择建筑颜色
       const color = cityConfig.buildingColors[Math.floor(Math.random() * cityConfig.buildingColors.length)]
 
@@ -151,23 +149,26 @@ const loadGeoJSONBuildings = async () => {
       // 存入状态管理，用于控制显示/隐藏
       state.buildingEntities.push(entity)
     })
+
+    if (isMounted) {
+      viewer.value.dataSources.add(dataSource)
+    }
   } catch (error) {
-    console.error('加载建筑GeoJSON失败:', error)
+    console.error('加载建筑 GeoJSON 失败:', error)
   }
 }
 
 // 加载真实GeoJSON道路数据
 const loadGeoJSONRoads = async () => {
   try {
-    // 加载public/data/roads.geojson
-    const dataSource = await viewer.value.dataSources.add(
-      Cesium.GeoJsonDataSource.load('/data/roads.geojson')
-    )
+    // 加载后端 /api/roads GeoJSON
+    const dataSource = await Cesium.GeoJsonDataSource.load('/api/roads')
 
     if (!isMounted) return
 
     const entities = dataSource.entities.values
     entities.forEach(entity => {
+      if (!isMounted) return
       // 从GeoJSON的properties中获取道路宽度（默认10米）
       const width = entity.properties.width?.getValue() || 10
       // 根据道路类型设置颜色（主干道深灰，其他浅灰）
@@ -183,8 +184,12 @@ const loadGeoJSONRoads = async () => {
       // 存入状态管理，用于控制显示/隐藏
       state.roadEntities.push(entity)
     })
+
+    if (isMounted) {
+      viewer.value.dataSources.add(dataSource)
+    }
   } catch (error) {
-    console.error('加载道路GeoJSON失败:', error)
+    console.error('加载道路 GeoJSON 失败:', error)
   }
 }
 
@@ -197,11 +202,19 @@ const createTrafficSystem = () => {
   const createTrafficLight = (position, direction) => {
     const trafficLight = viewer.value.entities.add({
       name: 'Traffic Light',
-      position: Cesium.Cartesian3.fromDegrees(position.lng, position.lat, 5),
-      model: {
-        uri: '/models/traffic-light.glb', // 需要准备交通灯模型
-        scale: 0.5
-      }
+      position: Cesium.Cartesian3.fromDegrees(position.lng, position.lat, 0),
+      cylinder: {
+        length: 5,
+        topRadius: 0.1,
+        bottomRadius: 0.1,
+        material: Cesium.Color.DARKGRAY,
+      },
+      point: {
+        pixelSize: 12,
+        color: Cesium.Color.RED,
+        outlineColor: Cesium.Color.WHITE,
+        outlineWidth: 2,
+      },
     })
 
     state.trafficEntities.push(trafficLight)
@@ -220,12 +233,11 @@ const createTrafficSystem = () => {
       const vehicle = viewer.value.entities.add({
         name: `Vehicle ${index + 1}`,
         position: Cesium.Cartesian3.fromDegrees(pos.lng, pos.lat, 0.5),
-        model: {
-          uri: '/models/car.glb', // 需要准备车辆模型
-          scale: 0.3,
-          heading: getHeadingFromDirection(pos.direction)
+        box: {
+          dimensions: new Cesium.Cartesian3(2.0, 1.0, 0.6),
+          material: Cesium.Color.fromCssColorString('#4A90E2'),
         },
-        description: `<h3>车辆 ${index + 1}</h3><p>方向: ${pos.direction}</p>`
+        description: `<h3>车辆 ${index + 1}</h3><p>方向: ${pos.direction}</p>`,
       })
 
       state.trafficEntities.push(vehicle)
@@ -248,9 +260,11 @@ const createTrafficSystem = () => {
       const light = viewer.value.entities.add({
         name: `Street Light ${index + 1}`,
         position: Cesium.Cartesian3.fromDegrees(pos.lng, pos.lat, 8),
-        model: {
-          uri: '/models/street-light.glb', // 需要准备路灯模型
-          scale: 0.8
+        cylinder: {
+          length: 8,
+          topRadius: 0.1,
+          bottomRadius: 0.1,
+          material: Cesium.Color.DARKGRAY,
         },
         // 添加灯光效果
         point: {
@@ -341,26 +355,12 @@ const toggleTraffic = () => {
 // 生命周期钩子
 onMounted(() => {
   try {
-    initCesium()          // 初始化Cesium容器
-    // 暂时不启用性能优化，先确保基础地图显示
-    // optimizePerformance() 
-    
-    // 添加一个简单的实体来测试渲染
-    if (viewer.value) {
-      viewer.value.entities.add({
-        name: '测试点',
-        position: Cesium.Cartesian3.fromDegrees(cityConfig.center.lng, cityConfig.center.lat, 100),
-        point: {
-          pixelSize: 10,
-          color: Cesium.Color.RED
-        }
-      })
-      
-      // 先注释掉可能影响渲染的复杂功能，确保基础地图正常显示
-      // loadGeoJSONBuildings() // 加载GeoJSON建筑
-      // loadGeoJSONRoads()     // 加载GeoJSON道路
-      // createTrafficSystem()  // 创建交通系统
-    }
+    initCesium()
+    if (!viewer.value) return
+    optimizePerformance()
+    loadGeoJSONBuildings()
+    loadGeoJSONRoads()
+    createTrafficSystem()
   } catch (error) {
     console.error('初始化错误:', error)
   }
