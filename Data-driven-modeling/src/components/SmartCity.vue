@@ -22,6 +22,7 @@
 import { ref, onMounted, onUnmounted, reactive } from 'vue'
 import * as Cesium from 'cesium'
 import 'cesium/Build/Cesium/Widgets/widgets.css'
+import { useCityData } from '@/composables/useCityData'
 
 // 移除手动设置的CESIUM_BASE_URL，让Vite自动处理
 
@@ -71,6 +72,9 @@ const cityConfig = {
     Cesium.Color.fromCssColorString('#9013FE')
   ]
 }
+
+// 城市数据来源（通过 useCityData composable 从后端 /api/* 拉取 GeoJSON）
+const { buildings, roads, loadAll } = useCityData()
 
 // 初始化Cesium - 使用最简单的配置
 const initCesium = () => {
@@ -126,10 +130,12 @@ const optimizePerformance = () => {
 
 // 加载真实GeoJSON建筑数据（替换随机生成的建筑）
 const loadGeoJSONBuildings = async () => {
+  if (!buildings.value) return
   try {
-    // 加载后端 /api/buildings GeoJSON
-    const dataSource = await Cesium.GeoJsonDataSource.load('/api/buildings')
-
+    // 使用 useCityData 已加载到内存的 GeoJSON 对象，避免再次发起 HTTP 请求。
+    const dataSource = await Cesium.GeoJsonDataSource.load(buildings.value, {
+      clampToGround: false,
+    })
     if (!isMounted) return
 
     const entities = dataSource.entities.values
@@ -160,10 +166,12 @@ const loadGeoJSONBuildings = async () => {
 
 // 加载真实GeoJSON道路数据
 const loadGeoJSONRoads = async () => {
+  if (!roads.value) return
   try {
-    // 加载后端 /api/roads GeoJSON
-    const dataSource = await Cesium.GeoJsonDataSource.load('/api/roads')
-
+    // 使用 useCityData 已加载到内存的 GeoJSON 对象，避免再次发起 HTTP 请求。
+    const dataSource = await Cesium.GeoJsonDataSource.load(roads.value, {
+      clampToGround: true,
+    })
     if (!isMounted) return
 
     const entities = dataSource.entities.values
@@ -353,13 +361,15 @@ const toggleTraffic = () => {
 }
 
 // 生命周期钩子
-onMounted(() => {
+onMounted(async () => {
   try {
     initCesium()
     if (!viewer.value) return
     optimizePerformance()
-    loadGeoJSONBuildings()
-    loadGeoJSONRoads()
+    await loadAll()
+    if (!isMounted) return
+    await loadGeoJSONBuildings()
+    await loadGeoJSONRoads()
     createTrafficSystem()
   } catch (error) {
     console.error('初始化错误:', error)

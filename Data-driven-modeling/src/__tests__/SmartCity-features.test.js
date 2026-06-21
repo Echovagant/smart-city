@@ -21,7 +21,8 @@ describe('SmartCity.vue feature wiring', () => {
   })
 
   it('uncomments the feature calls in onMounted', () => {
-    const onMounted = source.match(/onMounted\(\(\)\s*=>\s*\{([\s\S]*?)\}\)/)
+    // Plan 007 turned onMounted into async (it awaits loadAll from useCityData).
+    const onMounted = source.match(/onMounted\(async\s*\(\)\s*=>\s*\{([\s\S]*?)\}\)/)
     expect(onMounted).not.toBeNull()
     const body = onMounted[1]
     expect(body).toMatch(/loadGeoJSONBuildings\(\)/)
@@ -30,8 +31,8 @@ describe('SmartCity.vue feature wiring', () => {
     expect(body).toMatch(/optimizePerformance\(\)/)
   })
 
-  it('loads GeoJSON from the backend API, not the public folder', () => {
-    expect(source).toMatch(/Cesium\.GeoJsonDataSource\.load\(['"]\/api\/buildings['"]\)/)
-    expect(source).toMatch(/Cesium\.GeoJsonDataSource\.load\(['"]\/api\/roads['"]\)/)
+  it('consumes data via the useCityData composable, not direct URL fetches', () => {
+    expect(source).toMatch(/import\s*\{\s*useCityData\s*\}\s*from\s*['"]@\/composables\/useCityData['"]/)
+    expect(source).not.toMatch(/Cesium\.GeoJsonDataSource\.load\(['"]\/api\//)
   })
 })

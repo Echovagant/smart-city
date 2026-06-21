@@ -21,7 +21,14 @@ export default defineConfig(({ mode }) => ({
     fs: {
       allow: ['.']
     },
-    // 暂时移除代理配置，使用直接URL访问
+    // 开发期把 /api/* 反代到 FastAPI 后端。
+    // 后端端口来自 backend-python/.env 的 PORT，默认 8001。
+    proxy: {
+      '/api': {
+        target: 'http://127.0.0.1:8001',
+        changeOrigin: false,
+      },
+    },
   },
   // 移除CESIUM_BASE_URL定义，让Cesium自动处理资源路径
   publicDir: 'public',
