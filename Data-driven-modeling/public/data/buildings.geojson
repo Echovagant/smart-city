@@ -1,0 +1,25 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "商业中心",
+        "height": 80,
+        "type": "commercial"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [116.404, 39.915],
+            [116.405, 39.915],
+            [116.405, 39.914],
+            [116.404, 39.914],
+            [116.404, 39.915]
+          ]
+        ]
+      }
+    }
+  ]
+}
