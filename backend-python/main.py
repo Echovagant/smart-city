@@ -9,8 +9,8 @@ from typing import List, Dict, Any
 # 配置管理
 class Settings(BaseSettings):
     app_name: str = "SmartCityBackend"
-    debug: bool = True
-    host: str = "0.0.0.0"
+    debug: bool = False
+    host: str = "127.0.0.1"
     port: int = 8000
     allowed_origins: str = "http://localhost:5173"
     data_dir: str = "./data"
@@ -36,7 +36,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "OPTIONS"],
     allow_headers=["*"],
 )
 

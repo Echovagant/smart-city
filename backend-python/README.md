@@ -50,7 +50,7 @@ DEBUG=True
 
 # 服务器配置
 HOST=0.0.0.0
-PORT=8000
+PORT=8001
 
 # CORS配置
 ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
@@ -66,14 +66,14 @@ GEOJSON_DIR=./geojson
 python main.py
 ```
 
-服务将在 http://localhost:8000 启动。
+服务将在 http://localhost:8001 启动（端口取自 `.env` 中的 `PORT`）。
 
 ## API文档
 
 启动服务后，可以访问以下地址查看详细的API文档：
 
-- Swagger UI: http://localhost:8000/docs
-- ReDoc: http://localhost:8000/redoc
+- Swagger UI: http://localhost:8001/docs
+- ReDoc: http://localhost:8001/redoc
 
 ## 主要API接口
 

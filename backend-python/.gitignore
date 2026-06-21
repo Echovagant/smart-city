@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtualenv (the pre-built venv at backend-python/venv/ was checked into
+# the init commit by accident; Step 7 below untracks it from the index.
+# Keep this line active to prevent re-tracking venv contents in the future.)
+venv/
+
+# Local environment overrides (NEVER commit the real .env)
+.env
+.env.local
+.env.*.local
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
