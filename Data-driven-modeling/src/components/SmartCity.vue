@@ -25,6 +25,28 @@ import 'cesium/Build/Cesium/Widgets/widgets.css'
 
 // 移除手动设置的CESIUM_BASE_URL，让Vite自动处理
 
+// 跟踪所有 requestAnimationFrame handle，onUnmounted 时统一取消
+const animationFrames = new Set()
+
+function safeRequestAnimationFrame(callback) {
+  const handle = requestAnimationFrame((t) => {
+    animationFrames.delete(handle)
+    callback(t)
+  })
+  animationFrames.add(handle)
+  return handle
+}
+
+function cancelAllAnimations() {
+  for (const handle of animationFrames) {
+    cancelAnimationFrame(handle)
+  }
+  animationFrames.clear()
+}
+
+// 组件挂载状态标志，async 初始化路径在 await 后检查
+let isMounted = true
+
 // 组件状态
 const cesiumContainer = ref(null)
 const viewer = ref(null)
@@ -111,6 +133,8 @@ const loadGeoJSONBuildings = async () => {
       Cesium.GeoJsonDataSource.load('/data/buildings.geojson') // 路径对应public下的文件
     )
 
+    if (!isMounted) return
+
     const entities = dataSource.entities.values
     entities.forEach(entity => {
       // 从GeoJSON的properties中获取高度（如果没有则默认30米）
@@ -139,6 +163,8 @@ const loadGeoJSONRoads = async () => {
     const dataSource = await viewer.value.dataSources.add(
       Cesium.GeoJsonDataSource.load('/data/roads.geojson')
     )
+
+    if (!isMounted) return
 
     const entities = dataSource.entities.values
     entities.forEach(entity => {
@@ -277,7 +303,7 @@ const createTrafficSystem = () => {
       }
 
       vehicle.position = Cesium.Cartesian3.fromDegrees(newLng, newLat, 0.5)
-      requestAnimationFrame(moveVehicle)
+      safeRequestAnimationFrame(moveVehicle)
     }
 
     moveVehicle()
@@ -341,6 +367,8 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  isMounted = false
+  cancelAllAnimations()
   if (viewer.value) {
     viewer.value.destroy()
     viewer.value = null
