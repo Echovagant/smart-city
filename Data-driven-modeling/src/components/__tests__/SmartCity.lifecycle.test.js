@@ -37,7 +37,10 @@ vi.mock('cesium', () => {
       },
       dataSources: { add: vi.fn() },
     })),
-    Cartesian3: { fromDegrees: vi.fn(() => ({ x: 0, y: 0, z: 0 })) },
+    Cartesian3: Object.assign(
+      vi.fn().mockImplementation((x, y, z) => ({ x, y, z })),
+      { fromDegrees: vi.fn(() => ({ x: 0, y: 0, z: 0 })) },
+    ),
     Color,
     Ion: { defaultAccessToken: '' },
     SceneMode: { SCENE3D: 0 },
