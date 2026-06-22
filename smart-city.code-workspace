@@ -1,0 +1,33 @@
+{
+  "folders": [
+    {
+      "path": "backend-python",
+      "name": "🐍 Backend (FastAPI + DataProcessor)"
+    },
+    {
+      "path": "Data-driven-modeling",
+      "name": "🌐 Frontend (Vue 3 + Vite + Cesium)"
+    }
+  ],
+  "settings": {
+    "editor.formatOnSave": false,
+    "[python]": {
+      "editor.defaultFormatter": null
+    },
+    "[javascript]": {
+      "editor.defaultFormatter": null
+    },
+    "[vue]": {
+      "editor.defaultFormatter": null
+    }
+  },
+  "extensions": {
+    "recommendations": [
+      "vue.volar",
+      "ms-python.python",
+      "ms-python.vscode-pylance",
+      "dbaeumer.vscode-eslint",
+      "esbenp.prettier-vscode"
+    ]
+  }
+}
