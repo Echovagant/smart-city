@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from starlette.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from pydantic_settings import BaseSettings
@@ -39,6 +40,10 @@ class Settings(BaseSettings):
 BACKEND_DIR = Path(__file__).resolve().parent
 DATA_DIR = BACKEND_DIR / "data"
 GEOJSON_DIR = BACKEND_DIR / "geojson"
+
+# 前端构建产物目录。存在时由本进程直接托管，于是页面与 /api/... 同源，
+# 不需要额外的反代——Vite 的 /api 代理只在 dev 生效。
+FRONTEND_DIST = BACKEND_DIR.parent / "Data-driven-modeling" / "dist"
 
 # 初始化配置
 settings = Settings()
@@ -329,6 +334,30 @@ async def get_traffic_status():
         "congestion_level": 0.3,
         "update_time": "2024-04-24T10:00:00Z",
     }
+
+def mount_frontend(app: FastAPI, dist_dir: Path) -> bool:
+    """把前端构建产物挂到根路径。返回是否挂载成功。
+
+    必须在所有路由注册之后调用：挂载点是「兜底」，注册得越晚，
+    前面注册的真实路由越优先。实测顺序：/api/* 先注册 → 先匹配；
+    mount("/") 后注册 → 只兜底其余路径（未知 /api 路径会落到静态兜底并返回 404）。
+
+    目录不存在时只记一条 warning、不抛错——「还没构建前端」时后端仍要能起来。
+    """
+    if not dist_dir.is_dir():
+        logger.warning(
+            "未找到前端构建产物（%s），不挂载静态资源；"
+            "构建前端请在 Data-driven-modeling 下执行 npm run build",
+            dist_dir,
+        )
+        return False
+    app.mount("/", StaticFiles(directory=str(dist_dir), html=True), name="static")
+    logger.info("已挂载前端构建产物：%s", dist_dir)
+    return True
+
+
+# 挂载放在最后：前面的 /api/* 路由先注册，优先级更高。
+mount_frontend(app, FRONTEND_DIST)
 
 if __name__ == "__main__":
     uvicorn.run(
