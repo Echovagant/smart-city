@@ -88,7 +88,98 @@ const cityConfig = {
     Cesium.Color.fromCssColorString('#F5A623'),
     Cesium.Color.fromCssColorString('#D0021B'),
     Cesium.Color.fromCssColorString('#9013FE')
-  ]
+  ],
+  // 建筑没有任何高度标签时的兜底高度（米）
+  defaultBuildingHeight: 30,
+  // 道路分级表：按 OSM 的 highway 标签分级渲染。
+  //
+  // 读的是 highway，不是 type：实测提取数据里 2260 条道路全部带 highway，
+  // 而 type 一个都没有（建筑上的 type 是 'multipolygon' 几何标签，与道路等级无关）。
+  //
+  // 实测标签分布（backend-python/geojson/roads.geojson，2026-10-20）：
+  //   footway 1117、pedestrian 314、service 263、steps 235、residential 118、
+  //   tertiary 47、primary 40、unclassified 27、path 26、secondary 21、……
+  // 分级就是照这个分布定的：人行道/步行区占了一半，所以给它们最细最浅的线。
+  //
+  // 宽度单位是米，配合 clampToGround 渲染：
+  // 14m 的主干道配 4m 的人行道，就是预期的视觉层级。
+  roadTiers: [
+    {
+      name: '主干道',
+      highway: ['motorway', 'trunk', 'primary'],
+      color: Cesium.Color.fromCssColorString('#3A3A3A'),
+      width: 14
+    },
+    {
+      name: '次干道',
+      highway: ['secondary', 'tertiary'],
+      color: Cesium.Color.fromCssColorString('#6E6E6E'),
+      width: 10
+    },
+    {
+      name: '支路',
+      highway: ['residential', 'unclassified', 'service'],
+      color: Cesium.Color.fromCssColorString('#9E9E9E'),
+      width: 7
+    },
+    {
+      name: '人行道/步行区',
+      highway: ['footway', 'pedestrian', 'steps', 'path', 'cycleway'],
+      color: Cesium.Color.fromCssColorString('#C8C8C8'),
+      width: 4
+    }
+  ],
+  // 兜底分级：highway 标签缺失、或取值不在上表里时用它。
+  // OSM 的 highway 取值比上表多（motorway_link / living_street / track 等都在表外），
+  // 没有兜底的话这些道路会没有样式。
+  // 宽度取最低等级（4m，与人行道同级），避免把未知道路画得比主干道还宽。
+  roadFallbackTier: {
+    name: '其他道路',
+    color: Cesium.Color.fromCssColorString('#C0C0C0'),
+    width: 4
+  }
+}
+
+// highway 标签 → 分级 的查表，建一次就够（2260 条道路各查一次）。
+const ROAD_TIER_BY_HIGHWAY = cityConfig.roadTiers.reduce((map, tier) => {
+  tier.highway.forEach(tag => map.set(tag, tier))
+  return map
+}, new Map())
+
+// 按 highway 标签查道路分级：标签缺失或不在表内 → 兜底分级。
+function resolveRoadTier(highwayTag) {
+  if (typeof highwayTag !== 'string') return cityConfig.roadFallbackTier
+  const tier = ROAD_TIER_BY_HIGHWAY.get(highwayTag.trim().toLowerCase())
+  return tier || cityConfig.roadFallbackTier
+}
+
+// 读一个 OSM 标签值：Cesium 的 properties 是 PropertyBag，取值必须经过 getValue()。
+// 标签缺失时返回 undefined。
+function readTag(properties, key) {
+  const prop = properties?.[key]
+  if (!prop || typeof prop.getValue !== 'function') return undefined
+  return prop.getValue()
+}
+
+// 把一个 OSM 高度类标签转成正数米数；无效或缺失时返回 null。
+function parseHeightMeters(raw) {
+  if (typeof raw === 'boolean') return null
+  const value = Number(raw)
+  if (!Number.isFinite(value) || value <= 0) return null
+  return value
+}
+
+// 建筑高度：height（总高，米）→ building:levels × 3（层数估算）→ 兜底高度。
+// OSM 标签一律是字符串，必须在读取边界处显式转成数字，
+// 绝不让原始字符串流进 extrudedHeight（Cesium 的槽位是 Property | number）。
+// 不用 roof:height：OSM 里它是屋顶构件相对建筑顶部的高度，不是建筑总高，
+// 单独使用会把 15 米的建筑算成 1~3 米。
+function resolveBuildingHeight(properties, fallback) {
+  const direct = parseHeightMeters(readTag(properties, 'height'))
+  if (direct !== null) return direct
+  const levels = parseHeightMeters(readTag(properties, 'building:levels'))
+  if (levels !== null) return levels * 3
+  return fallback
 }
 
 // 城市数据来源（通过 useCityData composable 从后端 /api/* 拉取 GeoJSON）
@@ -241,13 +332,18 @@ const loadGeoJSONBuildings = async () => {
     const entities = dataSource.entities.values
     entities.forEach(entity => {
       if (!isMounted) return
-      // 从GeoJSON的properties中获取高度（OSM常用字段为 height 或 building:levels）
-      const height = entity.properties.height?.getValue() || entity.properties['building:levels']?.getValue() * 3 || 30
+      // OSM 数据里可能混进非 Polygon 的要素（Point/LineString 等），
+      // 它们没有 polygon 属性，直接 entity.polygon.extrudedHeight = ... 会抛
+      // "Cannot set properties of undefined"，而且 try/catch 会把整批加载中止。
+      if (!entity.polygon) return
+      // 建筑高度：height（米）→ building:levels × 3 → 兜底 30 米，
+      // 显式转成数字，extrudedHeight 拿到的永远是数值而不是字符串
+      const height = resolveBuildingHeight(entity.properties, cityConfig.defaultBuildingHeight)
       // 随机选择建筑颜色
       const color = cityConfig.buildingColors[Math.floor(Math.random() * cityConfig.buildingColors.length)]
 
       // 将多边形拉伸为3D建筑
-      entity.polygon.extrudedHeight = height // 拉伸高度
+      entity.polygon.extrudedHeight = height // 拉伸高度（米）
       entity.polygon.material = color.withAlpha(0.8) // 建筑颜色
       entity.polygon.outline = true // 显示轮廓
       entity.polygon.outlineColor = Cesium.Color.WHITE // 轮廓颜色
@@ -283,16 +379,19 @@ const loadGeoJSONRoads = async () => {
       // 它们没有 polyline 属性，直接 entity.polyline.width = ... 会抛
       // "Cannot set properties of undefined"。用 Cesium.defined 守门。
       if (!entity.polyline) return
-      // 从GeoJSON的properties中获取道路宽度（默认10米）
-      const width = entity.properties.width?.getValue() || 10
-      // 根据道路类型设置颜色（主干道深灰，其他浅灰）
-      const color = entity.properties.type?.getValue() === 'main'
-        ? Cesium.Color.DARKGRAY
-        : Cesium.Color.GRAY
+      // 按 OSM 的 highway 标签定级（type 标签在道路数据里根本不存在）
+      const tier = resolveRoadTier(readTag(entity.properties, 'highway'))
+      // 宽度：优先用 OSM 的 width 标签（单位：米），但只在它是正数、
+      // 且不超过该分级的默认宽度时才采用——数据里存在 '30' 这种异常值，
+      // 直接采用会把人行道画成 30 米宽。非法或超纲一律用分级默认宽度。
+      const taggedWidth = Number(readTag(entity.properties, 'width'))
+      const width = Number.isFinite(taggedWidth) && taggedWidth > 0 && taggedWidth <= tier.width
+        ? taggedWidth
+        : tier.width
 
       // 配置道路样式
-      entity.polyline.width = width // 道路宽度
-      entity.polyline.material = color // 道路颜色
+      entity.polyline.width = width // 道路宽度（米，始终是数字）
+      entity.polyline.material = tier.color // 道路颜色（按 highway 分级）
       entity.polyline.clampToGround = true // 贴地显示
 
       // 存入状态管理，用于控制显示/隐藏
@@ -394,17 +493,6 @@ const createTrafficSystem = () => {
 
       state.trafficEntities.push(markRaw(light))
     })
-  }
-
-  // 辅助函数
-  const getHeadingFromDirection = (direction) => {
-    const directions = {
-      east: Cesium.Math.toRadians(90),
-      west: Cesium.Math.toRadians(270),
-      north: Cesium.Math.toRadians(0),
-      south: Cesium.Math.toRadians(180)
-    }
-    return directions[direction] || 0
   }
 
   const animateVehicle = (vehicle, pos) => {

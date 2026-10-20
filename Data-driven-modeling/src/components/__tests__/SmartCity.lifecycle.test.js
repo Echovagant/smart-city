@@ -15,7 +15,9 @@ vi.mock('cesium', () => {
     DARKGRAY: namedColor('darkgray'),
     GRAY: namedColor('gray'),
     withAlpha: colorWithAlpha,
-    fromCssColorString: vi.fn(() => namedColor('css')),
+    // 按传入的 CSS 字符串返回不同的颜色对象：真实 Cesium 里每个色值都是独立实例，
+    // mock 若一律返回同一个名字，就无法断言"两种道路的颜色不同"。
+    fromCssColorString: vi.fn((css) => namedColor(css)),
   })
   return {
     Viewer: vi.fn().mockImplementation(() => ({
@@ -69,6 +71,7 @@ vi.mock('cesium', () => {
   }
 })
 
+import * as Cesium from 'cesium'
 import SmartCity from '../SmartCity.vue'
 
 describe('SmartCity lifecycle', () => {
@@ -172,5 +175,56 @@ describe('SmartCity lifecycle', () => {
     await new Promise((resolve) => setTimeout(resolve, 0))
     const initErrorCalls = errorSpy.mock.calls.filter(([first]) => first === '初始化错误:')
     expect(initErrorCalls).toHaveLength(0)
+  })
+
+  it('renders roads by their OSM highway class', async () => {
+    // 道路分级读的是 highway 标签：实测道路数据里 2260 条全部带 highway，
+    // 而 type 一个都没有。修复前读的是 properties.type，
+    // 结果所有道路都是同一种浅灰、同样宽度，"主干道"分支从来没被渲染过。
+    const makeEntity = (props) => ({
+      polyline: {},
+      properties: Object.fromEntries(
+        Object.entries(props).map(([key, value]) => [key, { getValue: () => value }])
+      )
+    })
+
+    const primary = makeEntity({ highway: 'primary' })
+    const footway = makeEntity({ highway: 'footway' })
+    const unknown = makeEntity({ highway: 'motorway_link' }) // 表外的取值
+    const primaryWithWideTag = makeEntity({ highway: 'primary', width: '30' })
+    const footwayWithWidth = makeEntity({ highway: 'footway', width: '2' })
+
+    const loadMock = Cesium.GeoJsonDataSource.load
+    loadMock.mockResolvedValue({
+      entities: { values: [primary, footway, unknown, primaryWithWideTag, footwayWithWidth] }
+    })
+
+    const wrapper = mount(SmartCity, {
+      attachTo: document.body,
+    })
+    // 直接给 composable 的 roads 塞一份空集合，绕开网络请求
+    wrapper.vm.roads = { type: 'FeatureCollection', features: [] }
+    await wrapper.vm.loadGeoJSONRoads()
+    // 复原 mock，别污染其它用例
+    loadMock.mockResolvedValue({ entities: { values: [] } })
+
+    // 不同等级：颜色不同、宽度不同
+    expect(primary.polyline.material).not.toBe(footway.polyline.material)
+    expect(primary.polyline.material.name).not.toBe(footway.polyline.material.name)
+    expect(primary.polyline.width).toBeGreaterThan(footway.polyline.width)
+    // 宽度必须是数字，不能是 OSM 的原始字符串
+    expect(typeof primary.polyline.width).toBe('number')
+    expect(typeof footway.polyline.width).toBe('number')
+
+    // width 标签只在"正数且不超过该等级默认宽度"时采用：
+    // '2' 米的人行道照用，'30' 米的异常值退回等级默认宽度
+    expect(footwayWithWidth.polyline.width).toBe(2)
+    expect(primaryWithWideTag.polyline.width).toBe(primary.polyline.width)
+
+    // 表外的 highway 取值落到兜底等级（最低宽度，但用的是兜底自己的配色）
+    expect(unknown.polyline.width).toBe(footway.polyline.width)
+    expect(unknown.polyline.material.name).not.toBe(footway.polyline.material.name)
+
+    wrapper.unmount()
   })
 })
