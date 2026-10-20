@@ -1,8 +1,9 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from starlette.middleware.gzip import GZipMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from pydantic_settings import BaseSettings
 from collections import OrderedDict
@@ -31,6 +32,10 @@ class Settings(BaseSettings):
     host: str = "127.0.0.1"
     port: int = 8000
     allowed_origins: str = "http://localhost:5173"
+    # 可选的共享 API key：设了就校验 X-API-Key，没设就不启用（开发零摩擦）。
+    api_key: Optional[str] = None
+    # 逗号分隔的 Host 白名单；留空表示不限制。
+    allowed_hosts: str = ""
 
     class Config:
         env_file = ".env"
@@ -75,6 +80,22 @@ def _normalize_origins(raw: str) -> List[str]:
     if not origins:
         raise ValueError("allowed_origins 不能为空：请至少配置一个允许的来源")
     return origins
+
+
+def require_api_key(x_api_key: Optional[str] = Header(default=None)) -> None:
+    """可选的共享 API key 校验。
+
+    两个必须遵守的点（都实测过）：
+    1. 「未配置即放行」必须是第一行 —— 否则开发环境会被 401 挡住。
+    2. Header(default=None) 必须显式写 —— 省略 Header() 时 FastAPI 会把
+       x_api_key 当成查询参数，header 永远读不到，带对 key 也一律 401。
+
+    依赖在**调用时**读 settings，这样运行时改配置立即生效。
+    """
+    if settings.api_key is None:
+        return
+    if x_api_key != settings.api_key:
+        raise HTTPException(status_code=401, detail="需要 API key")
 
 
 # 创建FastAPI应用
@@ -300,7 +321,7 @@ async def health_check():
     return {"status": "healthy"}
 
 # 模拟数据接口
-@app.get("/api/buildings")
+@app.get("/api/buildings", dependencies=[Depends(require_api_key)])
 async def get_buildings(bbox: Optional[str] = None):
     """获取建筑数据。
 
@@ -319,7 +340,7 @@ async def get_buildings(bbox: Optional[str] = None):
         raise HTTPException(status_code=503, detail=DATA_UNAVAILABLE_DETAIL)
 
 
-@app.get("/api/roads")
+@app.get("/api/roads", dependencies=[Depends(require_api_key)])
 async def get_roads(bbox: Optional[str] = None):
     """获取道路数据。可选 bbox query 参数。"""
     parsed = _parse_bbox(bbox) if bbox is not None else None
