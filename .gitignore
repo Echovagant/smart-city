@@ -8,3 +8,7 @@ node_modules/
 # Python
 __pycache__/
 *.pyc
+
+# 本地工作区：执行计划时的 git worktree 与 SDD 进度/交接文件
+/.worktrees/
+/.superpowers/
