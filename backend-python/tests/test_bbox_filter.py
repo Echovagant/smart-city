@@ -26,7 +26,11 @@ OSM_BUILDINGS = ROOT / "geojson" / "buildings.geojson"
 
 requires_osm_data = pytest.mark.skipif(
     not OSM_BUILDINGS.exists(),
-    reason="OSM 提取数据不存在（backend-python/geojson/buildings.geojson）",
+    reason=(
+        "OSM 提取数据不存在（backend-python/geojson/buildings.geojson）；"
+        "用 backend-python/scripts/fetch_osm_data.py 重新抓取"
+        "（用法见 backend-python/scripts/README.md）"
+    ),
 )
 
 # 测试用 bbox：0,0,1,1
@@ -313,8 +317,9 @@ def test_bbox_cache_is_bounded(client):
 def test_filtered_cache_is_invalidated_when_source_data_is_reloaded(client, monkeypatch, tmp_path):
     """原始数据重载后，缓存不能返回旧的过滤结果。
 
-    conftest 清缓存的方式是把 main._buildings_cache 置回 None，
-    过滤缓存必须跟着失效。
+    这里故意只把 main._buildings_cache 置回 None（强制重新加载原始数据），
+    不动 bbox 过滤缓存——过滤结果必须靠"原始数据换了对象"自己作废，
+    而不是靠谁顺手清缓存。
     """
     first_path = tmp_path / "first.geojson"
     first_path.write_text(

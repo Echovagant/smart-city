@@ -15,7 +15,11 @@ OSM_BUILDINGS = ROOT / "geojson" / "buildings.geojson"
 
 requires_osm_data = pytest.mark.skipif(
     not OSM_BUILDINGS.exists(),
-    reason="OSM 提取数据不存在（backend-python/geojson/buildings.geojson）",
+    reason=(
+        "OSM 提取数据不存在（backend-python/geojson/buildings.geojson）；"
+        "用 backend-python/scripts/fetch_osm_data.py 重新抓取"
+        "（用法见 backend-python/scripts/README.md）"
+    ),
 )
 
 
@@ -64,6 +68,28 @@ def test_api_roads_bbox_filter_returns_exact_count(client):
     ).json()
     assert len(filtered["features"]) == 2
     assert 0 < len(filtered["features"]) < len(full["features"])
+
+
+def test_client_fixture_clears_both_cache_families(request):
+    """client 夹具初始化时必须把两族模块级缓存都清空。
+
+    回归防护：夹具早先只把 _buildings_cache / _roads_cache 赋回 None，
+    漏掉了 plan 011 新增的 bbox 过滤缓存。两族缓存一旦不同步，
+    上一个用例留下的过滤结果就可能泄漏到下一个用例。
+    """
+    # 先人为污染两族缓存，模拟上一个用例留下的残留。
+    main._buildings_cache = {"type": "FeatureCollection", "features": []}
+    main._roads_cache = {"type": "FeatureCollection", "features": []}
+    main._buildings_bbox_cache[(0.0, 0.0, 1.0, 1.0)] = (object(), {})
+    main._roads_bbox_cache[(0.0, 0.0, 1.0, 1.0)] = (object(), {})
+
+    # 申请 client 夹具：它的初始化必须把上面两族缓存都清掉。
+    request.getfixturevalue("client")
+
+    assert main._buildings_cache is None
+    assert main._roads_cache is None
+    assert len(main._buildings_bbox_cache) == 0
+    assert len(main._roads_bbox_cache) == 0
 
 
 def test_api_buildings_bad_bbox_returns_400(client):
@@ -124,11 +150,70 @@ def test_api_buildings_wrong_arity_bbox_returns_400(client):
 def test_api_missing_data_file_returns_503(client, monkeypatch, tmp_path):
     """数据文件缺失是我们的问题：503，且响应体里不能出现服务端路径。"""
     monkeypatch.setattr(main, "_buildings_path", tmp_path / "missing" / "buildings.geojson")
-    main._buildings_cache = None
+    main._clear_caches()
     response = client.get("/api/buildings")
     assert response.status_code == 503
     assert ":\\" not in response.text
     assert "Traceback" not in response.text
+
+
+def test_api_roads_missing_data_file_returns_503(client, monkeypatch, tmp_path):
+    """道路端点的错误契约与建筑端点一致：数据缺失同样是 503。"""
+    monkeypatch.setattr(main, "_roads_path", tmp_path / "missing" / "roads.geojson")
+    main._clear_caches()
+    response = client.get("/api/roads")
+    assert response.status_code == 503
+    assert ":\\" not in response.text
+    assert "Traceback" not in response.text
+
+
+def test_api_response_omits_source_metadata(client, monkeypatch, tmp_path):
+    """原始文件里的 overpass 元信息不能出现在响应体里。
+
+    带 bbox 和不带 bbox 两种取数方式必须给前端同构的负载：
+    只有 {"type", "features"} 两个键，不多不少。
+    """
+    source = tmp_path / "with_metadata.geojson"
+    source.write_text(
+        json.dumps(
+            {
+                "type": "FeatureCollection",
+                "generator": "Overpass API 0.7.55",
+                "copyright": "© OpenStreetMap contributors",
+                "timestamp": "2024-04-24T10:00:00Z",
+                "features": [
+                    {
+                        "type": "Feature",
+                        "properties": {"name": "inside"},
+                        "geometry": {
+                            "type": "Polygon",
+                            "coordinates": [[
+                                [0.02, 0.02],
+                                [0.08, 0.02],
+                                [0.08, 0.08],
+                                [0.02, 0.08],
+                                [0.02, 0.02],
+                            ]],
+                        },
+                    },
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(main, "_buildings_path", source)
+    main._clear_caches()
+
+    plain = client.get("/api/buildings")
+    filtered = client.get("/api/buildings", params={"bbox": "0.0,0.0,0.15,0.15"})
+
+    assert plain.status_code == 200
+    assert filtered.status_code == 200
+    assert set(plain.json()) == {"type", "features"}
+    assert set(filtered.json()) == {"type", "features"}
+    assert len(plain.json()["features"]) == 1
+    assert len(filtered.json()["features"]) == 1
 
 
 def test_api_malformed_feature_returns_503(client, monkeypatch, tmp_path):
@@ -152,7 +237,7 @@ def test_api_malformed_feature_returns_503(client, monkeypatch, tmp_path):
         encoding="utf-8",
     )
     monkeypatch.setattr(main, "_buildings_path", bad_path)
-    main._buildings_cache = None
+    main._clear_caches()
     # 只有真正走 bbox 过滤时才会解析几何，所以这里要带上 bbox。
     response = client.get("/api/buildings", params={"bbox": "0.0,0.0,1.0,1.0"})
     assert response.status_code == 503

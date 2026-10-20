@@ -2,7 +2,8 @@
 
 设计目标：
 - 测试不依赖磁盘上的 OSM 提取数据（backend-python/geojson/ 是未纳入版本管理的输入数据）；
-- 每个测试前后都清空 main 模块级的 GeoJSON 缓存，避免用例之间互相污染；
+- 每个测试前后都清空 main 模块级的全部 GeoJSON 缓存（原始数据 + 按 bbox 的过滤结果），
+  避免用例之间互相污染；
 - 夹具保持通用，后续计划可以在此基础上继续扩展。
 """
 import json
@@ -106,12 +107,15 @@ def synthetic_geojson(tmp_path, synthetic_features):
 
 @pytest.fixture(autouse=True)
 def reset_module_caches():
-    """每个测试前后清空模块级 GeoJSON 缓存，避免用例之间互相污染。"""
-    main._buildings_cache = None
-    main._roads_cache = None
+    """每个测试前后清空模块级 GeoJSON 缓存，避免用例之间互相污染。
+
+    走 main._clear_caches() 而不是直接给 _buildings_cache / _roads_cache 赋 None：
+    main 里有多族缓存（原始 GeoJSON、按 bbox 的过滤结果……），
+    统一由 _clear_caches() 负责清空，将来新增缓存类型时这个夹具不会漏掉。
+    """
+    main._clear_caches()
     yield
-    main._buildings_cache = None
-    main._roads_cache = None
+    main._clear_caches()
 
 
 @pytest.fixture
@@ -119,7 +123,6 @@ def client(monkeypatch, synthetic_geojson):
     """指向合成数据的 TestClient（不依赖磁盘上的 OSM 提取数据）。"""
     monkeypatch.setattr(main, "_buildings_path", synthetic_geojson["buildings"])
     monkeypatch.setattr(main, "_roads_path", synthetic_geojson["roads"])
-    main._buildings_cache = None
-    main._roads_cache = None
+    main._clear_caches()
     with TestClient(main.app) as test_client:
         yield test_client
