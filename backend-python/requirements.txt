@@ -1,6 +1,6 @@
-fastapi==0.111.0
+fastapi==0.153.0
 uvicorn==0.30.1
-pydantic==2.7.0
+pydantic==2.14.1
 pydantic-settings==2.1.0
 python-dotenv==1.0.1
 numpy<2
