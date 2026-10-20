@@ -60,6 +60,18 @@ def test_require_api_key_reads_settings_at_call_time():
         main.require_api_key(x_api_key="nope")
 
 
+def test_empty_api_key_counts_as_unconfigured(client):
+    """回归：`.env.example` 里写的是 `API_KEY=`（空值），空串必须等同于「没配」。
+
+    pydantic-settings 把 `API_KEY=` 读成空串而不是 None；
+    只判 `is None` 的话，照抄 .env.example 启动后每个数据请求都是 401。
+    """
+    main.settings.api_key = ""
+
+    assert client.get("/api/buildings").status_code == 200
+    assert client.get("/api/roads").status_code == 200
+
+
 def test_header_parameter_is_actually_read_from_the_request(client):
     """回归：省略 Header() 会让参数变成 query 参数，header 永远读不到 -> 永远 401。"""
     main.settings.api_key = "secret-123"

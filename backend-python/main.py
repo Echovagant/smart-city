@@ -92,9 +92,14 @@ def require_api_key(x_api_key: Optional[str] = Header(default=None)) -> None:
     2. Header(default=None) 必须显式写 —— 省略 Header() 时 FastAPI 会把
        x_api_key 当成查询参数，header 永远读不到，带对 key 也一律 401。
 
+    「未配置」包括两种情况：环境里没有 API_KEY，以及 API_KEY=（空值）。
+    后者很常见 —— .env.example 里写的就是 `API_KEY=`，照抄成 .env 之后
+    pydantic-settings 读出来的是空串而不是 None；只判 None 会让空串被
+    当成一个合法（且为空的）密钥，于是每个请求都 401。
+
     依赖在**调用时**读 settings，这样运行时改配置立即生效。
     """
-    if settings.api_key is None:
+    if not settings.api_key:
         return
     if x_api_key != settings.api_key:
         raise HTTPException(status_code=401, detail="需要 API key")
