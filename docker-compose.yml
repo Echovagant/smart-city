@@ -1,0 +1,20 @@
+# 一键起后端（含前端静态资源）。
+# 使用前请确保 backend-python/geojson/ 下有 OSM 数据：
+#   cd backend-python && ./.venv/Scripts/python.exe scripts/fetch_osm_data.py
+services:
+  api:
+    build:
+      context: .
+    image: smart-city:latest
+    ports:
+      - "8000:8000"
+    environment:
+      # 生产建议 DEBUG=False 并绑 127.0.0.1（由反代暴露）
+      DEBUG: "False"
+      HOST: "0.0.0.0"
+      PORT: "8000"
+      ALLOWED_ORIGINS: "http://localhost:8000"
+    volumes:
+      # OSM 数据不进镜像，挂进来；缺失时数据接口会返回 503
+      - ./backend-python/geojson:/app/backend-python/geojson:ro
+    restart: unless-stopped
