@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from pydantic_settings import BaseSettings
 from collections import OrderedDict
@@ -87,6 +88,12 @@ app.add_middleware(
     allow_methods=["GET", "OPTIONS"],
     allow_headers=["*"],
 )
+
+# 响应压缩：GeoJSON 是高度可压缩的文本，实测能把 /api/buildings 从
+# 1341 KB 压到约 225 KB。必须在 app 启动前添加——app 一旦启动，
+# add_middleware 会抛 RuntimeError。
+# minimum_size=1000 让 /health 这类小响应保持不压缩。
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 # 确保数据目录存在
 os.makedirs(DATA_DIR, exist_ok=True)

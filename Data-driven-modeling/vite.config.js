@@ -1,5 +1,6 @@
 /// <reference types="vitest" />
 import { readFileSync } from 'node:fs'
+import process from 'node:process'
 import { fileURLToPath, URL } from 'node:url'
 
 import { defineConfig } from 'vite'
@@ -62,7 +63,10 @@ export default defineConfig(({ mode }) => ({
         include: ['mersenne-twister', 'urijs', 'grapheme-splitter', 'bitmap-sdf', 'lerc', 'nosleep.js']
       },
   build: {
-    sourcemap: true,
+    // 生产构建默认不产出 sourcemap：它们让 dist/ 体积翻约 4 倍
+    // （实测 20.4 MB 里 16.5 MB 是 .map），并把全部原始源码发布出去。
+    // 需要线上排障时用 SOURCEMAP=true npm run build 打开。
+    sourcemap: process.env.SOURCEMAP === 'true',
     commonjsOptions: {
       transformMixedEsModules: true
     },
