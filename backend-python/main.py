@@ -2,13 +2,14 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from pydantic_settings import BaseSettings
+from collections import OrderedDict
 import logging
 import math
 import os
 import uvicorn
 import json
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from data_processor import DataProcessorError, get_data_processor
 
 logger = logging.getLogger(__name__)
@@ -102,6 +103,26 @@ _roads_path = GEOJSON_DIR / "roads.geojson"
 _buildings_cache: Optional[Dict[str, Any]] = None
 _roads_cache: Optional[Dict[str, Any]] = None
 
+# 按 bbox 的过滤结果缓存。
+# key 是校验过的规范化 bbox 元组（同一个 bbox 无论字符串里有多少空白、多少位小数，
+# 都落到同一个条目）；条目同时记下产生它的那份原始数据对象——
+# 原始数据重新加载后（换了一个对象）旧条目自动作废，
+# 这样过滤结果不会和 _buildings_cache / _roads_cache 不同步。
+# 容量有上限：客户端不能靠发一堆不同 bbox 把内存撑爆。
+_BBOX_CACHE_MAX_ENTRIES = 8
+
+_buildings_bbox_cache: "OrderedDict[Tuple[float, float, float, float], Tuple[Any, Dict[str, Any]]]" = OrderedDict()
+_roads_bbox_cache: "OrderedDict[Tuple[float, float, float, float], Tuple[Any, Dict[str, Any]]]" = OrderedDict()
+
+
+def _clear_caches() -> None:
+    """清空全部模块级缓存：原始 GeoJSON + 按 bbox 的过滤结果。"""
+    global _buildings_cache, _roads_cache
+    _buildings_cache = None
+    _roads_cache = None
+    _buildings_bbox_cache.clear()
+    _roads_bbox_cache.clear()
+
 
 def _load_buildings() -> Dict[str, Any]:
     global _buildings_cache
@@ -115,6 +136,49 @@ def _load_roads() -> Dict[str, Any]:
     if _roads_cache is None:
         _roads_cache = processor.load_geojson(str(_roads_path))
     return _roads_cache
+
+
+def _bbox_cache_key(bbox: "BBox") -> Tuple[float, float, float, float]:
+    """规范化缓存 key：同一组边界值总是得到同一个 key。"""
+    return (bbox.min_lon, bbox.min_lat, bbox.max_lon, bbox.max_lat)
+
+
+def _as_feature_collection(data: Dict[str, Any]) -> Dict[str, Any]:
+    """把原始集合转成与过滤结果同构的 FeatureCollection（只保留 type + features）。
+
+    原始文件还带 overpass 导出的元信息（generator / copyright / timestamp），
+    而过滤后的结果没有。统一成同一种结构后，
+    「带 bbox」和「不带 bbox」两种取数方式给前端的负载完全一致，
+    换取数方式不会让响应体变大。
+    """
+    return {"type": "FeatureCollection", "features": data.get("features", [])}
+
+
+def _filtered_collection(
+    cache: "OrderedDict[Tuple[float, float, float, float], Tuple[Any, Dict[str, Any]]]",
+    data: Dict[str, Any],
+    bbox: "BBox",
+) -> Dict[str, Any]:
+    """按 bbox 过滤原始集合，并缓存结果。
+
+    同一份数据 + 同一个 bbox 只过滤一次；重复请求直接命中缓存。
+    """
+    key = _bbox_cache_key(bbox)
+    entry = cache.get(key)
+    if entry is not None:
+        source, result = entry
+        if source is data:
+            cache.move_to_end(key)  # LRU：刚用过的条目留在最后
+            return result
+        # 原始数据已经换了对象（重新加载过），旧结果作废。
+        del cache[key]
+
+    result = processor.filter_features_by_bbox(data, bbox.as_list())
+    cache[key] = (data, result)
+    cache.move_to_end(key)
+    while len(cache) > _BBOX_CACHE_MAX_ENTRIES:
+        cache.popitem(last=False)  # 淘汰最久未用的条目
+    return result
 
 
 class BBox(BaseModel):
@@ -227,8 +291,8 @@ async def get_buildings(bbox: Optional[str] = None):
     try:
         data = _load_buildings()
         if parsed is not None:
-            return processor.filter_features_by_bbox(data, parsed.as_list())
-        return data
+            return _filtered_collection(_buildings_bbox_cache, data, parsed)
+        return _as_feature_collection(data)
     except DataProcessorError:
         # 数据缺失或损坏是我们的问题（503）：细节只写日志，不回显给调用方。
         logger.exception("建筑数据不可用")
@@ -242,8 +306,8 @@ async def get_roads(bbox: Optional[str] = None):
     try:
         data = _load_roads()
         if parsed is not None:
-            return processor.filter_features_by_bbox(data, parsed.as_list())
-        return data
+            return _filtered_collection(_roads_bbox_cache, data, parsed)
+        return _as_feature_collection(data)
     except DataProcessorError:
         logger.exception("道路数据不可用")
         raise HTTPException(status_code=503, detail=DATA_UNAVAILABLE_DETAIL)
