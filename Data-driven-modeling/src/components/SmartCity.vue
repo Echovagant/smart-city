@@ -6,13 +6,16 @@
     <!-- 控制面板 -->
     <div class="control-panel">
       <button @click="toggleBuildings">
-        {{ buildingVisible ? '隐藏建筑' : '显示建筑' }}
+        {{ state.buildingVisible ? '隐藏建筑' : '显示建筑' }}
       </button>
       <button @click="toggleRoads">
-        {{ roadVisible ? '隐藏道路' : '显示道路' }}
+        {{ state.roadVisible ? '隐藏道路' : '显示道路' }}
       </button>
       <button @click="toggleTraffic">
-        {{ trafficVisible ? '停止交通' : '启动交通' }}
+        {{ state.trafficVisible ? '停止交通' : '启动交通' }}
+      </button>
+      <button @click="toggleView">
+        {{ state.viewMode === 'overhead' ? '切换平视' : '切换鸟瞰' }}
       </button>
     </div>
   </div>
@@ -55,6 +58,7 @@ const state = reactive({
   buildingVisible: true,
   roadVisible: true,
   trafficVisible: true,
+  viewMode: 'overhead', // 'overhead' 鸟瞰 | 'street' 平视
   buildingEntities: [],
   roadEntities: [],
   trafficEntities: []
@@ -62,8 +66,11 @@ const state = reactive({
 
 // 城市配置参数
 const cityConfig = {
-  center: { lng: 116.404, lat: 39.915 }, // 北京坐标，可根据需要修改
+  // 天安门广场中央：开阔地带，平视模式不会穿模；朝北（heading=0）能看到天安门城楼
+  center: { lng: 116.3976, lat: 39.9055 },
   zoomLevel: 1500,
+  // 平视视角：1.7m 是人眼高度，朝向正北（heading=0）
+  streetLevel: { height: 1.7, heading: 0 },
   buildingColors: [
     Cesium.Color.fromCssColorString('#4A90E2'),
     Cesium.Color.fromCssColorString('#7ED321'),
@@ -76,36 +83,117 @@ const cityConfig = {
 // 城市数据来源（通过 useCityData composable 从后端 /api/* 拉取 GeoJSON）
 const { buildings, roads, loadAll } = useCityData()
 
-// 初始化Cesium - 使用最简单的配置
-const initCesium = () => {
+// 高德 UrlTemplateImageryProvider —— 构造失败由 try/catch 包住，
+// 但即使失败也要继续（地球没底图也能看到星空，至少能验证 Viewer 起来了）。
+// 关键：必须在 new Cesium.Viewer 之前构造好 baseLayer。
+// 因为 Cesium 1.134 Viewer 构造函数会读 baseLayer 选项决定是否透传给
+// CesiumWidget；漏传或传 undefined 都会触发 fromWorldImagery() → ion 警告。
+let gaodeLayer = null
+try {
+  const gaodeProvider = new Cesium.UrlTemplateImageryProvider({
+    url: 'https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',
+    subdomains: ['1', '2', '3', '4'],
+    credit: new Cesium.Credit('© AutoNavi'),
+    maximumLevel: 18,
+  })
+  gaodeLayer = new Cesium.ImageryLayer(gaodeProvider)
+} catch (e) {
+  console.warn('构造高德底图 provider 失败:', e)
+}
+
+// 初始化Cesium
+const initCesium = async () => {
   if (!cesiumContainer.value) return
 
-  // 创建一个非常基础的viewer实例
+  // 在第一次访问 Cesium 静态资源之前，必须把 base URL 设到 vite-plugins/cesium-assets
+  // 挂载的 /Cesium/ 路径上。Cesium 内部用 getCesiumBaseUrl() (= Jt 工厂) 拼接
+  // /Cesium/Workers/* / /Cesium/ThirdParty/* 等路径。漏设会回到 Cesium 默认
+  // '/Cesium/' 路径，dev 阶段 Vite 兜底返回 index.html → "Failed to load module
+  // script: text/html" + InvalidStateError。
+  window.CESIUM_BASE_URL = '/Cesium/'
+
+  // 关键洞察：Cesium 1.134 Viewer 默认会构造两个会触发 ion 401 的组件：
+  //   1. baseLayerPicker：其 BaseLayerPickerViewModel 构造末尾执行
+  //      `this.selectedImagery = n[0]`，n[0] = Bing Maps Aerial viewmodel，
+  //      setter 立刻调 creationCommand() → createWorldImageryAsync()
+  //      → IonImageryProvider.fromAssetId(2) → api.cesium.com 401。
+  //   2. geocoder：GeocoderViewModel 构造时若 geocoderServices 为空，会默认
+  //      new IonGeocoderService()，构造里立即访问 ion defaultAccessToken。
+  // 必须显式两个都禁用。
+  //
+  // 副作用：baseLayerPicker: false 让 Viewer 的 n = (baseLayerPicker !== false)
+  // 变 false → 传给 CesiumWidget 的 baseLayer 表达式
+  //   (n && l(selectedVM)) || l(baseLayer) || l(imageryProvider) ? !1 : void 0
+  // 在 baseLayer/imageryProvider 都 undefined 时结果为 void 0 (undefined)。
+  // CesiumWidget 内部 `E !== !1` 短路（undefined !== false === true），但
+  // l(undefined) === false → E = os.fromWorldImagery() → 又触发 ion！
+  // 所以还必须显式传 baseLayer: false 才能让 CesiumWidget 完全跳过底图。
   viewer.value = new Cesium.Viewer(cesiumContainer.value, {
     timeline: false,
     animation: false,
-    baseLayerPicker: true, // 启用基础图层选择器，让用户可以选择地图
-    imageryProvider: new Cesium.OpenStreetMapImageryProvider({
-      url: 'https://tile.openstreetmap.org/'
-    }),
+    baseLayerPicker: false, // 禁用底图切换 UI（避免 ion 401）
+    geocoder: false,        // 禁用地理编码 UI（避免 ion 401）
+    infoBox: false,         // 禁用信息框（消除 about:blank sandboxed iframe 警告）
+    selectionIndicator: false, // 禁用选择指示器
+    baseLayer: false,       // 显式告诉 CesiumWidget 完全不加底图（避免 fromWorldImagery）
     terrainProvider: undefined,
-    // 禁用可能导致问题的功能
     useDefaultRenderLoop: true,
     sceneMode: Cesium.SceneMode.SCENE3D,
-    // 增加错误处理
     errorHandler: function(error) {
       console.warn('Cesium初始化错误:', error)
-    }
+    },
   })
-  
-  // 定位到城市中心
+
+  // Viewer 构造完成后,显式把高德底图 add 到 CesiumWidget 的 imageryLayers。
+  if (gaodeLayer && gaodeLayer.imageryProvider) {
+    viewer.value.imageryLayers.add(gaodeLayer)
+    console.log('[SmartCity] Viewer created, gaode layer added. total layers:',
+      viewer.value.imageryLayers.length,
+      'first layer provider:',
+      viewer.value.imageryLayers.get(0)?.imageryProvider?.constructor?.name)
+  } else {
+    console.warn('[SmartCity] gaodeLayer not available; no base imagery will be loaded')
+  }
+
+  // 定位到城市中心（鸟瞰视角）
   viewer.value.camera.flyTo({
     destination: Cesium.Cartesian3.fromDegrees(
       cityConfig.center.lng,
       cityConfig.center.lat,
       cityConfig.zoomLevel
     ),
-    duration: 2
+    duration: 2,
+  })
+}
+
+// 飞到平视视角：贴近地面（1.7m），pitch=0 水平看出去
+const flyToStreetLevel = () => {
+  if (!viewer.value) return
+  viewer.value.camera.flyTo({
+    destination: Cesium.Cartesian3.fromDegrees(
+      cityConfig.center.lng,
+      cityConfig.center.lat,
+      cityConfig.streetLevel.height
+    ),
+    orientation: {
+      heading: cityConfig.streetLevel.heading,
+      pitch: 0, // 水平
+      roll: 0,
+    },
+    duration: 2,
+  })
+}
+
+// 飞到鸟瞰视角：1500m 高空向下看
+const flyToOverhead = () => {
+  if (!viewer.value) return
+  viewer.value.camera.flyTo({
+    destination: Cesium.Cartesian3.fromDegrees(
+      cityConfig.center.lng,
+      cityConfig.center.lat,
+      cityConfig.zoomLevel
+    ),
+    duration: 2,
   })
 }
 
@@ -177,6 +265,10 @@ const loadGeoJSONRoads = async () => {
     const entities = dataSource.entities.values
     entities.forEach(entity => {
       if (!isMounted) return
+      // OSM 道路数据里可能混进 Polygon/MultiPolygon（广场、人造地面等），
+      // 它们没有 polyline 属性，直接 entity.polyline.width = ... 会抛
+      // "Cannot set properties of undefined"。用 Cesium.defined 守门。
+      if (!entity.polyline) return
       // 从GeoJSON的properties中获取道路宽度（默认10米）
       const width = entity.properties.width?.getValue() || 10
       // 根据道路类型设置颜色（主干道深灰，其他浅灰）
@@ -360,10 +452,19 @@ const toggleTraffic = () => {
   })
 }
 
+const toggleView = () => {
+  state.viewMode = state.viewMode === 'overhead' ? 'street' : 'overhead'
+  if (state.viewMode === 'street') {
+    flyToStreetLevel()
+  } else {
+    flyToOverhead()
+  }
+}
+
 // 生命周期钩子
 onMounted(async () => {
   try {
-    initCesium()
+    await initCesium()
     if (!viewer.value) return
     optimizePerformance()
     await loadAll()

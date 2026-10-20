@@ -4,12 +4,17 @@ import { fileURLToPath, URL } from 'node:url'
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import vueDevTools from 'vite-plugin-vue-devtools'
+import cesiumAssets from './vite-plugins/cesium-assets.js'
 
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => ({
   plugins: [
     vue(),
     ...(mode !== 'test' ? [vueDevTools()] : []),
+    // dev 时 serve /Cesium/Workers/* 等静态资源；build 时 copy 到 dist/Cesium/。
+    // 解决 Cesium 内部通过 buildModuleUrl(/Cesium/Workers/...) 加载 worker 时
+    // 收到 HTML 兜底页面的问题 ("Failed to load module script: text/html")。
+    ...(mode !== 'test' ? [cesiumAssets()] : []),
   ],
   resolve: {
     alias: {
@@ -22,10 +27,10 @@ export default defineConfig(({ mode }) => ({
       allow: ['.']
     },
     // 开发期把 /api/* 反代到 FastAPI 后端。
-    // 后端端口来自 backend-python/.env 的 PORT，默认 8001。
+    // 后端端口来自 backend-python/.env 的 PORT，默认 8000。
     proxy: {
       '/api': {
-        target: 'http://127.0.0.1:8001',
+        target: 'http://127.0.0.1:8000',
         changeOrigin: false,
       },
     },

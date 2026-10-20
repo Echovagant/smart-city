@@ -5,7 +5,7 @@ import os
 import uvicorn
 import json
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from data_processor import DataProcessorError, get_data_processor
 
 # 配置管理
@@ -15,11 +15,16 @@ class Settings(BaseSettings):
     host: str = "127.0.0.1"
     port: int = 8000
     allowed_origins: str = "http://localhost:5173"
-    data_dir: str = "./data"
-    geojson_dir: str = "./geojson"
 
     class Config:
         env_file = ".env"
+
+# 数据目录：硬编码到脚本所在目录（backend-python/）下，不再走 .env。
+# 任何 CWD 下运行（VSCode 工作区根、容器、其他目录）都能找到数据。
+# 如需迁移数据位置，直接改这两个常量。
+BACKEND_DIR = Path(__file__).resolve().parent
+DATA_DIR = BACKEND_DIR / "data"
+GEOJSON_DIR = BACKEND_DIR / "geojson"
 
 # 初始化配置
 settings = Settings()
@@ -43,19 +48,19 @@ app.add_middleware(
 )
 
 # 确保数据目录存在
-os.makedirs(settings.data_dir, exist_ok=True)
-os.makedirs(settings.geojson_dir, exist_ok=True)
+os.makedirs(DATA_DIR, exist_ok=True)
+os.makedirs(GEOJSON_DIR, exist_ok=True)
 
-# 初始化数据处理器；data_dir 来自 .env，缺省时回退到 backend-python/data
-processor = get_data_processor(settings.data_dir)
+# 初始化数据处理器
+processor = get_data_processor(str(DATA_DIR))
 
-# GeoJSON 文件路径（来自 settings.geojson_dir；user-provided OSM data）。
-_buildings_path = Path(settings.geojson_dir) / "buildings.geojson"
-_roads_path = Path(settings.geojson_dir) / "roads.geojson"
+# GeoJSON 文件路径（user-provided OSM data）。
+_buildings_path = GEOJSON_DIR / "buildings.geojson"
+_roads_path = GEOJSON_DIR / "roads.geojson"
 
 # 启动时缓存已加载的 GeoJSON；如加载失败则在第一次请求时再试并返回 5xx。
-_buildings_cache: Dict[str, Any] = None
-_roads_cache: Dict[str, Any] = None
+_buildings_cache: Optional[Dict[str, Any]] = None
+_roads_cache: Optional[Dict[str, Any]] = None
 
 
 def _load_buildings() -> Dict[str, Any]:
@@ -87,7 +92,7 @@ async def health_check():
 
 # 模拟数据接口
 @app.get("/api/buildings")
-async def get_buildings(bbox: str = None):
+async def get_buildings(bbox: Optional[str] = None):
     """获取建筑数据。
 
     可选 query 参数 bbox=min_lon,min_lat,max_lon,max_lat 用来按范围过滤。
@@ -111,7 +116,7 @@ async def get_buildings(bbox: str = None):
 
 
 @app.get("/api/roads")
-async def get_roads(bbox: str = None):
+async def get_roads(bbox: Optional[str] = None):
     """获取道路数据。可选 bbox query 参数。"""
     try:
         data = _load_roads()

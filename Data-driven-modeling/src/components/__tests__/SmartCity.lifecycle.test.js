@@ -36,6 +36,13 @@ vi.mock('cesium', () => {
         values: [],
       },
       dataSources: { add: vi.fn() },
+      imageryLayers: {
+        addImageryProvider: vi.fn(),
+        removeAll: vi.fn(),
+        length: 0,
+        get: vi.fn(() => undefined),
+        add: vi.fn(),
+      },
     })),
     Cartesian3: Object.assign(
       vi.fn().mockImplementation((x, y, z) => ({ x, y, z })),
@@ -44,7 +51,15 @@ vi.mock('cesium', () => {
     Color,
     Ion: { defaultAccessToken: '' },
     SceneMode: { SCENE3D: 0 },
-    OpenStreetMapImageryProvider: vi.fn(),
+    // Cesium 1.104+ 把 OpenStreetMapImageryProvider 改成异步工厂 fromUrl。
+    OpenStreetMapImageryProvider: Object.assign(vi.fn(), {
+      fromUrl: vi.fn().mockResolvedValue({}),
+    }),
+    // UrlTemplateImageryProvider 仍为同步构造器，initCesium 中显式 new。
+    UrlTemplateImageryProvider: vi.fn(),
+    // initCesium 把 UrlTemplateImageryProvider 包成 ImageryLayer 后传给 Viewer。
+    ImageryLayer: vi.fn().mockImplementation((provider) => ({ provider })),
+    Credit: vi.fn(),
     GeoJsonDataSource: { load: vi.fn().mockResolvedValue({ entities: { values: [] } }) },
     EntityCluster: vi.fn(),
     Math: { toRadians: vi.fn((deg) => deg) },

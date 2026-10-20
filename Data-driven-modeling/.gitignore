@@ -34,3 +34,9 @@ coverage
 
 # Vitest
 __screenshots__/
+
+# Vite config transform cache (regenerated on every dev/test run;
+# stale copies can shadow vite.config.js and break Vitest with
+# "symbol __vite_injected_original_import_meta_url has already been declared")
+vite.config.js.timestamp-*.mjs
+vite.config.js.timestamp-*.js
