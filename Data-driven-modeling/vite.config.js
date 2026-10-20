@@ -63,8 +63,8 @@ export default defineConfig(({ mode }) => ({
         include: ['mersenne-twister', 'urijs', 'grapheme-splitter', 'bitmap-sdf', 'lerc', 'nosleep.js']
       },
   build: {
-    // 生产构建默认不产出 sourcemap：它们让 dist/ 体积翻约 4 倍
-    // （实测 20.4 MB 里 16.5 MB 是 .map），并把全部原始源码发布出去。
+    // 生产构建默认不产出 sourcemap：默认构建的 Vite 产物从 20.5 MB 降到 3.9 MB
+    // （约 5.2 倍，省下来的 16.6 MB 全是 .map），并把全部原始源码发布出去。
     // 需要线上排障时用 SOURCEMAP=true npm run build 打开。
     sourcemap: process.env.SOURCEMAP === 'true',
     commonjsOptions: {
