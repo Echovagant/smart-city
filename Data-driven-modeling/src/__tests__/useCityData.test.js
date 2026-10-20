@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { defineComponent, h, isReactive } from 'vue'
-import { mount } from '@vue/test-utils'
+import { mount, flushPromises } from '@vue/test-utils'
 import { useCityData } from '@/composables/useCityData'
 import { ApiError } from '@/api/client'
 
@@ -14,15 +14,18 @@ afterEach(() => {
   globalThis.fetch = originalFetch
 })
 
+// 挂载一个测试组件来跑 composable（composable 里有 onUnmounted，
+// 必须在组件上下文里注册才生效）。
+// 返回值里带上 wrapper：取消分支需要在请求还在飞的时候把组件卸载掉。
 const withSetup = (composable) => {
   let result
-  mount(defineComponent({
+  const wrapper = mount(defineComponent({
     setup() {
       result = composable()
       return () => h('div')
     },
   }))
-  return result
+  return { ...result, wrapper }
 }
 
 describe('useCityData', () => {
@@ -92,5 +95,36 @@ describe('useCityData', () => {
 
     const urls = globalThis.fetch.mock.calls.map(call => call[0])
     expect(urls).toContain('/api/buildings?bbox=116.380%2C39.905%2C116.420%2C39.925')
+  })
+
+  it('does not touch the refs when the component unmounts while the request is in flight', async () => {
+    // 请求一直悬着，等组件卸载之后才回来。
+    const resolvers = []
+    globalThis.fetch.mockImplementation(() => new Promise((resolve) => {
+      resolvers.push(resolve)
+    }))
+
+    const { buildings, roads, trafficStatus, error, loadAll, wrapper } = withSetup(useCityData)
+    const pending = loadAll()
+    await flushPromises()
+
+    // 三个请求都已经发出去了，但都还没回来
+    expect(globalThis.fetch).toHaveBeenCalledTimes(3)
+    expect(resolvers).toHaveLength(3)
+
+    // 组件卸载 → composable 的 onUnmounted 把 cancelled 置为 true
+    wrapper.unmount()
+
+    // 请求这时才回来
+    resolvers.forEach((resolve) => {
+      resolve(new Response(JSON.stringify({ type: 'FeatureCollection', features: [] }), { status: 200 }))
+    })
+    await pending
+
+    // 卸载之后不应再写入任何 ref（cancelled 分支短路）
+    expect(buildings.value).toBeNull()
+    expect(roads.value).toBeNull()
+    expect(trafficStatus.value).toBeNull()
+    expect(error.value).toBeNull()
   })
 })

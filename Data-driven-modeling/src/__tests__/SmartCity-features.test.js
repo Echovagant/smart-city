@@ -1,60 +1,31 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { dirname, resolve } from 'node:path'
 
-const componentPath = resolve(__dirname, '../components/SmartCity.vue')
+// 本文件只保留**一条**源码文本断言：.glb 资源引用守卫。
+//
+// 为什么这一条可以合法地读源码文本：「这个字符串永远不许出现」本质上是
+// 对文本本身的断言，看不见字符串就没有别的办法测——它守的是
+// "public/models/*.glb 根本不存在，一旦有人写了 uri: '/models/x.glb'
+//  Cesium 会在运行时静默加载失败" 这类回归。
+//
+// 其余行为断言一律放在 src/components/__tests__/SmartCity.lifecycle.test.js，
+// 那里有唯一的 Cesium mock，直接 mount 组件后断言可观察效果。
+//
+// 路径解析说明：这里不能用 `new URL('../components/SmartCity.vue', import.meta.url)`。
+// jsdom 环境下的全局 URL 是 jsdom 的 whatwg-url 实现，它不把 file: 当作
+// "特殊协议"，会把 file: 基准下的相对路径解析成 http://localhost:3000/...，
+// 导致 fileURLToPath 抛 "The URL must be of scheme file"。
+// 直接对 import.meta.url 本身做 fileURLToPath 就绕开了这个问题。
+const componentPath = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  '../components/SmartCity.vue',
+)
 const source = readFileSync(componentPath, 'utf-8')
 
-describe('SmartCity.vue feature wiring', () => {
+describe('SmartCity.vue asset wiring', () => {
   it('does not reference any .glb asset (primitives only)', () => {
     expect(source).not.toMatch(/uri:\s*['"]\/models\/[^'"]+\.glb['"]/)
-  })
-
-  it('uses Cesium primitives for traffic entities', () => {
-    expect(source).toMatch(/box:\s*\{/)
-    expect(source).toMatch(/cylinder:\s*\{/)
-  })
-
-  it('configures a non-Ion imagery provider', () => {
-    // 国内网络环境下 OSM 经常被墙;我们用高德 UrlTemplateImageryProvider。
-    // 关键:必须提前把 UrlTemplateImageryProvider 包成 ImageryLayer 实例,然后
-    // 传给 Viewer 的 baseLayer 选项,这样 Cesium 1.134 Viewer 构造逻辑才会
-    // 透传给 CesiumWidget,CesiumWidget 直接 add 而不走 fromWorldImagery()。
-    // 关键不变:绝不手动设置 Ion.defaultAccessToken = '' 这种空字符串赋值。
-    expect(source).toMatch(/new\s+Cesium\.ImageryLayer\(/)
-    expect(source).toMatch(/UrlTemplateImageryProvider/)
-    expect(source).not.toMatch(/defaultAccessToken\s*=\s*['"]['"]/)
-    // 截取 new Cesium.Viewer 的 options block,断言其中显式禁用了两个会触发 ion 的选项。
-    const optionsBlock = source.match(/new\s+Cesium\.Viewer\(\s*cesiumContainer\.value\s*,\s*\{([\s\S]*?)\}\)/)
-    expect(optionsBlock).not.toBeNull()
-    // baseLayerPicker 不禁用 → 默认构造 BaseLayerPickerViewModel,
-    // 其构造末尾 this.selectedImagery = n[0] 触发 Bing Maps Aerial 的
-    // creationCommand → createWorldImageryAsync → IonImageryProvider.fromAssetId(2)
-    // → api.cesium.com 401
-    expect(optionsBlock[1]).toMatch(/baseLayerPicker:\s*false/)
-    // geocoder 不禁用 → 默认构造 GeocoderViewModel,geocoderServices 为空时
-    // 自动 new IonGeocoderService → 同样触发 ion 401
-    expect(optionsBlock[1]).toMatch(/geocoder:\s*false/)
-    // baseLayer 不显式设为 false → CesiumWidget 拿到 undefined →
-    // 走 fromWorldImagery() → fromAssetId(2) → 又触发 ion 401
-    expect(optionsBlock[1]).toMatch(/baseLayer:\s*false/)
-    // 高德 ImageryLayer 是在 Viewer 构造后显式 add,不是通过 baseLayer 选项
-    expect(source).toMatch(/imageryLayers\.add\(gaodeLayer\)/)
-  })
-
-  it('uncomments the feature calls in onMounted', () => {
-    // Plan 007 turned onMounted into async (it awaits loadAll from useCityData).
-    const onMounted = source.match(/onMounted\(async\s*\(\)\s*=>\s*\{([\s\S]*?)\}\)/)
-    expect(onMounted).not.toBeNull()
-    const body = onMounted[1]
-    expect(body).toMatch(/loadGeoJSONBuildings\(\)/)
-    expect(body).toMatch(/loadGeoJSONRoads\(\)/)
-    expect(body).toMatch(/createTrafficSystem\(\)/)
-    expect(body).toMatch(/optimizePerformance\(\)/)
-  })
-
-  it('consumes data via the useCityData composable, not direct URL fetches', () => {
-    expect(source).toMatch(/import\s*\{\s*useCityData\s*\}\s*from\s*['"]@\/composables\/useCityData['"]/)
-    expect(source).not.toMatch(/Cesium\.GeoJsonDataSource\.load\(['"]\/api\//)
   })
 })
