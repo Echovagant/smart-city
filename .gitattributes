@@ -1,0 +1,18 @@
+# 仓库级行尾规则。
+#
+# 这里刻意不加全局的 "* text=auto"：那会把整个仓库的工作区行尾统一改写，
+# 制造一大片与内容无关的 diff。只针对确实有平台约束的文件类型设规则。
+
+# POSIX shell 脚本必须以 LF 落盘。
+# Windows 上 core.autocrlf=true 时，仓库里以 LF 提交的 .sh 会被检出成 CRLF，
+# 而 sh / bash 会把行尾的 \r 当成命令的一部分（报 "\r: command not found"）。
+# verify.sh 就是这种脚本。
+*.sh text eol=lf
+
+# Windows PowerShell 脚本固定 CRLF。
+# 本仓库的 PowerShell 入口（verify.ps1）面向 Windows PowerShell 5.1，
+# 固定行尾后不论开发者本地的 core.autocrlf 是什么，检出结果都一致。
+#
+# 注意：脚本开头的 UTF-8 BOM 与本规则无关 —— git 默认不增删 BOM，
+# 而 PowerShell 5.1 需要它才能把脚本里的中文按 UTF-8 正确解码。
+*.ps1 text eol=crlf
