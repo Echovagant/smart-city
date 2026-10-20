@@ -68,3 +68,27 @@ def test_header_parameter_is_actually_read_from_the_request(client):
     assert client.get("/api/buildings?x_api_key=secret-123").status_code == 401
     # 用 header 传，应该被认出来
     assert client.get("/api/buildings", headers={"X-API-Key": "secret-123"}).status_code == 200
+
+
+def test_document_urls_are_disabled_when_not_exposed():
+    """生产形态（不暴露文档）时三个文档路由都不注册。"""
+    assert main._document_urls(False) == (None, None, None)
+    assert main._document_urls(True) == ("/openapi.json", "/docs", "/redoc")
+
+
+def test_docs_are_404_on_a_production_shaped_app():
+    """构造一个「生产形状」的 app，验证三个文档路径全部 404。"""
+    openapi_url, docs_url, redoc_url = main._document_urls(False)
+    app = FastAPI(openapi_url=openapi_url, docs_url=docs_url, redoc_url=redoc_url)
+    client = TestClient(app)
+
+    assert client.get("/docs").status_code == 404
+    assert client.get("/redoc").status_code == 404
+    assert client.get("/openapi.json").status_code == 404
+
+
+def test_allowed_hosts_parsing():
+    assert main._allowed_hosts("") == []
+    assert main._allowed_hosts("  ") == []
+    assert main._allowed_hosts("example.com") == ["example.com"]
+    assert main._allowed_hosts("a.com, b.com ,,c.com") == ["a.com", "b.com", "c.com"]

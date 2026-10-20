@@ -36,6 +36,8 @@ class Settings(BaseSettings):
     api_key: Optional[str] = None
     # 逗号分隔的 Host 白名单；留空表示不限制。
     allowed_hosts: str = ""
+    # 是否暴露 /docs /redoc /openapi.json。生产默认关闭。
+    expose_docs: bool = False
 
     class Config:
         env_file = ".env"
@@ -98,12 +100,32 @@ def require_api_key(x_api_key: Optional[str] = Header(default=None)) -> None:
         raise HTTPException(status_code=401, detail="需要 API key")
 
 
+def _document_urls(expose: bool) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    """决定三个文档相关路由是否注册。
+
+    返回 (openapi_url, docs_url, redoc_url)；不暴露时三个都是 None，
+    此时访问 /docs、/redoc、/openapi.json 都会得到 404。
+    """
+    if expose:
+        return "/openapi.json", "/docs", "/redoc"
+    return None, None, None
+
+
+def _allowed_hosts(raw: str) -> List[str]:
+    """解析 Host 白名单；空字符串表示不限制。"""
+    return [host.strip() for host in raw.split(",") if host.strip()]
+
+
 # 创建FastAPI应用
+_openapi_url, _docs_url, _redoc_url = _document_urls(settings.expose_docs)
 app = FastAPI(
     title=settings.app_name,
     debug=settings.debug,
     description="智慧城市可视化平台后端API",
-    version="1.0.0"
+    version="1.0.0",
+    openapi_url=_openapi_url,
+    docs_url=_docs_url,
+    redoc_url=_redoc_url
 )
 
 # 配置CORS
@@ -115,6 +137,11 @@ app.add_middleware(
     allow_methods=["GET", "OPTIONS"],
     allow_headers=["*"],
 )
+
+# Host 头白名单：留空不限制；生产建议设成实际域名。
+_hosts = _allowed_hosts(settings.allowed_hosts)
+if _hosts:
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=_hosts)
 
 # 响应压缩：GeoJSON 是高度可压缩的文本，实测能把 /api/buildings 从
 # 1341 KB 压到约 225 KB。必须在 app 启动前添加——app 一旦启动，
