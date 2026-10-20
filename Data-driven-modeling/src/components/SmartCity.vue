@@ -5,6 +5,12 @@
 
     <!-- 控制面板 -->
     <div class="control-panel">
+      <!-- 数据加载状态 / 后端错误提示：后端挂了必须看得见，不能只剩一个空地球 -->
+      <div v-if="loading" class="status-hint">正在加载城市数据…</div>
+      <div v-if="error" class="status-error">
+        数据加载失败：{{ error.message }}<span v-if="error.status">（状态码 {{ error.status }}）</span>
+      </div>
+
       <button @click="toggleBuildings">
         {{ state.buildingVisible ? '隐藏建筑' : '显示建筑' }}
       </button>
@@ -31,6 +37,11 @@ import { useCityData } from '@/composables/useCityData'
 
 // 跟踪所有 requestAnimationFrame handle，onUnmounted 时统一取消
 const animationFrames = new Set()
+
+// 记录每辆车的动画句柄（{ vehicle, pos, restart }）。
+// moveVehicle 在交通隐藏时会提前返回、动画链就此断掉，
+// 重新显示交通时靠这里的 restart 把链重新拉起来。
+const vehicleAnimations = []
 
 function safeRequestAnimationFrame(callback) {
   const handle = requestAnimationFrame((t) => {
@@ -81,7 +92,8 @@ const cityConfig = {
 }
 
 // 城市数据来源（通过 useCityData composable 从后端 /api/* 拉取 GeoJSON）
-const { buildings, roads, loadAll } = useCityData()
+// error / loading 必须一起取出来，否则后端挂了界面上一片空白、毫无提示
+const { buildings, roads, loadAll, error, loading } = useCityData()
 
 // 高德 UrlTemplateImageryProvider —— 构造失败由 try/catch 包住，
 // 但即使失败也要继续（地球没底图也能看到星空，至少能验证 Viewer 起来了）。
@@ -295,6 +307,10 @@ const loadGeoJSONRoads = async () => {
 
 // 创建交通系统
 const createTrafficSystem = () => {
+  // 组件可能已经卸载（onUnmounted 里 viewer.value 被置空），
+  // 此时直接返回，避免 "Cannot read properties of null (reading 'entities')"。
+  if (!viewer.value) return
+
   const centerLng = cityConfig.center.lng
   const centerLat = cityConfig.center.lat
 
@@ -342,8 +358,9 @@ const createTrafficSystem = () => {
 
       state.trafficEntities.push(vehicle)
 
-      // 车辆动画
-      animateVehicle(vehicle, pos)
+      // 车辆动画。记录返回的 restart 回调，
+      // 供 toggleTraffic 在"停止 → 启动"时重新拉起被中断的动画链。
+      vehicleAnimations.push(animateVehicle(vehicle, pos))
     })
   }
 
@@ -391,8 +408,15 @@ const createTrafficSystem = () => {
   const animateVehicle = (vehicle, pos) => {
     let distance = 0
     const speed = 0.00001 // 移动速度
+    // 该车辆当前是否挂着一条动画链。用于保证 restart 幂等：
+    // 链还在跑的时候不再启动第二条，否则快速反复点击"启动/停止"
+    // 会开出多条并行链，每帧做多倍无用功。
+    let running = false
 
     const moveVehicle = () => {
+      // 每次进入先清掉运行标记：如果下面因为交通隐藏而提前返回，
+      // 就说明这条链已经断开，toggleTraffic 可以安全地重新拉起它。
+      running = false
       if (!state.trafficVisible) return
 
       distance += speed
@@ -417,10 +441,19 @@ const createTrafficSystem = () => {
       }
 
       vehicle.position = Cesium.Cartesian3.fromDegrees(newLng, newLat, 0.5)
+      running = true
       safeRequestAnimationFrame(moveVehicle)
     }
 
+    // 重新拉起这条动画链。幂等：链还在跑的时候不重复启动。
+    const restart = () => {
+      if (running) return
+      moveVehicle()
+    }
+
     moveVehicle()
+
+    return { vehicle, pos, restart }
   }
 
   // 执行创建
@@ -450,6 +483,13 @@ const toggleTraffic = () => {
   state.trafficEntities.forEach(entity => {
     entity.show = state.trafficVisible
   })
+
+  // moveVehicle 在交通隐藏时会提前 return（不再排下一帧），动画链就此断掉。
+  // 重新显示交通时必须显式 restart 每辆车，否则车辆会永远停在最后一次的位置，
+  // 只有刷新页面才能恢复运动。restart 本身是幂等的，不会开出第二条并行链。
+  if (state.trafficVisible) {
+    vehicleAnimations.forEach(animation => animation.restart())
+  }
 }
 
 const toggleView = () => {
@@ -471,6 +511,8 @@ onMounted(async () => {
     if (!isMounted) return
     await loadGeoJSONBuildings()
     await loadGeoJSONRoads()
+    // 两次 await 之后组件可能已经被卸载，viewer.value 也会被置空
+    if (!isMounted || !viewer.value) return
     createTrafficSystem()
   } catch (error) {
     console.error('初始化错误:', error)
@@ -523,6 +565,26 @@ onUnmounted(() => {
 
 .control-panel button:hover {
   background: #357ABD;
+}
+
+/* 数据加载状态提示：与控制面板同一套深色半透明观感 */
+.status-hint,
+.status-error {
+  margin-bottom: 8px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.7);
+  font-size: 13px;
+  line-height: 1.4;
+  word-break: break-all;
+}
+
+.status-hint {
+  color: #9ad;
+}
+
+.status-error {
+  color: #ff6b6b;
 }
 
 .building-info {
