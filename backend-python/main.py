@@ -1,12 +1,24 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from pydantic_settings import BaseSettings
+import logging
+import math
 import os
 import uvicorn
 import json
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from data_processor import DataProcessorError, get_data_processor
+
+logger = logging.getLogger(__name__)
+
+# 数据缺失或损坏时统一返回给调用方的文案。
+# 细节（含服务端绝对路径）只写日志，不回显给调用方。
+DATA_UNAVAILABLE_DETAIL = "城市数据暂时不可用，请稍后重试"
+
+# bbox 参数非法时的统一文案，追加具体原因后返回。
+BBOX_DETAIL = "bbox 必须是 4 个逗号分隔的数字：min_lon,min_lat,max_lon,max_lat"
 
 # 配置管理
 class Settings(BaseSettings):
@@ -29,6 +41,34 @@ GEOJSON_DIR = BACKEND_DIR / "geojson"
 # 初始化配置
 settings = Settings()
 
+
+def _normalize_origins(raw: str) -> List[str]:
+    """解析 CORS 允许来源列表。
+
+    - 去掉每项首尾空白，丢弃空项
+    - 去重且保持原有顺序
+    - 拒绝 "*"：本 API 开启了 allow_credentials=True，通配符会让 Starlette 回显任意 Origin
+    - 结果为空时直接失败
+
+    配置写错时在这里直接抛错（启动即失败），好过静默放行任意来源。
+    """
+    origins: List[str] = []
+    for item in raw.split(","):
+        origin = item.strip()
+        if not origin:
+            continue
+        if origin == "*":
+            raise ValueError(
+                "allowed_origins 不允许使用 '*'：本 API 开启了 allow_credentials=True，"
+                "通配符会让任意来源都能带凭据读取响应"
+            )
+        if origin not in origins:
+            origins.append(origin)
+    if not origins:
+        raise ValueError("allowed_origins 不能为空：请至少配置一个允许的来源")
+    return origins
+
+
 # 创建FastAPI应用
 app = FastAPI(
     title=settings.app_name,
@@ -38,7 +78,7 @@ app = FastAPI(
 )
 
 # 配置CORS
-origins = settings.allowed_origins.split(",")
+origins = _normalize_origins(settings.allowed_origins)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -76,6 +116,91 @@ def _load_roads() -> Dict[str, Any]:
         _roads_cache = processor.load_geojson(str(_roads_path))
     return _roads_cache
 
+
+class BBox(BaseModel):
+    """bbox 查询参数：min_lon,min_lat,max_lon,max_lat。
+
+    数值范围与 min < max 的约束由模型自身保证，非法输入统一转成 400。
+    """
+
+    # float("nan") / float("inf") 能解析成功，必须显式拒绝。
+    model_config = ConfigDict(allow_inf_nan=False)
+
+    min_lon: float = Field(..., ge=-180.0, le=180.0)
+    min_lat: float = Field(..., ge=-90.0, le=90.0)
+    max_lon: float = Field(..., ge=-180.0, le=180.0)
+    max_lat: float = Field(..., ge=-90.0, le=90.0)
+
+    @model_validator(mode="after")
+    def _check_order(self) -> "BBox":
+        """校验 min < max：倒置的框会静默返回全部要素。"""
+        if self.min_lon >= self.max_lon:
+            raise ValueError("min_lon 必须小于 max_lon")
+        if self.min_lat >= self.max_lat:
+            raise ValueError("min_lat 必须小于 max_lat")
+        return self
+
+    def as_list(self) -> List[float]:
+        """转成 filter_features_by_bbox 需要的 [min_lon, min_lat, max_lon, max_lat]。"""
+        return [self.min_lon, self.min_lat, self.max_lon, self.max_lat]
+
+
+def _bbox_detail(reason: str) -> str:
+    """统一的 400 文案：在既有提示语后追加具体的违规原因。"""
+    return f"{BBOX_DETAIL}（{reason}）"
+
+
+def _bbox_reason(exc: ValidationError) -> str:
+    """把 pydantic 的校验错误翻译成中文原因。"""
+    error = exc.errors()[0]
+    error_type = error.get("type")
+    if error_type == "value_error":
+        # 来自 BBox._check_order 的顺序校验，原始消息已经是中文。
+        cause = error.get("ctx", {}).get("error")
+        if cause is not None and cause.args:
+            return str(cause.args[0])
+        return str(error.get("msg", "")).replace("Value error, ", "")
+    field = str(error.get("loc", ("",))[0]) if error.get("loc") else ""
+    if field in ("min_lon", "max_lon"):
+        return "经度必须在 -180 到 180 之间"
+    if field in ("min_lat", "max_lat"):
+        return "纬度必须在 -90 到 90 之间"
+    if error_type == "finite_number":
+        return "必须是有限数字，不能是 nan 或 inf"
+    return str(error.get("msg", "格式不正确"))
+
+
+def _parse_bbox(raw: str) -> BBox:
+    """把 bbox 查询串解析成 BBox。
+
+    任何不合法的输入都抛 400（调用方的问题），与数据是否可用无关。
+    """
+    parts = raw.split(",")
+    if len(parts) != 4:
+        raise HTTPException(status_code=400, detail=_bbox_detail("需要 4 个值"))
+    values = []
+    for index, part in enumerate(parts, start=1):
+        try:
+            value = float(part.strip())
+        except ValueError:
+            raise HTTPException(status_code=400, detail=_bbox_detail(f"第 {index} 个值不是数字"))
+        if not math.isfinite(value):
+            raise HTTPException(
+                status_code=400,
+                detail=_bbox_detail(f"第 {index} 个值必须是有限数字，不能是 nan 或 inf"),
+            )
+        values.append(value)
+    try:
+        return BBox(
+            min_lon=values[0],
+            min_lat=values[1],
+            max_lon=values[2],
+            max_lat=values[3],
+        )
+    except ValidationError as e:
+        raise HTTPException(status_code=400, detail=_bbox_detail(_bbox_reason(e)))
+
+
 # 根路由
 @app.get("/")
 async def root():
@@ -97,43 +222,31 @@ async def get_buildings(bbox: Optional[str] = None):
 
     可选 query 参数 bbox=min_lon,min_lat,max_lon,max_lat 用来按范围过滤。
     """
+    # 参数不合法是调用方的问题（400），先校验再动数据。
+    parsed = _parse_bbox(bbox) if bbox is not None else None
     try:
         data = _load_buildings()
-        if bbox:
-            try:
-                parts = [float(x) for x in bbox.split(",")]
-                if len(parts) != 4:
-                    raise ValueError
-                return processor.filter_features_by_bbox(data, parts)
-            except ValueError:
-                raise HTTPException(
-                    status_code=400,
-                    detail="bbox 必须是 4 个逗号分隔的数字：min_lon,min_lat,max_lon,max_lat",
-                )
+        if parsed is not None:
+            return processor.filter_features_by_bbox(data, parsed.as_list())
         return data
-    except DataProcessorError as e:
-        raise HTTPException(status_code=503, detail=str(e))
+    except DataProcessorError:
+        # 数据缺失或损坏是我们的问题（503）：细节只写日志，不回显给调用方。
+        logger.exception("建筑数据不可用")
+        raise HTTPException(status_code=503, detail=DATA_UNAVAILABLE_DETAIL)
 
 
 @app.get("/api/roads")
 async def get_roads(bbox: Optional[str] = None):
     """获取道路数据。可选 bbox query 参数。"""
+    parsed = _parse_bbox(bbox) if bbox is not None else None
     try:
         data = _load_roads()
-        if bbox:
-            try:
-                parts = [float(x) for x in bbox.split(",")]
-                if len(parts) != 4:
-                    raise ValueError
-                return processor.filter_features_by_bbox(data, parts)
-            except ValueError:
-                raise HTTPException(
-                    status_code=400,
-                    detail="bbox 必须是 4 个逗号分隔的数字：min_lon,min_lat,max_lon,max_lat",
-                )
+        if parsed is not None:
+            return processor.filter_features_by_bbox(data, parsed.as_list())
         return data
-    except DataProcessorError as e:
-        raise HTTPException(status_code=503, detail=str(e))
+    except DataProcessorError:
+        logger.exception("道路数据不可用")
+        raise HTTPException(status_code=503, detail=DATA_UNAVAILABLE_DETAIL)
 
 
 @app.get("/api/traffic-status")

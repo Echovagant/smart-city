@@ -4,6 +4,7 @@ import os
 from typing import Dict, List, Any
 from shapely.geometry import shape, mapping
 from shapely.ops import unary_union
+from shapely.errors import ShapelyError
 
 logger = logging.getLogger(__name__)
 
@@ -66,27 +67,43 @@ class DataProcessor:
             raise DataProcessorError(f"GeoJSON 数据不可序列化: {file_path}") from e
     
     def filter_features_by_bbox(self, geojson: Dict[str, Any], bbox: List[float]) -> Dict[str, Any]:
-        """根据边界框过滤GeoJSON要素"""
+        """根据边界框过滤GeoJSON要素
+
+        单个要素的几何损坏时抛出 DataProcessorError（而不是 KeyError/TypeError/GEOSException），
+        便于上层把它映射成 503（数据问题），而不是 500。
+        """
         min_lon, min_lat, max_lon, max_lat = bbox
         filtered_features = []
-        
-        for feature in geojson.get('features', []):
-            geom = shape(feature['geometry'])
-            # 创建边界框多边形
-            bbox_poly = shape({
-                'type': 'Polygon',
-                'coordinates': [[
-                    [min_lon, min_lat],
-                    [max_lon, min_lat],
-                    [max_lon, max_lat],
-                    [min_lon, max_lat],
-                    [min_lon, min_lat]
-                ]]
-            })
-            
-            if geom.intersects(bbox_poly):
+
+        for index, feature in enumerate(geojson.get('features', [])):
+            if not isinstance(feature, dict):
+                raise DataProcessorError(f"GeoJSON 第 {index} 个要素不是合法的 feature 对象")
+            geometry = feature.get('geometry')
+            if geometry is None:
+                raise DataProcessorError(f"GeoJSON 第 {index} 个要素缺少 geometry 字段")
+            try:
+                # 创建边界框多边形
+                bbox_poly = shape({
+                    'type': 'Polygon',
+                    'coordinates': [[
+                        [min_lon, min_lat],
+                        [max_lon, min_lat],
+                        [max_lon, max_lat],
+                        [min_lon, max_lat],
+                        [min_lon, min_lat]
+                    ]]
+                })
+
+                geom = shape(geometry)
+                intersects = geom.intersects(bbox_poly)
+            except (ShapelyError, TypeError, ValueError, KeyError, AttributeError) as e:
+                # ShapelyError 覆盖 GEOSException / GeometryTypeError 等几何错误。
+                logger.error("GeoJSON 要素几何非法: 第 %s 个要素", index)
+                raise DataProcessorError(f"GeoJSON 第 {index} 个要素的几何数据非法") from e
+
+            if intersects:
                 filtered_features.append(feature)
-        
+
         return {
             "type": "FeatureCollection",
             "features": filtered_features
