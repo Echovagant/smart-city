@@ -88,3 +88,18 @@ def test_mount_frontend_skips_a_missing_dist_without_raising(tmp_path):
     client = TestClient(app)
     assert client.get("/api/buildings").status_code == 200
     assert client.get("/").status_code == 404
+
+
+def test_root_route_serves_the_page_when_the_frontend_is_built(tmp_path, monkeypatch):
+    """真实应用的根路径：有前端构建产物时返回页面，而不是服务信息 JSON。
+
+    静态挂载注册在所有路由之后，优先级低于已注册的 "/" 路由，
+    所以根路径要由路由自己把 index.html 交出去。
+    """
+    dist = _make_dist(tmp_path)
+    monkeypatch.setattr(main, "FRONTEND_DIST", dist)
+
+    response = TestClient(main.app).get("/")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+    assert 'id="app"' in response.text

@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from starlette.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from pydantic_settings import BaseSettings
@@ -280,6 +281,13 @@ def _parse_bbox(raw: str) -> BBox:
 # 根路由
 @app.get("/")
 async def root():
+    # 前端构建产物存在时，根路径直接返回页面——部署形态下打开 http://host:8000/
+    # 就是应用本身。静态挂载（mount_frontend）注册在所有路由之后，优先级更低，
+    # 抢不到 "/" 这条已注册的路由，所以这里要把 index.html 自己交出去。
+    # 没有构建产物时保留原来的服务信息 JSON（纯后端部署形态）。
+    index = FRONTEND_DIST / "index.html"
+    if index.is_file():
+        return FileResponse(index)
     return {
         "message": "智慧城市后端API服务正在运行",
         "version": "1.0.0",
