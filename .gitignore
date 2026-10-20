@@ -12,3 +12,7 @@ __pycache__/
 # 本地工作区：执行计划时的 git worktree 与 SDD 进度/交接文件
 /.worktrees/
 /.superpowers/
+
+# 仓库根的产品文档（本地交付物，不纳入版本管理）
+/智慧城市3D可视化计划书.docx
+/智慧城市 3D 可视化.png
