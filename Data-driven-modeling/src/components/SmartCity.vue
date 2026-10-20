@@ -28,7 +28,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted, reactive } from 'vue'
+import { ref, onMounted, onUnmounted, reactive, markRaw } from 'vue'
 import * as Cesium from 'cesium'
 import 'cesium/Build/Cesium/Widgets/widgets.css'
 import { useCityData } from '@/composables/useCityData'
@@ -252,8 +252,10 @@ const loadGeoJSONBuildings = async () => {
       entity.polygon.outline = true // 显示轮廓
       entity.polygon.outlineColor = Cesium.Color.WHITE // 轮廓颜色
 
-      // 存入状态管理，用于控制显示/隐藏
-      state.buildingEntities.push(entity)
+      // 存入状态管理，用于控制显示/隐藏。
+      // markRaw：Cesium Entity 是引擎对象，不是视图状态，
+      // 别让 Vue 给它套一层响应式代理（几千个实体的代理开销与被代理对象内部行为都有风险）。
+      state.buildingEntities.push(markRaw(entity))
     })
 
     if (isMounted) {
@@ -294,7 +296,7 @@ const loadGeoJSONRoads = async () => {
       entity.polyline.clampToGround = true // 贴地显示
 
       // 存入状态管理，用于控制显示/隐藏
-      state.roadEntities.push(entity)
+      state.roadEntities.push(markRaw(entity))
     })
 
     if (isMounted) {
@@ -333,7 +335,7 @@ const createTrafficSystem = () => {
       },
     })
 
-    state.trafficEntities.push(trafficLight)
+    state.trafficEntities.push(markRaw(trafficLight))
   }
 
   // 创建车辆
@@ -356,7 +358,7 @@ const createTrafficSystem = () => {
         description: `<h3>车辆 ${index + 1}</h3><p>方向: ${pos.direction}</p>`,
       })
 
-      state.trafficEntities.push(vehicle)
+      state.trafficEntities.push(markRaw(vehicle))
 
       // 车辆动画。记录返回的 restart 回调，
       // 供 toggleTraffic 在"停止 → 启动"时重新拉起被中断的动画链。
@@ -390,7 +392,7 @@ const createTrafficSystem = () => {
         }
       })
 
-      state.trafficEntities.push(light)
+      state.trafficEntities.push(markRaw(light))
     })
   }
 
