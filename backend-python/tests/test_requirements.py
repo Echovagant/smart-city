@@ -1,9 +1,12 @@
 """防止未使用的重依赖回流到 requirements.txt。
 
-背景：geopandas / numpy / pandas 三个包曾被声明为后端依赖，但后端代码
+背景：geopandas / pandas 两个包曾被声明为后端依赖，但后端代码
 只 import 了 shapely。它们让 venv 多背了约 127 MB（geopandas 会拖入
 fiona + pyproj + numpy + pandas），而本机到海外 CDN 慢，这几行是新手
 装环境耗时的主要来源。本测试保证「声明了但没人 import」的包不会再回来。
+
+numpy 不算死依赖：shapely 2.0.4 声明 numpy<3,>=1.14，numpy 是它的传递
+依赖。所以这里约束的是 numpy 的版本（numpy<2），不是移除它。
 """
 import ast
 import re
@@ -21,6 +24,10 @@ ALLOWED_WITHOUT_DIRECT_IMPORT = {
     "python-dotenv",  # pydantic-settings 会读 .env，它自己不 import dotenv
     "httpx",          # starlette 的 TestClient 在底层用它
     "pytest",         # 测试框架本身
+    # shapely 2.0.4 声明 numpy<3,>=1.14 —— numpy 是它的传递依赖，不是死依赖。
+    # 这里显式钉住 numpy<2：shapely 2.0.4 与 numpy 2.x 不兼容
+    # （TypeError: ufunc 'create_collection' not supported for the input types）。
+    "numpy",
 }
 
 
@@ -65,9 +72,13 @@ def test_no_unused_heavy_dependencies_are_declared():
 
 
 def test_removed_heavy_dependencies_stay_removed():
-    """geopandas / numpy / pandas 曾是死依赖，任何人加回来都会让 venv 胖 127 MB。"""
+    """geopandas / pandas 曾是死依赖，任何人加回来都会让 venv 胖 127 MB。
+
+    numpy 不在此列：它是 shapely 2.0.4 的传递依赖，需要被约束在 numpy<2，
+    而不是被移除。
+    """
     declared = _declared_packages(REQUIREMENTS) | _declared_packages(REQUIREMENTS_DEV)
-    for package in ("geopandas", "numpy", "pandas"):
+    for package in ("geopandas", "pandas"):
         assert package not in declared, (
             f"{package} 不该再出现在依赖声明里 —— 后端只 import shapely。"
         )
