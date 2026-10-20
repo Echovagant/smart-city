@@ -3,8 +3,7 @@ import logging
 import math
 import os
 from typing import Dict, List, Any, Optional, Tuple
-from shapely.geometry import shape, mapping
-from shapely.ops import unary_union
+from shapely.geometry import shape
 from shapely.errors import ShapelyError
 
 logger = logging.getLogger(__name__)
