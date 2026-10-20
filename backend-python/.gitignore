@@ -24,3 +24,8 @@ venv/
 .idea/
 .DS_Store
 Thumbs.db
+
+# User-provided OSM extract (5 MB) — regenerate with
+# backend-python/scripts/fetch_osm_data.py (see scripts/README.md)
+geojson/
+data/

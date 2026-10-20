@@ -16,7 +16,7 @@
 //   import cesiumAssets from './vite-plugins/cesium-assets.js'
 //   plugins: [vue(), cesiumAssets()]
 import { copyFileSync, mkdirSync, existsSync, readdirSync, statSync } from 'node:fs'
-import { resolve, dirname, join, normalize, sep, extname } from 'node:path'
+import { resolve, join, normalize, sep, extname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createReadStream } from 'node:fs'
 import { promisify } from 'node:util'
@@ -101,8 +101,16 @@ function copyDirSync(src, dest) {
 
 export default function cesiumAssets(options = {}) {
   const mount = options.mount || DEV_MOUNT
+  // build.outDir 必须在 configResolved 里捕获：Rollup/Vite 插件上下文没有
+  // this.info 这个字段，旧代码用 this.info?.config?.build?.outDir 永远得到
+  // undefined，退化成 resolve(dirname('dist')) === 项目根目录，把 Cesium 资源
+  // 写到了 <project>/Cesium/ 而不是 <project>/dist/Cesium/。
+  let resolvedOutDir = null
   return {
     name: 'cesium-assets',
+    configResolved(config) {
+      resolvedOutDir = config.build.outDir
+    },
     // dev: 中间件把 /Cesium/<sub>/<file> 直接以文件形式返回。
     // 不能用 server.transformRequest —— 它会按 JS module 转译 .json。
     configureServer(server) {
@@ -142,9 +150,7 @@ export default function cesiumAssets(options = {}) {
     },
     // build: closeBundle 后复制到 dist/Cesium/
     closeBundle() {
-      const outBase = resolve(
-        dirname(this.info?.config?.build?.outDir || 'dist'),
-      )
+      const outBase = resolve(resolvedOutDir || 'dist')
       const outDir = join(outBase, 'Cesium')
       for (const sub of CESIUM_SUBDIRS) {
         const src = join(CESIUM_BUILD_DIR, sub)
