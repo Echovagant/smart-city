@@ -341,11 +341,16 @@ async def root():
     index = FRONTEND_DIST / "index.html"
     if index.is_file():
         return FileResponse(index)
-    return {
+    banner = {
         "message": "智慧城市后端API服务正在运行",
         "version": "1.0.0",
-        "docs": "/docs"
     }
+    # 文档路由默认不暴露（Settings.expose_docs 默认 False），此时 /docs 是 404。
+    # 不能无条件宣称它可用——服务 banner 是运维和探针看的第一手信息。
+    # 在调用时读 settings，和 require_api_key 一致：运行时改配置立即生效。
+    if settings.expose_docs:
+        banner["docs"] = "/docs"
+    return banner
 
 # 健康检查
 @app.get("/health")

@@ -104,3 +104,23 @@ def test_allowed_hosts_parsing():
     assert main._allowed_hosts("  ") == []
     assert main._allowed_hosts("example.com") == ["example.com"]
     assert main._allowed_hosts("a.com, b.com ,,c.com") == ["a.com", "b.com", "c.com"]
+
+
+def test_root_banner_only_advertises_docs_when_exposed(client, monkeypatch, tmp_path):
+    """文档路由关闭时，服务 banner 不能宣称 /docs 可用。
+
+    背景：/docs 在 expose_docs=False 时是 404，banner 却无条件写着 "docs": "/docs"，
+    对外宣称了一个打不开的地址。服务 banner 是运维和探针看的第一手信息。
+
+    把 FRONTEND_DIST 指向空目录，强制走 JSON banner 分支
+    （构建过前端时根路径返回页面，见 test_static.py）。
+    """
+    monkeypatch.setattr(main, "FRONTEND_DIST", tmp_path)
+
+    monkeypatch.setattr(main.settings, "expose_docs", False)
+    body = client.get("/").json()
+    assert "docs" not in body
+
+    monkeypatch.setattr(main.settings, "expose_docs", True)
+    body = client.get("/").json()
+    assert body["docs"] == "/docs"
