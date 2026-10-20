@@ -14,7 +14,7 @@ backend-python/
 ├── scripts/
 │   ├── fetch_osm_data.py  # 从 Overpass API 抓 OSM 数据转 GeoJSON
 │   └── README.md          # 抓取脚本的用法与注意事项
-├── tests/             # pytest 测试（5 个文件）
+├── tests/             # pytest 测试（5 个 `test_*.py` 用例文件 + `conftest.py`）
 ├── pyproject.toml     # pytest 配置
 ├── requirements.txt   # 运行时依赖
 ├── requirements-dev.txt # 测试依赖（pytest、httpx）
