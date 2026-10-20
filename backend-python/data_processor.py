@@ -9,6 +9,29 @@ from shapely.errors import ShapelyError
 
 logger = logging.getLogger(__name__)
 
+# 建筑高度的口径常量（前后端保持一致，见 DataProcessor.calculate_building_statistics）：
+# BUILDING_LEVEL_HEIGHT_M —— 用 building:levels 估算高度时每层按多少米算。
+# 前端的兜底高度是 30 米（cityConfig.defaultBuildingHeight）；
+# 后端不做兜底：没有高度标签的建筑不计入 height_stats，而不是给它编一个高度。
+BUILDING_LEVEL_HEIGHT_M = 3.0
+
+
+def _parse_height_meters(value: Any) -> Optional[float]:
+    """把一个 OSM 高度类标签解析成正数米数。
+
+    OSM 的标签值一律是字符串（'15'、'approx'……），统一在读取边界处转数字：
+    能解析、且是有限正数才返回数值，否则返回 None（表示"这个标签没有可用高度"）。
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number) or number <= 0:
+        return None
+    return number
+
 
 def _iter_positions(coordinates: Any):
     """递归产出 GeoJSON 坐标数组里的所有位置（[lon, lat] 或 [lon, lat, alt]）。
@@ -202,7 +225,22 @@ class DataProcessor:
         }
     
     def calculate_building_statistics(self, buildings_geojson: Dict[str, Any]) -> Dict[str, Any]:
-        """计算建筑统计信息"""
+        """计算建筑统计信息
+
+        OSM 的标签值都是字符串，height / building:levels 在读取边界处统一转成数字，
+        解析不出来的值当作"该建筑没有高度"跳过，不参与 min/max/平均值。
+
+        高度标签的取值优先级（与前端 SmartCity.vue 保持一致）：
+        1. height —— OSM 的建筑总高度（米），首选；
+        2. building:levels × 3 —— 没有 height 时按层数估算；
+        3. 两者都没有 —— 视为无高度，不计入 height_stats。
+
+        刻意不使用 roof:height：OSM 里它表示屋顶构件相对建筑顶部的高度，
+        不是建筑总高度，单独使用会把 15 米的建筑算成 1~3 米。
+
+        建筑类型按 OSM 的 building 标签分组（house / commercial / residential……），
+        没有该标签的归入 unknown；输出键名 type_distribution 保持不变（属于公开输出结构）。
+        """
         features = buildings_geojson.get('features', [])
         stats = {
             'total_count': len(features),
@@ -213,26 +251,26 @@ class DataProcessor:
                 'average': 0
             }
         }
-        
+
         total_height = 0
         height_count = 0
-        
+
         for feature in features:
-            props = feature.get('properties', {})
-            
-            # 统计建筑类型
-            building_type = props.get('type', 'unknown')
+            props = feature.get('properties') or {}
+
+            # 统计建筑类型：按 OSM 的 building 标签分组，没有标签的归入 unknown
+            building_type = props.get('building') or 'unknown'
             stats['type_distribution'][building_type] = \
                 stats['type_distribution'].get(building_type, 0) + 1
-            
-            # 统计建筑高度
-            height = props.get('height', 0)
-            if height > 0:
+
+            # 统计建筑高度：字符串 → 数字，非法值（'approx'、空串、负数）直接跳过
+            height = self._extract_height_meters(props)
+            if height is not None:
                 stats['height_stats']['min'] = min(stats['height_stats']['min'], height)
                 stats['height_stats']['max'] = max(stats['height_stats']['max'], height)
                 total_height += height
                 height_count += 1
-        
+
         # 计算平均高度
         if height_count > 0:
             stats['height_stats']['average'] = round(total_height / height_count, 2)
@@ -240,8 +278,22 @@ class DataProcessor:
             stats['height_stats']['min'] = 0
             stats['height_stats']['max'] = 0
             stats['height_stats']['average'] = 0
-        
+
         return stats
+
+    @staticmethod
+    def _extract_height_meters(props: Dict[str, Any]) -> Optional[float]:
+        """按 height → building:levels × 3 的顺序取建筑高度（米）。
+
+        取不到合法值时返回 None，调用方按"该建筑没有高度"处理。
+        """
+        direct = _parse_height_meters(props.get('height'))
+        if direct is not None:
+            return direct
+        levels = _parse_height_meters(props.get('building:levels'))
+        if levels is not None:
+            return levels * BUILDING_LEVEL_HEIGHT_M
+        return None
 
 # 创建数据处理工具实例
 def get_data_processor(data_dir: str = "./data") -> DataProcessor:
