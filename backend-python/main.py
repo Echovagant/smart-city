@@ -5,7 +5,7 @@ from fastapi.responses import FileResponse
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from collections import OrderedDict
 import logging
 import math
@@ -39,8 +39,8 @@ class Settings(BaseSettings):
     # 是否暴露 /docs /redoc /openapi.json。生产默认关闭。
     expose_docs: bool = False
 
-    class Config:
-        env_file = ".env"
+    # class-based Config 在 pydantic v2 已废弃，改用 model_config。
+    model_config = SettingsConfigDict(env_file=".env")
 
 # 数据目录：硬编码到脚本所在目录（backend-python/）下，不再走 .env。
 # 任何 CWD 下运行（VSCode 工作区根、容器、其他目录）都能找到数据。
