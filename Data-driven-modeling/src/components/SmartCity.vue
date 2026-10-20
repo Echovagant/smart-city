@@ -416,7 +416,7 @@ const createTrafficSystem = () => {
   const centerLat = cityConfig.center.lat
 
   // 创建交通灯
-  const createTrafficLight = (position, direction) => {
+  const createTrafficLight = (position) => {
     const trafficLight = viewer.value.entities.add({
       name: 'Traffic Light',
       position: Cesium.Cartesian3.fromDegrees(position.lng, position.lat, 0),
@@ -547,8 +547,8 @@ const createTrafficSystem = () => {
   }
 
   // 执行创建
-  createTrafficLight({ lng: centerLng + 0.001, lat: centerLat }, 'north-south')
-  createTrafficLight({ lng: centerLng, lat: centerLat + 0.001 }, 'east-west')
+  createTrafficLight({ lng: centerLng + 0.001, lat: centerLat })
+  createTrafficLight({ lng: centerLng, lat: centerLat + 0.001 })
   createVehicles()
   createStreetLights()
 }

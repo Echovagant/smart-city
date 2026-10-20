@@ -26,7 +26,7 @@ export async function apiGet(path, { timeout = DEFAULT_TIMEOUT_MS, signal } = {}
     const response = await fetch(path, { signal: controller.signal })
     if (!response.ok) {
       let body = null
-      try { body = await response.json() } catch (_) { /* body 不可 JSON */ }
+      try { body = await response.json() } catch { /* body 不可 JSON */ }
       throw new ApiError(
         `HTTP ${response.status} ${response.statusText} for ${path}`,
         { status: response.status, body },

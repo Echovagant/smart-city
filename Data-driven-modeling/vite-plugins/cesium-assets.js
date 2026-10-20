@@ -19,7 +19,6 @@ import { copyFileSync, mkdirSync, existsSync, readdirSync, statSync } from 'node
 import { resolve, join, normalize, sep, extname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createReadStream } from 'node:fs'
-import { promisify } from 'node:util'
 import { pipeline } from 'node:stream/promises'
 
 const CESIUM_BUILD_DIR = resolve(
