@@ -11,6 +11,9 @@
         数据加载失败：{{ error.message }}<span v-if="error.status">（状态码 {{ error.status }}）</span>
       </div>
 
+      <!-- OSM 数据遵循 ODbL：展示这份数据必须署名。删掉这一行等于违反许可证。 -->
+      <div class="attribution">数据 © OpenStreetMap contributors</div>
+
       <button @click="toggleBuildings">
         {{ state.buildingVisible ? '隐藏建筑' : '显示建筑' }}
       </button>
@@ -675,6 +678,16 @@ onUnmounted(() => {
 
 .status-error {
   color: #ff6b6b;
+}
+
+/* OSM 署名：ODbL 要求，不可删除 */
+.attribution {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.2);
+  color: #aaa;
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .building-info {

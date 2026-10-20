@@ -336,6 +336,19 @@ describe('SmartCity lifecycle', () => {
 
     wrapper.unmount()
   })
+
+  it('shows the OpenStreetMap attribution required by the ODbL', async () => {
+    const wrapper = mount(SmartCity, {
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    // OSM 数据遵循 ODbL：展示时必须署名 "© OpenStreetMap contributors"
+    expect(wrapper.text()).toContain('OpenStreetMap contributors')
+    expect(wrapper.text()).toContain('©')
+
+    wrapper.unmount()
+  })
 })
 
 // ---------------------------------------------------------------------------
