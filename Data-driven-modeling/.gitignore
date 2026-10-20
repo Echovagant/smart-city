@@ -40,3 +40,6 @@ __screenshots__/
 # "symbol __vite_injected_original_import_meta_url has already been declared")
 vite.config.js.timestamp-*.mjs
 vite.config.js.timestamp-*.js
+
+# Cesium static assets copied out of node_modules at build time
+Cesium/

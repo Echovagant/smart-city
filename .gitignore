@@ -1,0 +1,10 @@
+# Node
+node_modules/
+
+# Vite / build output
+**/Cesium/
+**/dist/
+
+# Python
+__pycache__/
+*.pyc
