@@ -17,9 +17,13 @@ export async function apiGet(path, { timeout = DEFAULT_TIMEOUT_MS, signal } = {}
   const timer = setTimeout(() => controller.abort(), timeout)
 
   // 允许调用方传入自己的 signal 与我们的超时 controller 合并。
+  // onAbort 必须留个引用：请求结束时要把监听器摘掉
+  // （{ once: true } 只保证「不重复触发」，不保证「只挂一次」）。
+  let onAbort = null
   if (signal) {
     if (signal.aborted) controller.abort()
-    signal.addEventListener('abort', () => controller.abort(), { once: true })
+    onAbort = () => controller.abort()
+    signal.addEventListener('abort', onAbort, { once: true })
   }
 
   try {
@@ -41,5 +45,8 @@ export async function apiGet(path, { timeout = DEFAULT_TIMEOUT_MS, signal } = {}
     throw new ApiError(`网络错误: ${err.message}`, { status: 0 })
   } finally {
     clearTimeout(timer)
+    // 请求结束时摘掉监听器：{ once: true } 只在**触发**时自动摘除，
+    // 请求正常结束的话监听器会一直挂在调用方的 signal 上。
+    if (signal && onAbort) signal.removeEventListener('abort', onAbort)
   }
 }

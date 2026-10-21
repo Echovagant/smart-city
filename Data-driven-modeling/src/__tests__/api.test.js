@@ -21,6 +21,41 @@ const fetchThatNeverResolves = () =>
     options.signal.addEventListener('abort', onAbort)
   }))
 
+// AbortSignal 没有公开的「监听器数量」接口，用一个替身来数。
+// 替身只实现 apiGet 真正用到的那几个接口：aborted、addEventListener、removeEventListener。
+// once 语义也照抄：触发一次就自动摘除——这样才能区分
+// 「监听器被 { once: true } 自动摘掉」和「监听器还挂在 signal 上没摘」。
+const makeCountingSignal = () => {
+  const listeners = []
+  const signal = {
+    aborted: false,
+    addEventListener(type, handler, options = {}) {
+      if (type !== 'abort') return
+      listeners.push({ handler, once: Boolean(options.once) })
+    },
+    removeEventListener(type, handler) {
+      if (type !== 'abort') return
+      const index = listeners.findIndex((item) => item.handler === handler)
+      if (index >= 0) listeners.splice(index, 1)
+    },
+  }
+  return {
+    signal,
+    get count() {
+      return listeners.length
+    },
+    fire() {
+      for (const item of listeners.slice()) {
+        if (item.once) {
+          const index = listeners.indexOf(item)
+          if (index >= 0) listeners.splice(index, 1)
+        }
+        item.handler()
+      }
+    },
+  }
+}
+
 afterEach(() => {
   globalThis.fetch = originalFetch
   vi.useRealTimers()
@@ -114,5 +149,63 @@ describe('apiGet', () => {
       status: 500,
       body: null,
     })
+  })
+})
+
+describe('apiGet 的 abort 监听器', () => {
+  it('removes the abort listener when the request completes normally', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    )
+    const caller = makeCountingSignal()
+
+    await apiGet('/api/whatever', { signal: caller.signal })
+
+    // { once: true } 只保证「不重复触发」，不保证「只挂一次」：
+    // 请求正常结束的话，监听器会一直挂在调用方的 signal 上。
+    expect(caller.count).toBe(0)
+  })
+
+  it('removes the abort listener when the request fails', async () => {
+    globalThis.fetch = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'))
+    const caller = makeCountingSignal()
+
+    await expect(apiGet('/api/x', { signal: caller.signal })).rejects.toThrowError(ApiError)
+
+    expect(caller.count).toBe(0)
+  })
+
+  it('keeps the abort listener attached while the request is in flight', async () => {
+    let settle
+    globalThis.fetch = vi.fn(() => new Promise((resolve) => { settle = resolve }))
+    const caller = makeCountingSignal()
+
+    const pending = apiGet('/api/slow', { signal: caller.signal })
+    // 请求还没结束：监听器必须在，否则调用方中止时我们收不到。
+    expect(caller.count).toBe(1)
+
+    settle(new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    await pending
+
+    expect(caller.count).toBe(0)
+  })
+
+  it('removes the abort listener after the caller aborts', async () => {
+    globalThis.fetch = fetchThatNeverResolves()
+    const caller = makeCountingSignal()
+
+    const settled = apiGet('/api/x', { signal: caller.signal }).then(
+      (value) => ({ ok: true, value }),
+      (error) => ({ ok: false, error }),
+    )
+
+    expect(caller.count).toBe(1)
+    caller.fire()
+    const result = await settled
+
+    expect(result.ok).toBe(false)
+    expect(result.error).toBeInstanceOf(ApiError)
+    // 触发时 { once: true } 已经自动摘掉了。
+    expect(caller.count).toBe(0)
   })
 })
