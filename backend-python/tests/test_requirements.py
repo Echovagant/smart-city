@@ -24,6 +24,9 @@ ALLOWED_WITHOUT_DIRECT_IMPORT = {
     "python-dotenv",  # pydantic-settings 会读 .env，它自己不 import dotenv
     "httpx",          # starlette 的 TestClient 在底层用它
     "pytest",         # 测试框架本身
+    # pytest-cov 是 pytest 插件，靠命令行 --cov 启用，不会出现在 import 语句里。
+    # 它只在开发期用（产出覆盖率报告），不进生产镜像。
+    "pytest-cov",
     # shapely 2.0.4 声明 numpy<3,>=1.14 —— numpy 是它的传递依赖，不是死依赖。
     # 这里显式钉住 numpy<2：shapely 2.0.4 与 numpy 2.x 不兼容
     # （TypeError: ufunc 'create_collection' not supported for the input types）。

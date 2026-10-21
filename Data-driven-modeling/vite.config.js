@@ -82,5 +82,17 @@ export default defineConfig(({ mode }) => ({
     environment: 'jsdom',
     globals: true,
     include: ['src/**/__tests__/**/*.test.{js,ts}'],
+    coverage: {
+      provider: 'v8',
+      // all: true 让「没有被任何测试碰过」的文件也计入分母，
+      // 否则覆盖率只反映被测文件、看不到真正的缺口。
+      all: true,
+      include: ['src/**/*.{js,vue}'],
+      exclude: ['src/**/__tests__/**', 'src/**/*.test.{js,ts}'],
+      reporter: ['text', 'json', 'html'],
+      // 覆盖率生成物默认落在 Data-driven-modeling/coverage/（已 gitignore）；
+      // 需要把生成物放到仓库外时设 COVERAGE_DIR 环境变量。
+      reportsDirectory: process.env.COVERAGE_DIR || 'coverage',
+    },
   },
 }))
