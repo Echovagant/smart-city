@@ -3,6 +3,9 @@
 基于 **Vue 3 + Vite + Cesium + TypeScript（严格模式）** 的 3D 城市浏览器，把后端提供的北京天安门一带 OSM
 建筑/道路 GeoJSON 渲染成可拉伸的三维建筑与分级道路，并附带一个可开关的交通模拟。
 
+界面是**深色 3D 数据可视化大屏**：纯色深底 + 发光网格 + 深色发光建筑 + 分级辉光路网 + 流动光效 +
+缓慢环绕的相机。**底座完全自绘，不接任何瓦片服务，也不需要任何地图 key。**
+
 ## 前置条件
 
 **后端必须同时在跑**，否则前端只会看到一个空地球加一条错误横幅。
@@ -74,7 +77,8 @@ vue-tsc ^3.3.13（实装 3.3.13）、typescript-eslint ^8.72.0（实装 8.72.0�
 
 | 文件 | 作用 |
 |---|---|
-| `src/components/SmartCity.vue` | 唯一的功能组件：Cesium 视图、GeoJSON 加载、交通模拟、实时交通读数、鸟瞰↔平视切换（`<script setup lang="ts">`） |
+| `src/components/SmartCity.vue` | 唯一的功能组件：Cesium 视图、GeoJSON 加载、交通模拟、实时交通读数、鸟瞰↔平视切换、**相机缓慢自转**（`<script setup lang="ts">`） |
+| `src/theme/dark.ts` | **深色大屏的色板与材质工厂**（`DARK_PALETTE` / `ROAD_COLORS` / 辉光材质 / 流动虚线材质 / 拥堵分档色 / CSS 变量注入）——视觉的唯一事实来源 |
 | `src/api/client.ts` | 极简 fetch 封装：超时（默认 15 s）、`ApiError` 规范化；请求结束时会摘掉挂在调用方 signal 上的 abort 监听器 |
 | `src/composables/useCityData.ts` | 三个接口的调用方；`buildings`/`roads` 用 `shallowRef`（载荷是几 MB 的 GeoJSON，不能深度响应式）；另有只刷新交通状态一个端点的 `refreshTrafficStatus()` |
 | `src/main.ts` / `src/App.vue` | 引导入口；`App.vue` 只渲染 `<SmartCity />` |
@@ -170,8 +174,9 @@ Vite 默认不提供这些文件，所以 `vite-plugins/cesium-assets.js` 负责
 **不要动这两个 gate。**
 
 另外 Cesium 是**刻意不接 ion** 的：Viewer 用 `baseLayerPicker: false`、
-`geocoder: false`、`baseLayer: false` 三项关掉会触发 ion 401 的功能，底图改用高德
-`UrlTemplateImageryProvider`。
+`geocoder: false`、`baseLayer: false` 三项关掉会触发 ion 401 的功能。
+**`baseLayer: false` 不能去掉** —— 去掉它 Cesium 会自己走 `fromWorldImagery()` → ion 401。
+底座是自绘的纯色地面 + 发光网格，不接任何瓦片服务。
 
 ### Cesium 运行时的剪枝（Plan C1）
 
@@ -210,7 +215,7 @@ node vite-plugins/cesium-prune.mjs --write
 真实 headless Chrome 实测（生产构建 + 后端单端口托管，跑完 10 个交互动作后，
 2026-10-21）：
 
-- **实际加载集 = 65 个文件**（Assets 10 / Widgets 9 / **Workers 46**）。
+- **实际加载集 = 64 个文件**（Assets 10 / Widgets 9 / **Workers 45**）。
   这个数取的是**两个口径的并集**：
   1. **CDP `Network.*` 事件**（能看到 worker 内部的请求，但 Chrome 的网络日志有条数上限，
      高德瓦片会把早期的 Cesium 请求挤掉）；
@@ -226,8 +231,11 @@ node vite-plugins/cesium-prune.mjs --write
 - **「本次没被请求」≠「运行时用不到」**：一次相机交互就能把某个「从未请求」的文件翻转成
   「已请求」。所以剪枝的判据是「静态不可达 ∪（静态可达 ∧ 属于已论证的组 ∧ 实测未加载 ∧
   回归通过）」。
-- 剪枝后的实际加载集与剪枝前**逐文件相同**（65 个，一个不多一个不少），
-  282 个被剪文件**零命中**，**零 404**。
+- **被剪掉的 worker 要特别小心**：Cesium 的「非贴地实体 polyline」静态路径会建一个
+  `asynchronous: true` 的 `Primitive`，它需要 `Workers/createPolylineGeometry.js` ——
+  那个文件在剪枝清单里，**一旦用到就是 404，渲染循环直接停摆**。
+  所以本项目**不使用非贴地的实体 polyline**（流动光效那条线自己用 `Primitive` 画，
+  `asynchronous: false`，不需要任何 worker）。
 
 ## 浏览器端度量
 
@@ -248,18 +256,29 @@ node scripts\measure-browser-performance.mjs --no-build --port 8045 --cdp-port 9
 `server-logs/`（后端与 Chrome 的日志）。退出码：测出数据 → 0；测不出数据（找不到
 Chrome / 构建失败 / 后端起不来）→ 1，**不产出假数字**。
 
-**本轮实测**（3 轮取中位数，16 核 i7-13620H，测量期整机 CPU 非空闲 69%–73%）：
+**本轮实测**（3 轮取中位数，16 核 i7-13620H，测量期整机 CPU 非空闲 **61%–68%**；
+同机改造前那轮是 79%–98%）：
 
 | 指标 | 验收线 | 实测 | 判定 |
 |---|---|---|---|
-| 首屏（LargestContentfulPaint） | < 3 s | **0.78 s**（三轮 0.74 / 0.78 / 0.83） | 达标 |
-| 页面 load 事件 | < 3 s | **0.91 s** | 达标 |
-| 应用就绪（数据到位 → 城市入场景） | 参考 | **1.77 s** | 参考 |
-| 帧率（静止） | ≥ 30 fps | **89.0 fps** | 达标 |
-| 帧率（相机运动） | ≥ 30 fps | **163.1 fps** | 达标 |
-| 首屏传输量（线上，不含高德瓦片） | 参考 | 2.53 MB | 参考 |
-| 首屏解码后体积（不含高德瓦片） | 参考 | 12.37 MB | 参考 |
-| 高德瓦片（外部网络） | 参考 | 77 个 / 累计 9.1–31.6 s | 参考 |
+| 首屏（LargestContentfulPaint） | < 3 s | **0.86 s**（三轮 0.78 / 0.86 / 0.87） | 达标 |
+| 页面 load 事件 | < 3 s | **0.94 s** | 达标 |
+| 应用就绪（数据到位 → 城市入场景） | 参考 | **1.31 s** | 参考 |
+| 帧率（静止 / 慢速环绕） | ≥ 30 fps | **107.5 fps** | 达标 |
+| 帧率（相机运动） | ≥ 30 fps | **162.1 fps** | 达标 |
+| 首屏传输量（线上，不含外部） | 参考 | 2.63 MB | 参考 |
+| **首屏外部请求（高德瓦片）** | 0 | **0 个**（改造前是 77 个） | 达标 |
+
+**改造前 → 改造后**（同一台机器、同一套脚本）：
+
+| 指标 | 改造前 | 改造后 |
+|---|---|---|
+| 静止 fps | 98.8 | **107.5** |
+| 运动 fps | 163.7 | **162.1** |
+| 首屏 LCP | 0.86 s | **0.86 s** |
+| load 事件 | 1.13 s | **0.94 s** |
+| 应用就绪 | 2.11 s | **1.31 s** |
+| **首屏外部瓦片请求** | **77 个 / 累计 15.97 s** | **0 个 / 0 ms** |
 
 **读这些数字之前必须知道三个口径坑**：
 
@@ -271,12 +290,11 @@ Chrome / 构建失败 / 后端起不来）→ 1，**不产出假数字**。
    几毫秒。不拆开的话量到的是「浏览器冷启动 + 页面加载」的混合体，在共享机器上
    **根本不可复跑**。脚本因此先访问一次同源的 `/health` 把浏览器拉起来，冷启动延迟
    单独记在「冷启动」一行（浏览器缓存全程禁用，**产品资源仍然是第一次下载**）。
-3. **headless Chrome 没有 vsync**，帧源不受显示器刷新率锁，所以 163 fps 是
+3. **headless Chrome 没有 vsync**，帧源不受显示器刷新率锁，所以 162 fps 是
    「渲染器每秒能产出多少帧」，不是「屏幕上每秒显示多少帧」。
 
-另外**外部依赖要单独摘出来**：高德瓦片每轮 77 个，累计等待 9.1–31.6 s，占首屏全部
-请求耗时的 46%–72%，但**不阻塞首屏**（首屏绘制 0.74 s 发生在瓦片回来之前）。
-把「高德 CDN 慢」说成「前端首屏慢」是错的。
+另外**「静止」那一行现在其实是「慢速环绕」**：相机默认缓慢自转（0.02 rad/s），
+采样期间不派发鼠标事件，但相机自己在动。
 
 ## CI
 
@@ -307,11 +325,18 @@ Chrome / 构建失败 / 后端起不来）→ 1，**不产出假数字**。
 | 面板上出现红色错误条 | 后端返回了错误；`error.message` 与 `error.status` 会显示在条上 |
 | 面板上没有「实时交通」那一行 | 后端还没起来，或交通状态请求失败（轮询失败会保留上一次读数；完全没读数时这一行不渲染） |
 | 控制台报 `Failed to load module script: text/html` | `window.CESIUM_BASE_URL` 或 Cesium 静态资源插件被改掉了 |
+| 页面报 "An error occurred while rendering" | 用了**非贴地的实体 polyline** → Cesium 要 `Workers/createPolylineGeometry.js`，那个文件被剪枝清单剪掉了 → 404。用 `Primitive`（`asynchronous: false`）代替 |
 | `npm test` 一直不退出 | 那是 watch 模式，用 `npm test -- --run` |
 
 ## 许可与署名
 
-底图来自高德（界面上显示 "© AutoNavi"）。建筑/道路数据来自 OpenStreetMap，
+底座是自绘的（没有瓦片服务，也就没有瓦片服务商的署名）。建筑/道路数据来自 OpenStreetMap，
 遵循 [ODbL](https://opendatacommons.org/licenses/odbl/1-0/)，
 **展示这份数据时必须署名 "© OpenStreetMap contributors"**——控制面板里已经常驻这一行
-（`src/components/SmartCity.vue:19`），**不要删掉它**。
+（`src/components/SmartCity.vue` 的 `.attribution`），**不要删掉它**。
+
+> **GCJ-02 偏移**：高德瓦片是 GCJ-02 坐标，OSM 是 WGS-84，在天安门一带差 **东 533 m / 北 156 m**。
+> 现在底座自绘，路与楼用的都是 OSM 原始坐标，**天然同坐标系，不需要任何转换**。
+> **如果将来有人把高德（或任何 GCJ-02）瓦片加回底座，这个偏移会立刻回来**，
+> 而且不会报错——只是整体错开，看起来像「数据没对齐」。
+

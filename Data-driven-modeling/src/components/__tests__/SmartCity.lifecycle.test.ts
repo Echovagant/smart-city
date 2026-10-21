@@ -19,16 +19,22 @@ const cesiumMock = vi.hoisted(() => ({
   // Cesium.Ion 上的任何读写都会被记下来：一旦组件碰了 ion，就说明底图又走回 ion 了
   ionAccesses: [] as string[],
   ionImageryProviderCalls: 0,
-  // 构造出来的 ImageryLayer
-  layers: [] as unknown[],
 }))
 
 // Stub cesium BEFORE importing SmartCity. The module exports everything as
 // functions or constructors; returning empty objects is enough to keep
 // SmartCity's onMounted from throwing during a jsdom mount.
 vi.mock('cesium', () => {
-  const colorWithAlpha = vi.fn(() => ({}))
-  const namedColor = (name: string) => ({ name, withAlpha: colorWithAlpha })
+  // 颜色桩：每个色值都是独立对象，带一个可比较的 name
+  // （测试要断言「两种道路的颜色不同」）。withAlpha 保留 name，
+  // 这样「同一色、不同 alpha」也仍然可比较。
+  const makeColor = (name: string, alpha = 1) => ({
+    name,
+    alpha,
+    withAlpha: (next: number) => makeColor(name, next)
+  })
+  const colorWithAlpha = vi.fn((alpha: number) => makeColor('alpha', alpha))
+  const namedColor = (name: string) => makeColor(name)
   const Color = Object.assign(vi.fn(), {
     RED: namedColor('red'),
     GREEN: namedColor('green'),
@@ -36,6 +42,7 @@ vi.mock('cesium', () => {
     WHITE: namedColor('white'),
     DARKGRAY: namedColor('darkgray'),
     GRAY: namedColor('gray'),
+    TRANSPARENT: namedColor('transparent'),
     withAlpha: colorWithAlpha,
     // 按传入的 CSS 字符串返回不同的颜色对象：真实 Cesium 里每个色值都是独立实例，
     // mock 若一律返回同一个名字，就无法断言"两种道路的颜色不同"。
@@ -44,14 +51,24 @@ vi.mock('cesium', () => {
   return {
     Viewer: vi.fn().mockImplementation(() => ({
       destroy: vi.fn(),
+      // ScreenSpaceEventHandler 要一个真实的 canvas 元素
+      canvas: document.createElement('canvas'),
       camera: {
         flyTo: vi.fn(),
+        setView: vi.fn(),
+        // 自转恢复时要从相机当前位置反算轨道状态
+        positionCartographic: { longitude: 0, latitude: 0, height: 0 },
       },
       scene: {
-        globe: { enableLighting: false },
+        globe: { enableLighting: false, baseColor: null, showGroundAtmosphere: true },
+        skyAtmosphere: { show: true },
+        skyBox: { show: true },
+        backgroundColor: null,
         fog: {},
         postProcessStages: { fxaa: {} },
         maximumFrameRate: 0,
+        // 自转挂在 preRender 上
+        preRender: { addEventListener: vi.fn(), removeEventListener: vi.fn() },
         primitives: { add: vi.fn(), remove: vi.fn() },
       },
       entities: {
@@ -97,18 +114,49 @@ vi.mock('cesium', () => {
     OpenStreetMapImageryProvider: Object.assign(vi.fn(), {
       fromUrl: vi.fn().mockResolvedValue({}),
     }),
-    // UrlTemplateImageryProvider 仍为同步构造器，initCesium 中显式 new。
-    // 保留构造参数，便于断言底图用的是高德 URL 模板而不是 ion 资源。
-    UrlTemplateImageryProvider: vi.fn((options: Record<string, unknown>) => ({ ...options })),
-    // initCesium 把 UrlTemplateImageryProvider 包成 ImageryLayer 后传给 Viewer。
-    // 真实的 ImageryLayer 有 imageryProvider 属性（SmartCity.vue 正是判它来决定
-    // 要不要 add），mock 必须带上，否则底图永远不会被加进 viewer。
-    ImageryLayer: vi.fn((provider: unknown) => {
-      const layer = { provider, imageryProvider: provider }
-      cesiumMock.layers.push(layer)
-      return layer
-    }),
-    Credit: vi.fn(),
+    // 材质：实体用 MaterialProperty，Primitive 的 appearance 用 Material。
+    // 两者不是一回事，mock 里也保持分开。
+    PolylineGlowMaterialProperty: vi.fn((options: Record<string, unknown>) => ({
+      color: options?.color,
+      glowPower: options?.glowPower,
+    })),
+    PolylineDashMaterialProperty: vi.fn((options: Record<string, unknown>) => ({ ...options })),
+    // 材质是否「常量」决定了 Cesium 会不会每帧重建贴地几何，
+    // 所以 glowPower 必须包成 ConstantProperty（见 theme/dark.ts 的说明）。
+    ConstantProperty: vi.fn((value: unknown) => ({ value, isConstant: true })),
+    Material: { fromType: vi.fn((type: string, uniforms: unknown) => ({ type, uniforms })) },
+    CallbackProperty: vi.fn((callback: (...args: unknown[]) => unknown) => ({
+      callback,
+      isConstant: false,
+      getValue: (...args: unknown[]) => callback(...args),
+    })),
+    JulianDate: { now: () => ({}) },
+    // 批量描边与网格走 Primitive
+    Primitive: vi.fn((options: Record<string, unknown>) => ({ ...options, show: true })),
+    GeometryInstance: vi.fn((options: Record<string, unknown>) => ({ ...options })),
+    PolylineGeometry: vi.fn((options: Record<string, unknown>) => ({ ...options })),
+    PolylineMaterialAppearance: Object.assign(
+      vi.fn((options: Record<string, unknown>) => ({ ...options })),
+      { VERTEX_FORMAT: { position: true, st: true } }
+    ),
+    ArcType: { GEODESIC: 0, RHUMB: 1 },
+    ScreenSpaceEventHandler: vi.fn(() => ({
+      setInputAction: vi.fn(),
+      destroy: vi.fn(),
+    })),
+    ScreenSpaceEventType: {
+      LEFT_DOWN: 0,
+      LEFT_UP: 1,
+      LEFT_DRAG: 2,
+      RIGHT_DOWN: 3,
+      RIGHT_UP: 4,
+      RIGHT_DRAG: 5,
+      MIDDLE_DOWN: 6,
+      MIDDLE_UP: 7,
+      MIDDLE_DRAG: 8,
+      WHEEL: 10,
+      PINCH: 11,
+    },
     GeoJsonDataSource: { load: vi.fn().mockResolvedValue({ entities: { values: [] } }) },
     EntityCluster: vi.fn(),
     Math: { toRadians: vi.fn((deg: number) => deg) },
@@ -151,7 +199,7 @@ interface MockEntity {
 
 /** 道路图元的形状（组件会往里写 material / width）。 */
 interface MockPolyline {
-  material: { name?: string }
+  material: { name?: string; color?: { name?: string } }
   width: number
 }
 
@@ -160,9 +208,10 @@ interface MockViewer {
   destroy: Mock<() => void>
   camera: {
     flyTo: Mock<(options: { destination: { z: number }; orientation: { pitch: number } }) => void>
+    setView: Mock<(options: unknown) => void>
   }
   scene: {
-    globe: { enableLighting: boolean }
+    globe: { enableLighting: boolean; baseColor: unknown }
     fog: { density: number; near: number; far: number }
     postProcessStages: { fxaa: { enabled: boolean } }
     maximumFrameRate: number
@@ -318,7 +367,6 @@ beforeEach(() => {
   cesiumStub.GeoJsonDataSource.load.mockResolvedValue({ entities: { values: [] } })
   cesiumMock.ionAccesses.length = 0
   cesiumMock.ionImageryProviderCalls = 0
-  cesiumMock.layers.length = 0
 })
 
 afterEach(() => {
@@ -448,8 +496,9 @@ describe('SmartCity lifecycle', () => {
     loadMock.mockResolvedValue({ entities: { values: [] } })
 
     // 不同等级：颜色不同、宽度不同
+    // （道路材质是辉光材质 PolylineGlowMaterialProperty，颜色挂在 color 上）
     expect(primary.polyline.material).not.toBe(footway.polyline.material)
-    expect(primary.polyline.material.name).not.toBe(footway.polyline.material.name)
+    expect(primary.polyline.material.color?.name).not.toBe(footway.polyline.material.color?.name)
     expect(primary.polyline.width).toBeGreaterThan(footway.polyline.width)
     // 宽度必须是数字，不能是 OSM 的原始字符串
     expect(typeof primary.polyline.width).toBe('number')
@@ -462,7 +511,7 @@ describe('SmartCity lifecycle', () => {
 
     // 表外的 highway 取值落到兜底等级（最低宽度，但用的是兜底自己的配色）
     expect(unlisted.polyline.width).toBe(footway.polyline.width)
-    expect(unlisted.polyline.material.name).not.toBe(footway.polyline.material.name)
+    expect(unlisted.polyline.material.color?.name).not.toBe(footway.polyline.material.color?.name)
 
     wrapper.unmount()
   })
@@ -550,13 +599,15 @@ describe('SmartCity behaviour', () => {
     await flushPromises()
     const scene = mockViewerOf(wrapper).scene
 
-    // optimizePerformance 在 onMounted 里跑：开光照、加雾、开 FXAA、限帧
-    expect(scene.globe.enableLighting).toBe(true)
+    // optimizePerformance 在 onMounted 里跑：关光照（底色恒定）、加雾、开 FXAA、限帧
+    expect(scene.globe.enableLighting).toBe(false)
     expect(scene.fog.density).toBeGreaterThan(0)
     expect(scene.fog.near).toBeGreaterThan(0)
     expect(scene.fog.far).toBeGreaterThan(scene.fog.near)
     expect(scene.postProcessStages.fxaa.enabled).toBe(true)
     expect(scene.maximumFrameRate).toBe(60)
+    // 地面底色必须被设成大屏底色（不设的话 Cesium 给的是灰蓝色球体）
+    expect(scene.globe.baseColor).toBeTruthy()
 
     wrapper.unmount()
   })
@@ -574,7 +625,7 @@ describe('SmartCity behaviour', () => {
     wrapper.unmount()
   })
 
-  it('configures a non-Ion imagery provider', () => {
+  it('configures no imagery provider and never touches Cesium.Ion', () => {
     // 构造函数选项从 mock 里观察不到，只能把断言限定在 Viewer 的 options 块内
     const options = extractViewerOptions(componentSource)
     expect(options).not.toBeNull()
@@ -592,13 +643,9 @@ describe('SmartCity behaviour', () => {
     expect(cesiumMock.ionAccesses).toEqual([])
     expect(cesiumMock.ionImageryProviderCalls).toBe(0)
 
-    // 高德底图确实被加进 viewer，且带的是高德 URL 模板
-    const addMock = mockViewerOf(wrapper).imageryLayers.add
-    expect(addMock).toHaveBeenCalledTimes(1)
-    const layer = addMock.mock.calls[0][0]
-    expect(layer).toBe(cesiumMock.layers.at(-1))
-    expect(layer).toBeDefined()
-    expect((layer as { imageryProvider?: { url?: string } }).imageryProvider?.url).toContain('is.autonavi.com')
+    // 底座自绘：一次影像图层都不加（既没有高德瓦片，也没有 ion 底图）。
+    // 地面是纯色底 + 自绘网格，建筑与道路都画在 OSM 的原始 WGS-84 坐标上。
+    expect(mockViewerOf(wrapper).imageryLayers.add).not.toHaveBeenCalled()
 
     wrapper.unmount()
   })
