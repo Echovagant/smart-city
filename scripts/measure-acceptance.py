@@ -663,6 +663,14 @@ def main(argv=None) -> int:
             rows.append(["应用就绪（数据到位 → 城市入场景）", "参考（无验收线）",
                          _sec(ready_ms), NOTE])
 
+        cold_ms = browser_median("coldStartFirstByteMs")
+        if cold_ms is None:
+            rows.append(["冷启动（全新浏览器首个导航的首字节）", "参考（浏览器开销，不是产品成本）",
+                         "未提供", "度量产物缺该项"])
+        else:
+            rows.append(["冷启动（全新浏览器首个导航的首字节）",
+                         "参考（浏览器开销，不是产品成本）", _sec(cold_ms), NOTE])
+
         if fps_static is None:
             rows.append(["帧率（静止）", ">= 30 fps", "未提供", "度量产物缺该项"])
         else:
@@ -771,6 +779,8 @@ def main(argv=None) -> int:
               f"{'已禁用（每轮都是首次访问）' if env.get('cacheDisabled') else '已启用'}")
         print("口径  ：首屏 LCP 是浏览器的 Largest Contentful Paint。WebGL 画布不是 LCP 候选元素，")
         print("        LCP 量到的是页面文字块；「3D 城市画出来」对应的口径是「应用就绪」那一行。")
+        print("        首屏量的是**浏览器已就绪之后**的页面加载；全新 Chrome 的冷启动首字节延迟")
+        print("        单独记在「冷启动」那一行（那是浏览器开销，不是产品成本）。")
         print("外部网：高德瓦片来自 webrd0{1..4}.is.autonavi.com，等待时间是外部网络成本，")
         print("        传输量已把它拆开单列——读首屏数字时别把它算到前端头上。")
         print()

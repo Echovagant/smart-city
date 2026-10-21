@@ -288,7 +288,7 @@ function findChrome(explicit) {
   return null
 }
 
-async function launchChrome({ binary, cdpPort, userDataDir, headful }) {
+async function launchChrome({ binary, cdpPort, userDataDir, headful, logPath }) {
   const isLinux = process.platform === 'linux'
   const args = [
     `--remote-debugging-port=${cdpPort}`,
@@ -316,19 +316,23 @@ async function launchChrome({ binary, cdpPort, userDataDir, headful }) {
   if (!headful) args.unshift('--headless=new')
   args.push('about:blank')
 
+  // Chrome 自己的输出落盘：崩了要能从日志里看出原因（丢弃就什么都查不到）。
+  mkdirSync(path.dirname(logPath), { recursive: true })
+  const logFd = openSync(logPath, 'w')
   const child = spawn(binary, args, {
-    stdio: ['ignore', 'ignore', 'ignore'],
+    stdio: ['ignore', logFd, logFd],
     windowsHide: true,
   })
   child.on('error', (error) => {
     process.stderr.write(`Chrome 启动失败：${error.message}\n`)
   })
 
-  const deadline = Date.now() + 30_000
+  // 宿主机被抢占时，Chrome 起来得很慢——给足 60 秒，别让「机器忙」变成「测不出来」。
+  const deadline = Date.now() + 60_000
   while (Date.now() < deadline) {
     try {
       const response = await fetch(`http://127.0.0.1:${cdpPort}/json/version`, {
-        signal: AbortSignal.timeout(2000),
+        signal: AbortSignal.timeout(5000),
       })
       if (response.ok) return { child, version: await response.json() }
     } catch {
@@ -337,17 +341,26 @@ async function launchChrome({ binary, cdpPort, userDataDir, headful }) {
     if (child.exitCode !== null) {
       throw new Error(`Chrome 进程已退出（退出码 ${child.exitCode}）`)
     }
-    await sleep(200)
+    await sleep(300)
   }
   child.kill()
-  throw new Error(`Chrome 在 30 秒内没有开放调试端口 ${cdpPort}`)
+  throw new Error(`Chrome 在 60 秒内没有开放调试端口 ${cdpPort}`)
 }
 
-function stopChrome(child) {
+/** 杀 Chrome 进程树。**必须等它真的死了**——否则下一轮会在上一轮还占着
+ *  内存（SwiftShader 软渲染很吃内存）的情况下启动，Chrome 会莫名其妙崩掉。 */
+async function stopChrome(child) {
   if (!child || child.exitCode !== null) return
   try {
     if (process.platform === 'win32') {
-      spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
+      await new Promise((resolve) => {
+        const killer = spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], {
+          stdio: 'ignore',
+          windowsHide: true,
+        })
+        killer.on('close', resolve)
+        killer.on('error', resolve)
+      })
     } else {
       child.kill('SIGKILL')
     }
@@ -507,15 +520,22 @@ async function startBackend({ repoRoot, port, logPath }) {
     }
     await sleep(200)
   }
-  stopBackend(child)
+  await stopBackend(child)
   throw new Error(`后端在 40 秒内没有就绪，日志见 ${logPath}`)
 }
 
-function stopBackend(child) {
+async function stopBackend(child) {
   if (!child || child.exitCode !== null) return
   try {
     if (process.platform === 'win32') {
-      spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
+      await new Promise((resolve) => {
+        const killer = spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], {
+          stdio: 'ignore',
+          windowsHide: true,
+        })
+        killer.on('close', resolve)
+        killer.on('error', resolve)
+      })
     } else {
       child.kill('SIGTERM')
     }
@@ -637,26 +657,32 @@ async function measureRun(options, runIndex) {
   const profileDir = path.join(tmpdir(), `smart-city-e5-chrome-${process.pid}-${runIndex}`)
   const cpuStart = cpuSnapshot()
 
-  const backend = await startBackend({ repoRoot: options.repoRoot, port, logPath })
-  if (!backend.servedHtml) {
-    stopBackend(backend.child)
-    throw new Error(
-      `GET / 返回的是 ${backend.rootContentType || '未知类型'} 而不是 HTML——` +
-      `后端没找到 dist/，量的就不是生产形态。日志见 ${logPath}`
-    )
-  }
-
-  const chrome = await launchChrome({
-    binary: options.chromeBinary,
-    cdpPort,
-    userDataDir: profileDir,
-    headful: options.headful,
-  })
-
-  const cdp = new CdpClient(chrome.version.webSocketDebuggerUrl)
+  // 整段（含后端与 Chrome 的启动）必须包在 try 里：
+  // 否则「启动到一半就失败」会把进程漏在外面（重试时端口冲突 + 进程堆积）。
+  let backend = null
+  let chrome = null
+  let cdp = null
   const network = { requests: new Map(), order: [], failed: [] }
 
   try {
+    backend = await startBackend({ repoRoot: options.repoRoot, port, logPath })
+    if (!backend.servedHtml) {
+      throw new Error(
+        `GET / 返回的是 ${backend.rootContentType || '未知类型'} 而不是 HTML——` +
+        `后端没找到 dist/，量的就不是生产形态。日志见 ${logPath}`
+      )
+    }
+
+    chrome = await launchChrome({
+      binary: options.chromeBinary,
+      cdpPort,
+      userDataDir: profileDir,
+      headful: options.headful,
+      logPath: path.join(options.artifacts, 'server-logs', `chrome-${cdpPort}.log`),
+    })
+
+    cdp = new CdpClient(chrome.version.webSocketDebuggerUrl)
+
     await cdp.connect()
     // 用**已经存在**的那个 page target（启动参数里的 about:blank），
     // 而不是新建第二个标签：后台标签会被 Chrome 节流（资源加载被推迟、
@@ -721,6 +747,35 @@ async function measureRun(options, runIndex) {
       }
       network.failed.push({ requestId: params.requestId, errorText: params.errorText })
     }, sessionId)
+
+    // --- 预热：先访问同源的 /health（几十字节）-----------------------------
+    // **为什么要预热**：全新 Chrome 实例的「第一个导航」要等好几秒才拿到首字节
+    // （网络栈/renderer 冷启动，实测 1.3–8.8 s，宿主越忙越久），
+    // 而同一个实例里的后续导航只要几毫秒。这个冷启动延迟**不是产品的加载成本**，
+    // 但它会被算进首屏时间，让数字变成「浏览器冷启动 + 页面加载」的混合体，
+    // 而且冷启动那部分在共享机器上波动极大。
+    // 所以：先拿一次 /health 导航把浏览器拉起来（它的首字节延迟单独记为
+    // 「冷启动」），**再**测应用页面的导航 —— 浏览器缓存全程禁用，
+    // 应用资源仍然是「第一次下载」，量到的就是产品自身的加载成本。
+    const warmLoad = cdp
+      .once('Page.loadEventFired', sessionId, 30_000)
+      .then(() => true)
+      .catch(() => false)
+    await cdp.send('Page.navigate', { url: `${backend.baseUrl}/health` }, sessionId)
+    await warmLoad
+    const warmNavRaw = await evaluate(
+      cdp,
+      sessionId,
+      `(() => {
+        const n = performance.getEntriesByType('navigation')[0];
+        return n ? JSON.stringify({ rs: n.responseStart, re: n.responseEnd }) : null;
+      })()`
+    )
+    const coldStart = warmNavRaw ? JSON.parse(warmNavRaw) : null
+    // 预热请求不计入传输量统计。
+    network.requests.clear()
+    network.order.length = 0
+    network.failed.length = 0
 
     // load 事件与「应用就绪」并行等：load 是**报告项**不是前置条件，
     // 万一它迟到也不该让整轮测量作废。
@@ -806,6 +861,11 @@ async function measureRun(options, runIndex) {
       firstContentfulPaintMs: paintTime(pageData.paint, 'first-contentful-paint'),
       loadEventEndMs: pageData.nav ? pageData.nav.loadEventEnd : null,
       loadEventFired: loadOk,
+      navResponseStartMs: pageData.nav ? pageData.nav.responseStart : null,
+      navResponseEndMs: pageData.nav ? pageData.nav.responseEnd : null,
+      domInteractiveMs: pageData.nav ? pageData.nav.domInteractive : null,
+      coldStartFirstByteMs: coldStart ? coldStart.rs : null,
+      coldStartWallMs: coldStart ? coldStart.re : null,
       domContentLoadedEventEndMs: pageData.nav ? pageData.nav.domContentLoadedEventEnd : null,
       appReadyMs: appReady.appReadyMs,
       appReadyDetail: appReady,
@@ -836,9 +896,10 @@ async function measureRun(options, runIndex) {
       resources: pageData.resources,
     }
   } finally {
-    cdp.close()
-    stopChrome(chrome.child)
-    stopBackend(backend.child)
+    cdp?.close()
+    // 顺序要紧：先等 Chrome 真的死，再删它的 profile 目录。
+    if (chrome) await stopChrome(chrome.child)
+    if (backend) await stopBackend(backend.child)
     if (!options.keepProfile) {
       try {
         rmSync(profileDir, { recursive: true, force: true })
@@ -1122,15 +1183,42 @@ async function main() {
   process.stdout.write(`轮次     ：${options.runs} 轮，每轮重启后端 + 新起 Chrome\n\n`)
 
   const runs = []
+  const failures = []
   for (let index = 0; index < options.runs; index += 1) {
     process.stdout.write(`第 ${index + 1}/${options.runs} 轮：启动中…\n`)
-    const result = await measureRun(options, index)
-    runs.push(result)
-    process.stdout.write(
-      `第 ${index + 1}/${options.runs} 轮完成：LCP ${formatMs(result.lcpMs)}、` +
-        `load ${formatMs(result.loadEventEndMs)}、应用就绪 ${formatMs(result.appReadyMs)}、` +
-        `静止 ${result.fpsStatic ? result.fpsStatic.toFixed(1) : UNKNOWN} fps、` +
-        `运动 ${result.fpsMotion ? result.fpsMotion.toFixed(1) : UNKNOWN} fps\n`
+    // 共享机器上 Chrome 偶尔会中途崩掉（内存/CPU 争用）。重试一次，
+    // 免得整轮测量因为一次偶发崩溃就白跑。
+    let result = null
+    let lastError = null
+    for (let attempt = 1; attempt <= 2 && !result; attempt += 1) {
+      try {
+        result = await measureRun(options, index)
+      } catch (error) {
+        lastError = error
+        if (attempt < 2) {
+          process.stdout.write(`  第 ${index + 1} 轮第 ${attempt} 次尝试失败（${error.message}），重试…\n`)
+          await sleep(2000)
+        }
+      }
+    }
+    if (result) {
+      runs.push(result)
+      process.stdout.write(
+        `第 ${index + 1}/${options.runs} 轮完成：冷启动 ${formatMs(result.coldStartFirstByteMs)}、` +
+          `LCP ${formatMs(result.lcpMs)}、load ${formatMs(result.loadEventEndMs)}、` +
+          `应用就绪 ${formatMs(result.appReadyMs)}、` +
+          `静止 ${result.fpsStatic ? result.fpsStatic.toFixed(1) : UNKNOWN} fps、` +
+          `运动 ${result.fpsMotion ? result.fpsMotion.toFixed(1) : UNKNOWN} fps\n`
+      )
+    } else {
+      failures.push({ run: index + 1, error: lastError ? lastError.message : '未知错误' })
+      process.stdout.write(`第 ${index + 1}/${options.runs} 轮失败：${lastError?.message}\n`)
+    }
+  }
+  if (!runs.length) {
+    throw new Error(
+      `${options.runs} 轮全部失败：` +
+        failures.map((item) => `第 ${item.run} 轮 ${item.error}`).join('；')
     )
   }
 
@@ -1144,6 +1232,7 @@ async function main() {
     decodedBytes: summarize(runs.map((run) => run.transfer.app.decodedBytes + run.transfer.cesium.decodedBytes + run.transfer.api.decodedBytes)),
     externalTileCount: summarize(runs.map((run) => run.transfer.external.tileCount)),
     externalTileDurationMs: summarize(runs.map((run) => run.transfer.external.tileDurationMs)),
+    coldStartFirstByteMs: summarize(runs.map((run) => run.coldStartFirstByteMs)),
   }
 
   const payload = {
@@ -1162,6 +1251,8 @@ async function main() {
       cacheDisabled: options.cache === 'disabled',
       sampleSeconds: options.sampleSeconds,
       runs: options.runs,
+      successfulRuns: runs.length,
+      failedRuns: failures,
     },
     targets: { firstScreenMs: TARGET_FIRST_SCREEN_MS, fps: TARGET_FPS },
     summary,
@@ -1184,6 +1275,7 @@ function printReport(payload, options) {
   const medianLcp = summary.lcpMs.median
   const medianLoad = summary.loadEventEndMs.median
   const medianReady = summary.appReadyMs.median
+  const medianColdStart = summary.coldStartFirstByteMs.median
   const medianStatic = summary.fpsStatic.median
   const medianMotion = summary.fpsMotion.median
 
@@ -1204,6 +1296,12 @@ function printReport(payload, options) {
       '应用就绪（数据到位 → 城市入场景）',
       `参考（无验收线）`,
       formatMs(medianReady),
+      '参考',
+    ],
+    [
+      '冷启动（全新浏览器首个导航的首字节）',
+      `参考（浏览器开销，不是产品成本）`,
+      formatMs(medianColdStart),
       '参考',
     ],
     [
@@ -1234,6 +1332,7 @@ function printReport(payload, options) {
 
   const perRunRows = runs.map((run) => [
     String(run.run),
+    formatMs(run.coldStartFirstByteMs),
     formatMs(run.lcpMs),
     formatMs(run.loadEventEndMs),
     formatMs(run.appReadyMs),
@@ -1245,15 +1344,16 @@ function printReport(payload, options) {
       ? `${run.systemCpuBusyPercent.toFixed(0)}%`
       : UNKNOWN,
   ])
-  process.stdout.write('逐轮明细（外部 = 高德瓦片；CPU = 测量期间整机非空闲时间占比）\n')
+  process.stdout.write('逐轮明细（冷启动 = 全新浏览器首个导航的首字节；外部 = 高德瓦片；CPU = 测量期间整机非空闲时间占比）\n')
   process.stdout.write(
     renderTable(
-      ['轮', 'LCP', 'load', '应用就绪', '静止 fps', '运动 fps', '瓦片数', '瓦片耗时', 'CPU'],
+      ['轮', '冷启动', 'LCP', 'load', '应用就绪', '静止 fps', '运动 fps', '瓦片数', '瓦片耗时', 'CPU'],
       perRunRows
     ) + '\n\n'
   )
 
   const spreadRows = [
+    ['冷启动首字节', formatMs(summary.coldStartFirstByteMs.min), formatMs(summary.coldStartFirstByteMs.median), formatMs(summary.coldStartFirstByteMs.max), formatMs(summary.coldStartFirstByteMs.spread)],
     ['首屏 LCP', formatMs(summary.lcpMs.min), formatMs(summary.lcpMs.median), formatMs(summary.lcpMs.max), formatMs(summary.lcpMs.spread)],
     ['load 事件', formatMs(summary.loadEventEndMs.min), formatMs(summary.loadEventEndMs.median), formatMs(summary.loadEventEndMs.max), formatMs(summary.loadEventEndMs.spread)],
     ['应用就绪', formatMs(summary.appReadyMs.min), formatMs(summary.appReadyMs.median), formatMs(summary.appReadyMs.max), formatMs(summary.appReadyMs.spread)],
@@ -1313,6 +1413,22 @@ function printReport(payload, options) {
     '口径提醒：headless Chrome 的帧源**不受显示器刷新率锁**（没有 vsync），' +
       '所以这里的 fps 是「渲染器每秒能产出多少帧」，不是「屏幕上每秒显示多少帧」。\n'
   )
+  process.stdout.write(
+    '口径提醒：首屏数字量的是**浏览器已就绪之后**的页面加载（脚本先访问一次同源的 /health\n' +
+      '        把全新 Chrome 的网络栈/renderer 拉起来，那段冷启动延迟单独记在「冷启动」一行）。\n' +
+      '        不这样拆的话，量到的是「浏览器冷启动 + 页面加载」的混合体，而冷启动那部分在共享\n' +
+      '        机器上会在 1.3–8.8 s 之间乱跳，根本不可复跑。\n'
+  )
+  const busyRuns = runs.filter(
+    (run) => typeof run.systemCpuBusyPercent === 'number' && run.systemCpuBusyPercent >= 60
+  )
+  if (busyRuns.length) {
+    process.stdout.write(
+      `⚠ 宿主机争用：${busyRuns.length}/${runs.length} 轮测量期间整机 CPU 非空闲 ≥ 60%` +
+        `（最高 ${Math.max(...busyRuns.map((run) => run.systemCpuBusyPercent)).toFixed(0)}%）。` +
+        '共享机器上的首屏数字会被显著抬高——**别把机器忙当成产品慢**。\n'
+    )
+  }
   process.stdout.write('\n')
 }
 
