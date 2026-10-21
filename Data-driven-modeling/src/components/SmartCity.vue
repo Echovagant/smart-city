@@ -34,23 +34,48 @@
   </div>
 </template>
 
-<script setup>
+<script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, reactive, markRaw } from 'vue'
 import * as Cesium from 'cesium'
 import 'cesium/Build/Cesium/Widgets/widgets.css'
 import { useCityData } from '@/composables/useCityData'
+import type {
+  CityViewState,
+  HeightMeters,
+  LngLat,
+  RoadTier,
+  ViewerConstructorOptions,
+  WritableEntity,
+  WritablePolygonGraphics,
+  WritablePolylineGraphics,
+} from '../../types/city'
 
 // 移除手动设置的CESIUM_BASE_URL，让Vite自动处理
 
 // 跟踪所有 requestAnimationFrame handle，onUnmounted 时统一取消
-const animationFrames = new Set()
+const animationFrames = new Set<number>()
+
+/** 车辆在地图上的位置与行驶方向。 */
+interface VehiclePosition {
+  lng: number
+  lat: number
+  direction: 'east' | 'west' | 'north' | 'south'
+}
+
+/** 一辆车的动画句柄。 */
+interface VehicleAnimation {
+  vehicle: Cesium.Entity
+  pos: VehiclePosition
+  /** 重新拉起这条动画链（幂等）。 */
+  restart: () => void
+}
 
 // 记录每辆车的动画句柄（{ vehicle, pos, restart }）。
 // moveVehicle 在交通隐藏时会提前返回、动画链就此断掉，
 // 重新显示交通时靠这里的 restart 把链重新拉起来。
-const vehicleAnimations = []
+const vehicleAnimations: VehicleAnimation[] = []
 
-function safeRequestAnimationFrame(callback) {
+function safeRequestAnimationFrame(callback: FrameRequestCallback): number {
   const handle = requestAnimationFrame((t) => {
     animationFrames.delete(handle)
     callback(t)
@@ -70,9 +95,17 @@ function cancelAllAnimations() {
 let isMounted = true
 
 // 组件状态
-const cesiumContainer = ref(null)
-const viewer = ref(null)
-const state = reactive({
+const cesiumContainer = ref<HTMLDivElement | null>(null)
+const viewer = ref<Cesium.Viewer | null>(null)
+
+/** 组件的视图状态 + 三组 Cesium 实体列表。 */
+interface SmartCityState extends CityViewState {
+  buildingEntities: Cesium.Entity[]
+  roadEntities: Cesium.Entity[]
+  trafficEntities: Cesium.Entity[]
+}
+
+const state = reactive<SmartCityState>({
   buildingVisible: true,
   roadVisible: true,
   trafficVisible: true,
@@ -82,8 +115,21 @@ const state = reactive({
   trafficEntities: []
 })
 
-// 城市配置参数
-const cityConfig = {
+/** 道路分级 + 渲染颜色（颜色是 Cesium 的 Color，属于渲染细节）。 */
+type RenderedRoadTier = RoadTier & { color: Cesium.Color }
+
+/** 城市配置参数。 */
+interface CityConfig {
+  center: LngLat
+  zoomLevel: number
+  streetLevel: { height: number; heading: number }
+  buildingColors: Cesium.Color[]
+  defaultBuildingHeight: number
+  roadTiers: RenderedRoadTier[]
+  roadFallbackTier: RenderedRoadTier
+}
+
+const cityConfig: CityConfig = {
   // 天安门广场中央：开阔地带，平视模式不会穿模；朝北（heading=0）能看到天安门城楼
   center: { lng: 116.3976, lat: 39.9055 },
   zoomLevel: 1500,
@@ -149,12 +195,12 @@ const cityConfig = {
 
 // highway 标签 → 分级 的查表，建一次就够（2260 条道路各查一次）。
 const ROAD_TIER_BY_HIGHWAY = cityConfig.roadTiers.reduce((map, tier) => {
-  tier.highway.forEach(tag => map.set(tag, tier))
+  tier.highway?.forEach(tag => map.set(tag, tier))
   return map
-}, new Map())
+}, new Map<string, RenderedRoadTier>())
 
 // 按 highway 标签查道路分级：标签缺失或不在表内 → 兜底分级。
-function resolveRoadTier(highwayTag) {
+function resolveRoadTier(highwayTag: unknown): RenderedRoadTier {
   if (typeof highwayTag !== 'string') return cityConfig.roadFallbackTier
   const tier = ROAD_TIER_BY_HIGHWAY.get(highwayTag.trim().toLowerCase())
   return tier || cityConfig.roadFallbackTier
@@ -162,14 +208,17 @@ function resolveRoadTier(highwayTag) {
 
 // 读一个 OSM 标签值：Cesium 的 properties 是 PropertyBag，取值必须经过 getValue()。
 // 标签缺失时返回 undefined。
-function readTag(properties, key) {
-  const prop = properties?.[key]
+//
+// Cesium 给 PropertyBag 的索引签名是宽松类型，这里显式收窄成 Property；
+// 返回值统一是 unknown —— OSM 里的标签值是字符串，调用方自己判断。
+function readTag(properties: Cesium.PropertyBag | undefined, key: string): unknown {
+  const prop = properties?.[key] as Cesium.Property | undefined
   if (!prop || typeof prop.getValue !== 'function') return undefined
   return prop.getValue()
 }
 
 // 把一个 OSM 高度类标签转成正数米数；无效或缺失时返回 null。
-function parseHeightMeters(raw) {
+function parseHeightMeters(raw: unknown): HeightMeters {
   if (typeof raw === 'boolean') return null
   const value = Number(raw)
   if (!Number.isFinite(value) || value <= 0) return null
@@ -181,7 +230,7 @@ function parseHeightMeters(raw) {
 // 绝不让原始字符串流进 extrudedHeight（Cesium 的槽位是 Property | number）。
 // 不用 roof:height：OSM 里它是屋顶构件相对建筑顶部的高度，不是建筑总高，
 // 单独使用会把 15 米的建筑算成 1~3 米。
-function resolveBuildingHeight(properties, fallback) {
+function resolveBuildingHeight(properties: Cesium.PropertyBag | undefined, fallback: number): number {
   const direct = parseHeightMeters(readTag(properties, 'height'))
   if (direct !== null) return direct
   const levels = parseHeightMeters(readTag(properties, 'building:levels'))
@@ -195,21 +244,21 @@ function resolveBuildingHeight(properties, fallback) {
 const { buildings, roads, trafficStatus, refreshTrafficStatus, loadAll, error, loading } = useCityData()
 
 // 把任意取值转成有限数字；null / undefined / 空串 / 非数字一律返回 null。
-function toFiniteNumber(value) {
+function toFiniteNumber(value: unknown): number | null {
   if (value === null || value === undefined || value === '') return null
   const num = Number(value)
   return Number.isFinite(num) ? num : null
 }
 
 // 0..1 的指数 → 百分比文本；拿不到就返回 null（整段略过）。
-function formatRatio(value) {
+function formatRatio(value: unknown): string | null {
   const num = toFiniteNumber(value)
   if (num === null) return null
   return `${Math.round(num * 100)}%`
 }
 
 // 拥堵描述：优先用后端给的中文标签；没有标签时按拥堵指数自己分档。
-function formatCongestion(label, level) {
+function formatCongestion(label: unknown, level: unknown): string | null {
   if (typeof label === 'string' && label.trim()) return label.trim()
   const num = toFiniteNumber(level)
   if (num === null) return null
@@ -222,11 +271,11 @@ function formatCongestion(label, level) {
 // ISO8601 时间戳 → 本地 HH:MM:SS；解析不了就返回 null（整段略过）。
 // 自己拼时间串而不用 toLocaleTimeString：后者受运行环境的 ICU 数据影响，
 // 输出格式不保证一致。
-function formatClock(value) {
+function formatClock(value: unknown): string | null {
   if (typeof value !== 'string' || !value.trim()) return null
   const parsed = new Date(value)
   if (Number.isNaN(parsed.getTime())) return null
-  const pad = (n) => String(n).padStart(2, '0')
+  const pad = (n: number) => String(n).padStart(2, '0')
   return `${pad(parsed.getHours())}:${pad(parsed.getMinutes())}:${pad(parsed.getSeconds())}`
 }
 
@@ -250,7 +299,7 @@ const trafficSummary = computed(() => {
 // 这个端点不带 API key，前端可以直接轮询。
 const TRAFFIC_POLL_INTERVAL_MS = 5000
 
-let trafficTimer = null
+let trafficTimer: ReturnType<typeof setInterval> | null = null
 
 // 挂上轮询：交通读数每 5 秒刷新一次。
 // 与 3D 渲染无关，Cesium 初始化失败时读数照样在动。
@@ -274,7 +323,7 @@ const stopTrafficPolling = () => {
 // 关键：必须在 new Cesium.Viewer 之前构造好 baseLayer。
 // 因为 Cesium 1.134 Viewer 构造函数会读 baseLayer 选项决定是否透传给
 // CesiumWidget；漏传或传 undefined 都会触发 fromWorldImagery() → ion 警告。
-let gaodeLayer = null
+let gaodeLayer: Cesium.ImageryLayer | null = null
 try {
   const gaodeProvider = new Cesium.UrlTemplateImageryProvider({
     url: 'https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',
@@ -314,6 +363,13 @@ const initCesium = async () => {
   // CesiumWidget 内部 `E !== !1` 短路（undefined !== false === true），但
   // l(undefined) === false → E = os.fromWorldImagery() → 又触发 ion！
   // 所以还必须显式传 baseLayer: false 才能让 CesiumWidget 完全跳过底图。
+  //
+  // errorHandler 不在 Cesium 1.134 的 Viewer.ConstructorOptions 里（运行时支持），
+  // 所以用补过的 ViewerConstructorOptions——见 types/city.ts。
+  //
+  // 选项对象必须**内联**在 Viewer 的构造调用里：测试有一条源码文本断言，
+  // 专门从这个调用的参数块里抠出选项、确认底图相关的三个开关都是 false
+  // （见 src/components/__tests__/SmartCity.lifecycle.test.ts）。
   viewer.value = new Cesium.Viewer(cesiumContainer.value, {
     timeline: false,
     animation: false,
@@ -325,10 +381,10 @@ const initCesium = async () => {
     terrainProvider: undefined,
     useDefaultRenderLoop: true,
     sceneMode: Cesium.SceneMode.SCENE3D,
-    errorHandler: function(error) {
+    errorHandler: function (error) {
       console.warn('Cesium初始化错误:', error)
     },
-  })
+  } as ViewerConstructorOptions)
 
   // Viewer 构造完成后,显式把高德底图 add 到 CesiumWidget 的 imageryLayers。
   if (gaodeLayer && gaodeLayer.imageryProvider) {
@@ -387,19 +443,21 @@ const flyToOverhead = () => {
 
 // 优化3D场景性能
 const optimizePerformance = () => {
+  // viewer 在 onMounted 里初始化成功后才会调到这里，不会是 null。
+  const activeViewer = viewer.value!
   // 开启视锥体剔除（只渲染可见区域）
-  viewer.value.scene.globe.enableLighting = true
+  activeViewer.scene.globe.enableLighting = true
 
   // 添加雾效果（远处建筑渐隐，减少渲染压力）
-  viewer.value.scene.fog.density = 0.0002
-  viewer.value.scene.fog.near = 1000 // 雾开始生效的距离
-  viewer.value.scene.fog.far = 5000 // 雾完全遮挡的距离
+  activeViewer.scene.fog.density = 0.0002
+  activeViewer.scene.fog.near = 1000 // 雾开始生效的距离
+  activeViewer.scene.fog.far = 5000 // 雾完全遮挡的距离
 
   // 开启抗锯齿
-  viewer.value.scene.postProcessStages.fxaa.enabled = true
+  activeViewer.scene.postProcessStages.fxaa.enabled = true
 
   // 限制最大帧率（避免过度消耗GPU）
-  viewer.value.scene.maximumFrameRate = 60
+  activeViewer.scene.maximumFrameRate = 60
 }
 
 // 加载真实GeoJSON建筑数据（替换随机生成的建筑）
@@ -425,11 +483,15 @@ const loadGeoJSONBuildings = async () => {
       // 随机选择建筑颜色
       const color = cityConfig.buildingColors[Math.floor(Math.random() * cityConfig.buildingColors.length)]
 
-      // 将多边形拉伸为3D建筑
-      entity.polygon.extrudedHeight = height // 拉伸高度（米）
-      entity.polygon.material = color.withAlpha(0.8) // 建筑颜色
-      entity.polygon.outline = true // 显示轮廓
-      entity.polygon.outlineColor = Cesium.Color.WHITE // 轮廓颜色
+      // 将多边形拉伸为3D建筑。
+      // Cesium 1.134 的 .d.ts 只把图元属性声明成 Property 一侧，运行时却接受
+      // 裸值（内部自动包成 ConstantProperty）——WritablePolygonGraphics
+      // 就是「运行时真正接受的写入类型」，见 types/city.ts。
+      const polygon = entity.polygon as WritablePolygonGraphics
+      polygon.extrudedHeight = height // 拉伸高度（米）
+      polygon.material = color.withAlpha(0.8) // 建筑颜色
+      polygon.outline = true // 显示轮廓
+      polygon.outlineColor = Cesium.Color.WHITE // 轮廓颜色
 
       // 存入状态管理，用于控制显示/隐藏。
       // markRaw：Cesium Entity 是引擎对象，不是视图状态，
@@ -438,7 +500,8 @@ const loadGeoJSONBuildings = async () => {
     })
 
     if (isMounted) {
-      viewer.value.dataSources.add(dataSource)
+      // isMounted 为真时 viewer 一定还在（onUnmounted 会把两者一起置空）。
+      viewer.value!.dataSources.add(dataSource)
     }
   } catch (error) {
     console.error('加载建筑 GeoJSON 失败:', error)
@@ -472,17 +535,18 @@ const loadGeoJSONRoads = async () => {
         ? taggedWidth
         : tier.width
 
-      // 配置道路样式
-      entity.polyline.width = width // 道路宽度（米，始终是数字）
-      entity.polyline.material = tier.color // 道路颜色（按 highway 分级）
-      entity.polyline.clampToGround = true // 贴地显示
+      // 配置道路样式（同样是运行时可写视图，见 types/city.ts）
+      const polyline = entity.polyline as WritablePolylineGraphics
+      polyline.width = width // 道路宽度（米，始终是数字）
+      polyline.material = tier.color // 道路颜色（按 highway 分级）
+      polyline.clampToGround = true // 贴地显示
 
       // 存入状态管理，用于控制显示/隐藏
       state.roadEntities.push(markRaw(entity))
     })
 
     if (isMounted) {
-      viewer.value.dataSources.add(dataSource)
+      viewer.value!.dataSources.add(dataSource)
     }
   } catch (error) {
     console.error('加载道路 GeoJSON 失败:', error)
@@ -495,12 +559,16 @@ const createTrafficSystem = () => {
   // 此时直接返回，避免 "Cannot read properties of null (reading 'entities')"。
   if (!viewer.value) return
 
+  // 取一次局部引用：viewer.value 是 ref 的属性，在闭包里会被类型系统当成
+  // 可能为 null；createTrafficSystem 是同步的，中途不会被换掉。
+  const activeViewer = viewer.value
+
   const centerLng = cityConfig.center.lng
   const centerLat = cityConfig.center.lat
 
   // 创建交通灯
-  const createTrafficLight = (position) => {
-    const trafficLight = viewer.value.entities.add({
+  const createTrafficLight = (position: LngLat) => {
+    const trafficLight = activeViewer.entities.add({
       name: 'Traffic Light',
       position: Cesium.Cartesian3.fromDegrees(position.lng, position.lat, 0),
       cylinder: {
@@ -522,7 +590,7 @@ const createTrafficSystem = () => {
 
   // 创建车辆
   const createVehicles = () => {
-    const vehiclePositions = [
+    const vehiclePositions: VehiclePosition[] = [
       { lng: centerLng - 0.01, lat: centerLat, direction: 'east' },
       { lng: centerLng + 0.01, lat: centerLat, direction: 'west' },
       { lng: centerLng, lat: centerLat - 0.01, direction: 'north' },
@@ -530,7 +598,7 @@ const createTrafficSystem = () => {
     ]
 
     vehiclePositions.forEach((pos, index) => {
-      const vehicle = viewer.value.entities.add({
+      const vehicle = activeViewer.entities.add({
         name: `Vehicle ${index + 1}`,
         position: Cesium.Cartesian3.fromDegrees(pos.lng, pos.lat, 0.5),
         box: {
@@ -550,7 +618,7 @@ const createTrafficSystem = () => {
 
   // 创建路灯
   const createStreetLights = () => {
-    const lightPositions = [
+    const lightPositions: LngLat[] = [
       { lng: centerLng - 0.005, lat: centerLat - 0.005 },
       { lng: centerLng + 0.005, lat: centerLat - 0.005 },
       { lng: centerLng - 0.005, lat: centerLat + 0.005 },
@@ -558,7 +626,7 @@ const createTrafficSystem = () => {
     ]
 
     lightPositions.forEach((pos, index) => {
-      const light = viewer.value.entities.add({
+      const light = activeViewer.entities.add({
         name: `Street Light ${index + 1}`,
         position: Cesium.Cartesian3.fromDegrees(pos.lng, pos.lat, 8),
         cylinder: {
@@ -578,7 +646,7 @@ const createTrafficSystem = () => {
     })
   }
 
-  const animateVehicle = (vehicle, pos) => {
+  const animateVehicle = (vehicle: Cesium.Entity, pos: VehiclePosition): VehicleAnimation => {
     let distance = 0
     const speed = 0.00001 // 移动速度
     // 该车辆当前是否挂着一条动画链。用于保证 restart 幂等：
@@ -613,7 +681,10 @@ const createTrafficSystem = () => {
           break
       }
 
-      vehicle.position = Cesium.Cartesian3.fromDegrees(newLng, newLat, 0.5)
+      // Entity.position 运行时同样接受裸的 Cartesian3（自动包成
+      // ConstantPositionProperty），见 types/city.ts 的 WritableEntity。
+      const writableVehicle = vehicle as WritableEntity
+      writableVehicle.position = Cesium.Cartesian3.fromDegrees(newLng, newLat, 0.5)
       running = true
       safeRequestAnimationFrame(moveVehicle)
     }

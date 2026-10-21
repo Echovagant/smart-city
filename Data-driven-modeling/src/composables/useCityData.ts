@@ -1,5 +1,6 @@
 import { ref, shallowRef, onUnmounted } from 'vue'
 import { apiGet, ApiError } from '@/api/client'
+import type { BBoxParam, BuildingsResponse, RoadsResponse, TrafficStatus } from '../../types/city'
 
 // 默认不传 bbox：后端直接返回完整集合。
 // 之前默认带的 bbox（116.380,39.905,116.420,39.925）与 OSM 提取范围完全一致，
@@ -10,23 +11,23 @@ export function useCityData() {
   // buildings / roads 是几 MB 的 GeoJSON（几万个坐标）。
   // 用 shallowRef：载荷是整体替换的，模板只需要知道「数据到了」，
   // 不需要 Vue 把整棵对象图深度响应式包装一遍。
-  const buildings = shallowRef(null)
-  const roads = shallowRef(null)
+  const buildings = shallowRef<BuildingsResponse | null>(null)
+  const roads = shallowRef<RoadsResponse | null>(null)
   // trafficStatus 是个小对象，普通 ref 即可。
-  const trafficStatus = ref(null)
+  const trafficStatus = ref<TrafficStatus | null>(null)
   const loading = ref(false)
-  const error = ref(null)
+  const error = ref<ApiError | null>(null)
   const cancelled = ref(false)
 
-  const loadAll = async ({ bbox = null } = {}) => {
+  const loadAll = async ({ bbox = null }: { bbox?: BBoxParam | null } = {}) => {
     loading.value = true
     error.value = null
     const query = bbox ? `?bbox=${encodeURIComponent(bbox)}` : ''
     try {
       const [b, r, t] = await Promise.all([
-        apiGet(`/api/buildings${query}`),
-        apiGet(`/api/roads${query}`),
-        apiGet('/api/traffic-status'),
+        apiGet<BuildingsResponse>(`/api/buildings${query}`),
+        apiGet<RoadsResponse>(`/api/roads${query}`),
+        apiGet<TrafficStatus>('/api/traffic-status'),
       ])
       if (cancelled.value) return
       buildings.value = b
@@ -45,7 +46,7 @@ export function useCityData() {
   // 不动 buildings / roads，也不把「数据加载失败」横幅拉起来。
   const refreshTrafficStatus = async () => {
     try {
-      const t = await apiGet('/api/traffic-status')
+      const t = await apiGet<TrafficStatus>('/api/traffic-status')
       if (cancelled.value) return
       trafficStatus.value = t
     } catch {

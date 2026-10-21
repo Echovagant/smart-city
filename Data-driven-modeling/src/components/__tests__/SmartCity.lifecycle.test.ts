@@ -1,18 +1,26 @@
 import { mount, flushPromises } from '@vue/test-utils'
+import type { VueWrapper } from '@vue/test-utils'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import type { Mock } from 'vitest'
 import { nextTick } from 'vue'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
+import type {
+  BuildingsResponse,
+  CityViewState,
+  RoadsResponse,
+  TrafficStatus,
+} from '../../../types/city'
 
 // 记录 Cesium mock 的关键调用，供"行为断言"使用。
 // vi.hoisted 让这个对象在 vi.mock 工厂（会被提升到 import 之前）里可用。
 const cesiumMock = vi.hoisted(() => ({
   // Cesium.Ion 上的任何读写都会被记下来：一旦组件碰了 ion，就说明底图又走回 ion 了
-  ionAccesses: [],
+  ionAccesses: [] as string[],
   ionImageryProviderCalls: 0,
   // 构造出来的 ImageryLayer
-  layers: [],
+  layers: [] as unknown[],
 }))
 
 // Stub cesium BEFORE importing SmartCity. The module exports everything as
@@ -20,7 +28,7 @@ const cesiumMock = vi.hoisted(() => ({
 // SmartCity's onMounted from throwing during a jsdom mount.
 vi.mock('cesium', () => {
   const colorWithAlpha = vi.fn(() => ({}))
-  const namedColor = (name) => ({ name, withAlpha: colorWithAlpha })
+  const namedColor = (name: string) => ({ name, withAlpha: colorWithAlpha })
   const Color = Object.assign(vi.fn(), {
     RED: namedColor('red'),
     GREEN: namedColor('green'),
@@ -31,7 +39,7 @@ vi.mock('cesium', () => {
     withAlpha: colorWithAlpha,
     // 按传入的 CSS 字符串返回不同的颜色对象：真实 Cesium 里每个色值都是独立实例，
     // mock 若一律返回同一个名字，就无法断言"两种道路的颜色不同"。
-    fromCssColorString: vi.fn((css) => namedColor(css)),
+    fromCssColorString: vi.fn((css: string) => namedColor(css)),
   })
   return {
     Viewer: vi.fn().mockImplementation(() => ({
@@ -61,11 +69,11 @@ vi.mock('cesium', () => {
       },
     })),
     Cartesian3: Object.assign(
-      vi.fn().mockImplementation((x, y, z) => ({ x, y, z })),
+      vi.fn().mockImplementation((x: number, y: number, z: number) => ({ x, y, z })),
       // 真实 Cesium 的 fromDegrees 会把高度放进返回值的 z。
       // mock 必须保留高度，相机高度断言才有意义（每个调用返回新对象，
       // 车辆动画的"位置变了"断言也仍然成立）。
-      { fromDegrees: vi.fn((lng, lat, height) => ({ x: lng, y: lat, z: height })) },
+      { fromDegrees: vi.fn((lng: number, lat: number, height: number) => ({ x: lng, y: lat, z: height })) },
     ),
     Color,
     // ion 探针：任何读写都被记录，测试据此断言"全程没碰 ion"。
@@ -91,11 +99,11 @@ vi.mock('cesium', () => {
     }),
     // UrlTemplateImageryProvider 仍为同步构造器，initCesium 中显式 new。
     // 保留构造参数，便于断言底图用的是高德 URL 模板而不是 ion 资源。
-    UrlTemplateImageryProvider: vi.fn((options) => ({ ...options })),
+    UrlTemplateImageryProvider: vi.fn((options: Record<string, unknown>) => ({ ...options })),
     // initCesium 把 UrlTemplateImageryProvider 包成 ImageryLayer 后传给 Viewer。
     // 真实的 ImageryLayer 有 imageryProvider 属性（SmartCity.vue 正是判它来决定
     // 要不要 add），mock 必须带上，否则底图永远不会被加进 viewer。
-    ImageryLayer: vi.fn((provider) => {
+    ImageryLayer: vi.fn((provider: unknown) => {
       const layer = { provider, imageryProvider: provider }
       cesiumMock.layers.push(layer)
       return layer
@@ -103,7 +111,7 @@ vi.mock('cesium', () => {
     Credit: vi.fn(),
     GeoJsonDataSource: { load: vi.fn().mockResolvedValue({ entities: { values: [] } }) },
     EntityCluster: vi.fn(),
-    Math: { toRadians: vi.fn((deg) => deg) },
+    Math: { toRadians: vi.fn((deg: number) => deg) },
     VerticalOrigin: { CENTER: 0 },
     HorizontalOrigin: { CENTER: 0 },
     HeightReference: { CLAMP_TO_GROUND: 0 },
@@ -113,7 +121,136 @@ vi.mock('cesium', () => {
 import * as Cesium from 'cesium'
 import SmartCity from '../SmartCity.vue'
 
+/* -------------------------------------------------------------------------
+ * Cesium 桩的类型
+ *
+ * vi.mock 把整个 cesium 模块换成了上面的桩，但 TypeScript 看到的仍是
+ * 真实 Cesium 的声明——桩里的 mock 函数（mock.calls / mock.results）
+ * 在真实类型里不存在。这里把「桩的形状」单独声明出来，
+ * 测试通过它来断言行为。
+ * ---------------------------------------------------------------------- */
+
+/** entities.add 收到的图元描述。 */
+interface EntityDescriptor {
+  name?: string
+  position?: unknown
+  box?: unknown
+  cylinder?: unknown
+  point?: unknown
+  model?: unknown
+}
+
+/** entities.add 返回的实体。 */
+interface MockEntity {
+  position: unknown
+  show: boolean
+  point: Record<string, unknown>
+  polygon: Record<string, unknown>
+  polyline: MockPolyline
+}
+
+/** 道路图元的形状（组件会往里写 material / width）。 */
+interface MockPolyline {
+  material: { name?: string }
+  width: number
+}
+
+/** 桩里的 Viewer。 */
+interface MockViewer {
+  destroy: Mock<() => void>
+  camera: {
+    flyTo: Mock<(options: { destination: { z: number }; orientation: { pitch: number } }) => void>
+  }
+  scene: {
+    globe: { enableLighting: boolean }
+    fog: { density: number; near: number; far: number }
+    postProcessStages: { fxaa: { enabled: boolean } }
+    maximumFrameRate: number
+  }
+  entities: {
+    add: Mock<(descriptor: EntityDescriptor) => MockEntity>
+    remove: Mock<() => void>
+    values: MockEntity[]
+  }
+  dataSources: { add: Mock<(source: unknown) => void> }
+  imageryLayers: {
+    add: Mock<(layer: unknown) => void>
+    get: Mock<(index: number) => unknown>
+    length: number
+  }
+}
+
+/** 桩里的 GeoJsonDataSource.load。 */
+type LoadMock = Mock<
+  (data: { type: string }, options?: unknown) => Promise<{ entities: { values: unknown[] } }>
+>
+
+/**
+ * vi.mock 换掉的是整个 cesium 模块，这里把模块收窄到桩的类型，
+ * 测试才能访问 mock 专有的成员（mockResolvedValue / mock.calls）。
+ */
+const cesiumStub = Cesium as unknown as {
+  GeoJsonDataSource: { load: LoadMock }
+}
+
+/**
+ * 组件实例在测试里用到的那些成员。
+ *
+ * `<script setup>` 的绑定在运行时都在 vm 上，但 vue-tsc 为这个 SFC 生成的
+ * 组件类型里，setup 绑定的类型槽位是宽松类型——绑定没进实例类型，
+ * @vue/test-utils 的 VueWrapper.vm 因此退化成 ComponentPublicInstance。
+ * 这里把测试真正用到的成员显式声明出来（注明出处），收窄一次，
+ * 后面就不用每处都断言了。
+ */
+interface SmartCityVm {
+  /** Cesium Viewer（组件内部是 ref，vm 上是解包后的值）。 */
+  viewer: Cesium.Viewer | null
+  /** 视图状态 + 三组 Cesium 实体列表。 */
+  state: CityViewState & {
+    buildingEntities: Cesium.Entity[]
+    roadEntities: Cesium.Entity[]
+    trafficEntities: Cesium.Entity[]
+  }
+  /** 建筑 GeoJSON（组件内部是 shallowRef，vm 上是解包后的值）。 */
+  buildings: BuildingsResponse | null
+  /** 道路 GeoJSON。 */
+  roads: RoadsResponse | null
+  /** 实时交通读数。 */
+  trafficStatus: TrafficStatus | null
+  createTrafficSystem: () => void
+  loadGeoJSONBuildings: () => Promise<void>
+  loadGeoJSONRoads: () => Promise<void>
+  toggleBuildings: () => void
+  toggleRoads: () => void
+  toggleTraffic: () => void
+  toggleView: () => void
+  refreshTrafficStatus: () => Promise<void>
+}
+
+/**
+ * mount SmartCity 并把 vm 的类型收窄到组件实例类型。
+ *
+ * 收窄的原因见 SmartCityVm 的注释——这里只做一次，注明出处。
+ * 所有用例都把组件挂到 document.body 上（行为与转换前一致）。
+ */
+const mountSmartCity = () =>
+  mount(SmartCity, { attachTo: document.body }) as unknown as VueWrapper<SmartCityVm>
+
+/** 组件内部的 viewer 就是上面那个桩（不是真的 Cesium Viewer）。 */
+const mockViewerOf = (wrapper: VueWrapper<SmartCityVm>): MockViewer =>
+  wrapper.vm.viewer as unknown as MockViewer
+
 const originalFetch = globalThis.fetch
+
+/**
+ * 把 fetch 桩装到 globalThis 上。
+ *
+ * fetch 的真实类型比桩宽（`(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>`），
+ * 桩只关心 url —— 这里做一次显式收窄，免得桩的简化把 fetch 的签名也一起放松了。
+ */
+const installFetch = (stub: unknown) => {
+  globalThis.fetch = stub as typeof fetch
+}
 
 // 组件源码只用于一处断言：Viewer 构造选项（见 plan 013 Step 2）。
 // 构造函数选项没法从 mock 里观察得到，只能限定在选项块内做文本断言。
@@ -129,7 +266,7 @@ const componentSource = readFileSync(
 
 // 从源码里精确抠出 new Cesium.Viewer(...) 的第二个参数（options 对象）。
 // 比"整份文件里 grep"可靠得多：注释、其它函数里的同名字段都混不进来。
-const extractViewerOptions = (source) => {
+const extractViewerOptions = (source: string) => {
   const marker = 'new Cesium.Viewer('
   const callStart = source.indexOf(marker)
   if (callStart === -1) return null
@@ -158,7 +295,7 @@ const extractViewerOptions = (source) => {
   return null
 }
 
-const jsonResponse = (payload, status = 200) =>
+const jsonResponse = (payload: unknown, status = 200) =>
   new Response(JSON.stringify(payload), {
     status,
     headers: { 'Content-Type': 'application/json' },
@@ -167,7 +304,7 @@ const jsonResponse = (payload, status = 200) =>
 // 后端 API 的最小可用桩：城市数据两个端点返回空 FeatureCollection，
 // 交通状态端点返回一个普通对象。
 const stubApiFetch = () =>
-  vi.fn((url) => {
+  vi.fn<(url: string, options: RequestInit) => Promise<Response>>((url) => {
     if (String(url).includes('traffic-status')) {
       return Promise.resolve(jsonResponse({ status: 'normal' }))
     }
@@ -178,7 +315,7 @@ const stubApiFetch = () =>
 beforeEach(() => {
   vi.clearAllMocks()
   // 复位数据源桩：某个用例把它改成别的返回值时不会污染后面的用例
-  Cesium.GeoJsonDataSource.load.mockResolvedValue({ entities: { values: [] } })
+  cesiumStub.GeoJsonDataSource.load.mockResolvedValue({ entities: { values: [] } })
   cesiumMock.ionAccesses.length = 0
   cesiumMock.ionImageryProviderCalls = 0
   cesiumMock.layers.length = 0
@@ -193,9 +330,7 @@ describe('SmartCity lifecycle', () => {
     const rafSpy = vi.spyOn(window, 'requestAnimationFrame')
     const cancelSpy = vi.spyOn(window, 'cancelAnimationFrame')
 
-    const wrapper = mount(SmartCity, {
-      attachTo: document.body,
-    })
+    const wrapper = mountSmartCity()
 
     // 手动调用 createTrafficSystem 让其内部的车辆动画通过 safeRequestAnimationFrame
     // 注册到组件的 animationFrames Set。这样卸载时 onUnmounted → cancelAllAnimations
@@ -212,25 +347,23 @@ describe('SmartCity lifecycle', () => {
     // 用可控的 requestAnimationFrame 队列手动推进帧，
     // 断言"停止交通 → 启动交通"之后动画链确实又被拉起来了。
     // （修复前 moveVehicle 在隐藏时直接 return、不再排下一帧，动画链永久断掉。）
-    const frameQueue = []
+    const frameQueue: FrameRequestCallback[] = []
     const rafSpy = vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => {
       frameQueue.push(callback)
       return frameQueue.length
     })
 
-    const wrapper = mount(SmartCity, {
-      attachTo: document.body,
-    })
+    const wrapper = mountSmartCity()
     wrapper.vm.createTrafficSystem()
 
     // cesium mock 的 entities.add 会忽略入参，但 mock.calls 记录了传入的 options，
     // 用 name 找到车辆实体对应的返回值（mock.results[i].value）。
-    const addMock = wrapper.vm.viewer.entities.add
+    const addMock = mockViewerOf(wrapper).entities.add
     const vehicleIndex = addMock.mock.calls.findIndex(
       ([options]) => options.name && options.name.startsWith('Vehicle')
     )
     expect(vehicleIndex).toBeGreaterThan(-1)
-    const vehicle = addMock.mock.results[vehicleIndex].value
+    const vehicle = addMock.mock.results[vehicleIndex].value as MockEntity
 
     const stepFrame = () => {
       const callback = frameQueue.shift()
@@ -271,9 +404,7 @@ describe('SmartCity lifecycle', () => {
   it('does not throw when the component unmounts before data loading finishes', async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
 
-    const wrapper = mount(SmartCity, {
-      attachTo: document.body,
-    })
+    const wrapper = mountSmartCity()
     // 立刻卸载：onMounted 的 async 路径还停在 await 上
     wrapper.unmount()
 
@@ -291,8 +422,8 @@ describe('SmartCity lifecycle', () => {
     // 道路分级读的是 highway 标签：实测道路数据里 2260 条全部带 highway，
     // 而 type 一个都没有。修复前读的是 properties.type，
     // 结果所有道路都是同一种浅灰、同样宽度，"主干道"分支从来没被渲染过。
-    const makeEntity = (props) => ({
-      polyline: {},
+    const makeEntity = (props: Record<string, string>): { polyline: MockPolyline; properties: Record<string, { getValue: () => string }> } => ({
+      polyline: { material: { name: '' }, width: 0 },
       properties: Object.fromEntries(
         Object.entries(props).map(([key, value]) => [key, { getValue: () => value }])
       )
@@ -300,18 +431,16 @@ describe('SmartCity lifecycle', () => {
 
     const primary = makeEntity({ highway: 'primary' })
     const footway = makeEntity({ highway: 'footway' })
-    const unknown = makeEntity({ highway: 'motorway_link' }) // 表外的取值
+    const unlisted = makeEntity({ highway: 'motorway_link' }) // 表外的取值
     const primaryWithWideTag = makeEntity({ highway: 'primary', width: '30' })
     const footwayWithWidth = makeEntity({ highway: 'footway', width: '2' })
 
-    const loadMock = Cesium.GeoJsonDataSource.load
+    const loadMock = cesiumStub.GeoJsonDataSource.load
     loadMock.mockResolvedValue({
-      entities: { values: [primary, footway, unknown, primaryWithWideTag, footwayWithWidth] }
+      entities: { values: [primary, footway, unlisted, primaryWithWideTag, footwayWithWidth] }
     })
 
-    const wrapper = mount(SmartCity, {
-      attachTo: document.body,
-    })
+    const wrapper = mountSmartCity()
     // 直接给 composable 的 roads 塞一份空集合，绕开网络请求
     wrapper.vm.roads = { type: 'FeatureCollection', features: [] }
     await wrapper.vm.loadGeoJSONRoads()
@@ -332,16 +461,14 @@ describe('SmartCity lifecycle', () => {
     expect(primaryWithWideTag.polyline.width).toBe(primary.polyline.width)
 
     // 表外的 highway 取值落到兜底等级（最低宽度，但用的是兜底自己的配色）
-    expect(unknown.polyline.width).toBe(footway.polyline.width)
-    expect(unknown.polyline.material.name).not.toBe(footway.polyline.material.name)
+    expect(unlisted.polyline.width).toBe(footway.polyline.width)
+    expect(unlisted.polyline.material.name).not.toBe(footway.polyline.material.name)
 
     wrapper.unmount()
   })
 
   it('shows the OpenStreetMap attribution required by the ODbL', async () => {
-    const wrapper = mount(SmartCity, {
-      attachTo: document.body,
-    })
+    const wrapper = mountSmartCity()
     await flushPromises()
 
     // OSM 数据遵循 ODbL：展示时必须署名 "© OpenStreetMap contributors"
@@ -357,10 +484,10 @@ describe('SmartCity lifecycle', () => {
 // ---------------------------------------------------------------------------
 describe('SmartCity behaviour', () => {
   it('creates traffic entities from Cesium primitives', () => {
-    const wrapper = mount(SmartCity, { attachTo: document.body })
+    const wrapper = mountSmartCity()
     wrapper.vm.createTrafficSystem()
 
-    const descriptors = wrapper.vm.viewer.entities.add.mock.calls.map(([options]) => options)
+    const descriptors = mockViewerOf(wrapper).entities.add.mock.calls.map(([options]) => options)
     expect(descriptors.length).toBeGreaterThan(0)
     // 车辆用 box，交通灯与路灯用 cylinder —— 全部是 Cesium 图元，
     // 不依赖任何 .glb 模型文件。
@@ -378,10 +505,10 @@ describe('SmartCity behaviour', () => {
   })
 
   it('gives every kind of traffic entity the graphic it needs', () => {
-    const wrapper = mount(SmartCity, { attachTo: document.body })
+    const wrapper = mountSmartCity()
     wrapper.vm.createTrafficSystem()
 
-    const descriptors = wrapper.vm.viewer.entities.add.mock.calls.map(([options]) => options)
+    const descriptors = mockViewerOf(wrapper).entities.add.mock.calls.map(([options]) => options)
     const trafficLights = descriptors.filter((d) => d.name === 'Traffic Light')
     const streetLights = descriptors.filter((d) => d.name && d.name.startsWith('Street Light'))
     const vehicles = descriptors.filter((d) => d.name && d.name.startsWith('Vehicle'))
@@ -400,11 +527,11 @@ describe('SmartCity behaviour', () => {
   })
 
   it('hides the traffic entities when traffic is switched off', () => {
-    const wrapper = mount(SmartCity, { attachTo: document.body })
+    const wrapper = mountSmartCity()
     wrapper.vm.createTrafficSystem()
 
-    const addMock = wrapper.vm.viewer.entities.add
-    const firstTrafficEntity = addMock.mock.results[0].value
+    const addMock = mockViewerOf(wrapper).entities.add
+    const firstTrafficEntity = addMock.mock.results[0].value as MockEntity
 
     wrapper.vm.toggleTraffic()
     expect(wrapper.vm.state.trafficVisible).toBe(false)
@@ -418,10 +545,10 @@ describe('SmartCity behaviour', () => {
   })
 
   it('applies the performance options to the viewer scene', async () => {
-    const wrapper = mount(SmartCity, { attachTo: document.body })
+    const wrapper = mountSmartCity()
     // optimizePerformance 在 onMounted 的 await 之后才跑，先把微任务跑完
     await flushPromises()
-    const scene = wrapper.vm.viewer.scene
+    const scene = mockViewerOf(wrapper).scene
 
     // optimizePerformance 在 onMounted 里跑：开光照、加雾、开 FXAA、限帧
     expect(scene.globe.enableLighting).toBe(true)
@@ -435,9 +562,9 @@ describe('SmartCity behaviour', () => {
   })
 
   it('shows an error banner when the city data cannot be loaded', async () => {
-    globalThis.fetch = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'))
+    installFetch(vi.fn<typeof fetch>().mockRejectedValue(new TypeError('Failed to fetch')))
 
-    const wrapper = mount(SmartCity, { attachTo: document.body })
+    const wrapper = mountSmartCity()
 
     await vi.waitFor(() => {
       expect(wrapper.find('.status-error').exists()).toBe(true)
@@ -459,48 +586,48 @@ describe('SmartCity behaviour', () => {
     // baseLayer 不显式设 false → CesiumWidget 走 fromWorldImagery() → 又触发 ion
     expect(options).toMatch(/\bbaseLayer:\s*false\b/)
 
-    const wrapper = mount(SmartCity, { attachTo: document.body })
+    const wrapper = mountSmartCity()
 
     // 运行时证据：整个挂载过程没有碰过 Cesium.Ion
     expect(cesiumMock.ionAccesses).toEqual([])
     expect(cesiumMock.ionImageryProviderCalls).toBe(0)
 
     // 高德底图确实被加进 viewer，且带的是高德 URL 模板
-    const addMock = wrapper.vm.viewer.imageryLayers.add
+    const addMock = mockViewerOf(wrapper).imageryLayers.add
     expect(addMock).toHaveBeenCalledTimes(1)
     const layer = addMock.mock.calls[0][0]
     expect(layer).toBe(cesiumMock.layers.at(-1))
-    expect(layer.imageryProvider).toBeDefined()
-    expect(layer.imageryProvider.url).toContain('is.autonavi.com')
+    expect(layer).toBeDefined()
+    expect((layer as { imageryProvider?: { url?: string } }).imageryProvider?.url).toContain('is.autonavi.com')
 
     wrapper.unmount()
   })
 
   it('loads the building and road GeoJSON into the viewer on mount', async () => {
-    globalThis.fetch = stubApiFetch()
+    installFetch(stubApiFetch())
 
-    const wrapper = mount(SmartCity, { attachTo: document.body })
+    const wrapper = mountSmartCity()
 
     // onMounted 是异步的：等它把两次 GeoJsonDataSource.load 都跑完
     await vi.waitFor(() => {
-      expect(Cesium.GeoJsonDataSource.load).toHaveBeenCalledTimes(2)
+      expect(cesiumStub.GeoJsonDataSource.load).toHaveBeenCalledTimes(2)
     })
     await flushPromises()
 
     // 两个数据源都被挂进 viewer
-    expect(wrapper.vm.viewer.dataSources.add).toHaveBeenCalledTimes(2)
+    expect(mockViewerOf(wrapper).dataSources.add).toHaveBeenCalledTimes(2)
 
     wrapper.unmount()
   })
 
   it('fetches city data through the API layer, not by URL', async () => {
     const fetchMock = stubApiFetch()
-    globalThis.fetch = fetchMock
+    installFetch(fetchMock)
 
-    const wrapper = mount(SmartCity, { attachTo: document.body })
+    const wrapper = mountSmartCity()
 
     await vi.waitFor(() => {
-      expect(Cesium.GeoJsonDataSource.load).toHaveBeenCalledTimes(2)
+      expect(cesiumStub.GeoJsonDataSource.load).toHaveBeenCalledTimes(2)
     })
 
     // 所有请求都打到后端 API 前缀下
@@ -518,7 +645,7 @@ describe('SmartCity behaviour', () => {
     })
 
     // Cesium 拿到的是 API 返回的对象，不是 URL 字符串
-    Cesium.GeoJsonDataSource.load.mock.calls.forEach(([payload]) => {
+    cesiumStub.GeoJsonDataSource.load.mock.calls.forEach(([payload]) => {
       expect(typeof payload).not.toBe('string')
       expect(payload.type).toBe('FeatureCollection')
     })
@@ -527,13 +654,25 @@ describe('SmartCity behaviour', () => {
   })
 
   it('toggles the visibility of the building and road entities it created', async () => {
-    const building = { polygon: {}, properties: {} }
-    const road = { polyline: {}, properties: {} }
-    Cesium.GeoJsonDataSource.load.mockResolvedValue({
+    const building: MockEntity = {
+      position: null,
+      show: true,
+      point: {},
+      polygon: {},
+      polyline: { material: { name: '' }, width: 0 },
+    }
+    const road: MockEntity = {
+      position: null,
+      show: true,
+      point: {},
+      polygon: {},
+      polyline: { material: { name: '' }, width: 0 },
+    }
+    cesiumStub.GeoJsonDataSource.load.mockResolvedValue({
       entities: { values: [building, road] }
     })
 
-    const wrapper = mount(SmartCity, { attachTo: document.body })
+    const wrapper = mountSmartCity()
     wrapper.vm.buildings = { type: 'FeatureCollection', features: [] }
     wrapper.vm.roads = { type: 'FeatureCollection', features: [] }
     await wrapper.vm.loadGeoJSONBuildings()
@@ -560,8 +699,8 @@ describe('SmartCity behaviour', () => {
   })
 
   it('flies between street level and overhead when the view is toggled', () => {
-    const wrapper = mount(SmartCity, { attachTo: document.body })
-    const flyTo = wrapper.vm.viewer.camera.flyTo
+    const wrapper = mountSmartCity()
+    const flyTo = mockViewerOf(wrapper).camera.flyTo
     // 清掉 initCesium 里的初始定位，只看 toggleView 引发的飞行
     flyTo.mockClear()
 
@@ -584,7 +723,7 @@ describe('SmartCity behaviour', () => {
   })
 
   it('drives the toggles from the control-panel buttons', async () => {
-    const wrapper = mount(SmartCity, { attachTo: document.body })
+    const wrapper = mountSmartCity()
     const buttons = wrapper.findAll('.control-panel button')
     expect(buttons).toHaveLength(4)
 
@@ -618,7 +757,7 @@ describe('SmartCity behaviour', () => {
 // 全部是行为断言（mount 组件 → 看渲染结果），不读源码文本。
 // ---------------------------------------------------------------------------
 describe('SmartCity traffic status', () => {
-  const trafficPayload = {
+  const trafficPayload: TrafficStatus = {
     status: 'slow',
     congestion_level: 0.42,
     congestion: '轻微拥堵',
@@ -628,8 +767,8 @@ describe('SmartCity traffic status', () => {
 
   // 只替换交通端点的返回值，其它两个端点照常返回空集合。
   // payload 可以直接给对象，也可以给一个取值的函数——后者用于「后端换了个新读数」。
-  const stubTrafficFetch = (payload) =>
-    vi.fn((url) => {
+  const stubTrafficFetch = (payload: TrafficStatus | (() => TrafficStatus)) =>
+    vi.fn<(url: string, options: RequestInit) => Promise<Response>>((url) => {
       if (String(url).includes('traffic-status')) {
         const body = typeof payload === 'function' ? payload() : payload
         return Promise.resolve(jsonResponse(body))
@@ -639,9 +778,9 @@ describe('SmartCity traffic status', () => {
 
   it('shows the traffic reading on the control panel', async () => {
     const fetchMock = stubTrafficFetch(trafficPayload)
-    globalThis.fetch = fetchMock
+    installFetch(fetchMock)
 
-    const wrapper = mount(SmartCity, { attachTo: document.body })
+    const wrapper = mountSmartCity()
 
     await vi.waitFor(() => {
       expect(wrapper.find('.traffic-status').exists()).toBe(true)
@@ -664,10 +803,10 @@ describe('SmartCity traffic status', () => {
   })
 
   it('updates the reading when the traffic status is fetched again', async () => {
-    let payload = { ...trafficPayload, status: 'normal', congestion: '畅通', flow: 0.2 }
-    globalThis.fetch = stubTrafficFetch(() => payload)
+    let payload: TrafficStatus = { ...trafficPayload, status: 'normal', congestion: '畅通', flow: 0.2 }
+    installFetch(stubTrafficFetch(() => payload))
 
-    const wrapper = mount(SmartCity, { attachTo: document.body })
+    const wrapper = mountSmartCity()
     await vi.waitFor(() => {
       expect(wrapper.find('.traffic-status').exists()).toBe(true)
     })
@@ -693,9 +832,9 @@ describe('SmartCity traffic status', () => {
   })
 
   it('renders no traffic row when the traffic status is unavailable', async () => {
-    globalThis.fetch = stubApiFetch()
+    installFetch(stubApiFetch())
 
-    const wrapper = mount(SmartCity, { attachTo: document.body })
+    const wrapper = mountSmartCity()
     await flushPromises()
 
     // 读数清空后不能留下空壳，也不能显示 undefined / NaN
@@ -711,9 +850,9 @@ describe('SmartCity traffic status', () => {
 
   it('omits missing traffic fields instead of showing undefined or NaN', async () => {
     // 旧响应（或只有 status 的桩）里缺的字段整段略过
-    globalThis.fetch = stubTrafficFetch({ status: 'normal' })
+    installFetch(stubTrafficFetch({ status: 'normal' }))
 
-    const wrapper = mount(SmartCity, { attachTo: document.body })
+    const wrapper = mountSmartCity()
     await vi.waitFor(() => {
       expect(wrapper.find('.traffic-status').exists()).toBe(true)
     })
@@ -730,9 +869,9 @@ describe('SmartCity traffic status', () => {
   it('polls the traffic status every five seconds and stops on unmount', async () => {
     const setSpy = vi.spyOn(globalThis, 'setInterval')
     const clearSpy = vi.spyOn(globalThis, 'clearInterval')
-    globalThis.fetch = stubApiFetch()
+    installFetch(stubApiFetch())
 
-    const wrapper = mount(SmartCity, { attachTo: document.body })
+    const wrapper = mountSmartCity()
     await flushPromises()
 
     // 轮询间隔 5 秒（计划书里的「5 秒级更新」）
