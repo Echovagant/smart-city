@@ -136,6 +136,22 @@ jobs:
           echo "dist/Cesium files: $count"
           if [ "$count" -ne 380 ]; then echo "dist/Cesium 文件数应为 380，实际 $count"; exit 1; fi
 
+      # 浏览器端度量：首屏（LCP / load）+ 3D 渲染帧率。
+      #
+      # 只在 ubuntu job 上跑：GitHub 的 ubuntu runner 预装了 Google Chrome，
+      # windows runner 还得另装一套。
+      #
+      # 跑 1 轮而不是 3 轮，是为了压住 CI 时长——**这里的数字不能和本机的数字
+      # 直接比较**（runner 的 CPU 与网络都不同，headless Chrome 还是软件渲染），
+      # 所以这一步的定位是「证明度量脚本在干净环境里能跑通」，
+      # 权威数字来自本地 `node scripts/measure-browser-performance.mjs`（默认 3 轮）。
+      #
+      # continue-on-error 与下面的验收度量保持一致：先看得见，不变成红灯。
+      - name: 浏览器端度量（报告，不阻塞）
+        continue-on-error: true
+        run: |
+          node scripts/measure-browser-performance.mjs --runs 1 --sample-seconds 2
+
       # 验收度量：覆盖率 + API 延迟 + 产物体积，一次跑完并打印对照验收线的表格。
       #
       # continue-on-error：这一轮是「先看得见」，不是「变成红灯」。

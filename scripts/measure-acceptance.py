@@ -67,6 +67,9 @@ TARGET_BBOX_P95_MS = 200.0
 TARGET_BACKEND_COVERAGE = 90.0
 TARGET_FRONTEND_COVERAGE = 80.0
 TARGET_APP_BUNDLE_MB = 5.0
+# 浏览器端验收线（Plan E5）：首屏 < 3 s、3D 渲染帧率 >= 30 fps
+TARGET_FIRST_SCREEN_MS = 3000.0
+TARGET_FPS = 30.0
 
 # 带 bbox 的测量用例：OSM 抽取范围 116.380,39.905,116.420,39.925 的左上一块。
 # 故意不取整个范围——那等于「全量过滤」，比真实使用场景重得多。
@@ -128,6 +131,15 @@ def _mb(byte_count) -> str:
 
 def _ms(value) -> str:
     return "未提供" if value is None else f"{value:.1f} ms"
+
+
+def _sec(value) -> str:
+    """毫秒 → 秒。首屏时间用秒更贴近「< 3 s」这条验收线的读法。"""
+    return "未提供" if value is None else f"{value / 1000:.2f} s"
+
+
+def _fps(value) -> str:
+    return "未提供" if value is None else f"{value:.1f} fps"
 
 
 # ---------------------------------------------------------------------------
@@ -307,6 +319,23 @@ def read_frontend_coverage(path: Path):
     return statements_covered / statements_total * 100.0, summary, missing
 
 
+def read_browser_metrics(path: Path):
+    """读浏览器端度量产物（scripts/measure-browser-performance.mjs 写的 JSON）。
+
+    产物缺失或坏掉时返回 None——**不猜数字**，对应指标显示「未提供」。
+    产物里有 runs（逐轮原始数据）与 summary（各轮中位数）。
+    """
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    return data
+
+
 def _source_snippet(source_path: Path, line_number: int) -> str:
     """取出某一行的源码文本（拿不到就返回空串）。"""
     try:
@@ -365,6 +394,9 @@ def parse_args(argv):
                         help="前端 vitest istanbul json 报告路径")
     parser.add_argument("--dist-dir", default=None,
                         help="前端构建产物目录（默认 <仓库根>/Data-driven-modeling/dist）")
+    parser.add_argument("--browser-metrics", default=None,
+                        help="浏览器端度量产物 JSON（默认 <artifacts>/browser-performance.json，"
+                             "由 scripts/measure-browser-performance.mjs 产出）")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="测量用的后端端口")
     parser.add_argument("--requests", type=int, default=DEFAULT_REQUESTS,
                         help="每个端点发多少个请求取分位数")
@@ -381,6 +413,8 @@ def parse_args(argv):
         else args.artifacts / "frontend-coverage" / "coverage-final.json"
     args.dist_dir = Path(args.dist_dir).resolve() if args.dist_dir \
         else args.repo_root / "Data-driven-modeling" / "dist"
+    args.browser_metrics = Path(args.browser_metrics).resolve() if args.browser_metrics \
+        else args.artifacts / "browser-performance.json"
     return args
 
 
@@ -576,6 +610,104 @@ def main(argv=None) -> int:
             NOTE,
         ])
 
+    # --- 浏览器端指标（Plan E5）--------------------------------------------
+    # 产物由 scripts/measure-browser-performance.mjs 产出（生产构建 + 独立 headless Chrome）。
+    # 产物缺失时显示「未提供」——不猜数字。
+    browser = read_browser_metrics(args.browser_metrics)
+    if browser is None:
+        for label, target in (
+            ("首屏（LargestContentfulPaint）", "< 3 s"),
+            ("页面 load 事件（loadEventEnd）", "< 3 s"),
+            ("帧率（静止）", ">= 30 fps"),
+            ("帧率（相机运动）", ">= 30 fps"),
+        ):
+            rows.append([label, target, "未提供", "未找到浏览器度量产物"])
+        unmet.append("浏览器端指标：未提供浏览器度量产物"
+                     "（先跑 node scripts/measure-browser-performance.mjs）")
+    else:
+        summary = browser.get("summary") or {}
+
+        def browser_median(key):
+            return (summary.get(key) or {}).get("median")
+
+        lcp_ms = browser_median("lcpMs")
+        load_ms = browser_median("loadEventEndMs")
+        ready_ms = browser_median("appReadyMs")
+        fps_static = browser_median("fpsStatic")
+        fps_motion = browser_median("fpsMotion")
+
+        if lcp_ms is None:
+            rows.append(["首屏（LargestContentfulPaint）", "< 3 s", "未提供", "度量产物缺该项"])
+        else:
+            ok = lcp_ms < TARGET_FIRST_SCREEN_MS
+            rows.append(["首屏（LargestContentfulPaint）", "< 3 s", _sec(lcp_ms),
+                         PASS if ok else FAIL])
+            if not ok:
+                unmet.append(f"首屏 LCP：中位数 {lcp_ms:.0f} ms "
+                             f">= {TARGET_FIRST_SCREEN_MS:.0f} ms")
+
+        if load_ms is None:
+            rows.append(["页面 load 事件（loadEventEnd）", "< 3 s", "未提供", "度量产物缺该项"])
+        else:
+            ok = load_ms < TARGET_FIRST_SCREEN_MS
+            rows.append(["页面 load 事件（loadEventEnd）", "< 3 s", _sec(load_ms),
+                         PASS if ok else FAIL])
+            if not ok:
+                unmet.append(f"load 事件：中位数 {load_ms:.0f} ms "
+                             f">= {TARGET_FIRST_SCREEN_MS:.0f} ms")
+
+        if ready_ms is None:
+            rows.append(["应用就绪（数据到位 → 城市入场景）", "参考（无验收线）", "未提供",
+                         "度量产物缺该项"])
+        else:
+            rows.append(["应用就绪（数据到位 → 城市入场景）", "参考（无验收线）",
+                         _sec(ready_ms), NOTE])
+
+        cold_ms = browser_median("coldStartFirstByteMs")
+        if cold_ms is None:
+            rows.append(["冷启动（全新浏览器首个导航的首字节）", "参考（浏览器开销，不是产品成本）",
+                         "未提供", "度量产物缺该项"])
+        else:
+            rows.append(["冷启动（全新浏览器首个导航的首字节）",
+                         "参考（浏览器开销，不是产品成本）", _sec(cold_ms), NOTE])
+
+        if fps_static is None:
+            rows.append(["帧率（静止）", ">= 30 fps", "未提供", "度量产物缺该项"])
+        else:
+            ok = fps_static >= TARGET_FPS
+            rows.append(["帧率（静止）", ">= 30 fps", _fps(fps_static),
+                         PASS if ok else FAIL])
+            if not ok:
+                unmet.append(f"静止帧率：中位数 {fps_static:.1f} fps < {TARGET_FPS:.0f} fps")
+
+        if fps_motion is None:
+            rows.append(["帧率（相机运动）", ">= 30 fps", "未提供", "度量产物缺该项"])
+        else:
+            ok = fps_motion >= TARGET_FPS
+            rows.append(["帧率（相机运动）", ">= 30 fps", _fps(fps_motion),
+                         PASS if ok else FAIL])
+            if not ok:
+                unmet.append(f"运动帧率：中位数 {fps_motion:.1f} fps < {TARGET_FPS:.0f} fps")
+
+        transfer_bytes = browser_median("transferBytes")
+        decoded_bytes = browser_median("decodedBytes")
+        tile_count = browser_median("externalTileCount")
+        tile_ms = browser_median("externalTileDurationMs")
+        rows.append(["首屏传输量（线上字节，不含高德瓦片）", "参考",
+                     _mb(transfer_bytes) if transfer_bytes is not None else "未提供", NOTE])
+        rows.append(["首屏解码后体积（不含高德瓦片）", "参考",
+                     _mb(decoded_bytes) if decoded_bytes is not None else "未提供", NOTE])
+        if tile_count is not None and tile_ms is not None:
+            rows.append([
+                "高德瓦片（外部网络）",
+                "参考（外部依赖，不是前端成本）",
+                f"{tile_count:.0f} 个 / {tile_ms:.0f} ms",
+                NOTE,
+            ])
+        else:
+            rows.append(["高德瓦片（外部网络）", "参考（外部依赖，不是前端成本）",
+                         "未提供", NOTE])
+
     print(render_table(["指标", "计划书验收线", "实测", "判定"], rows))
     print()
 
@@ -617,6 +749,40 @@ def main(argv=None) -> int:
         print(f"产物拆分：Cesium 运行时 {dist['cesium_files']} 个文件 / "
               f"{_mb(dist['cesium_bytes'])}；"
               f"应用产物 {dist['app_files']} 个文件 / {_mb(dist['app_bytes'])}")
+        print()
+
+    if browser is not None:
+        env = browser.get("environment") or {}
+        runs = browser.get("runs") or []
+        print("浏览器端性能明细（生产构建 + 后端单端口托管 + 独立 headless Chrome）")
+        detail_rows = []
+        for run in runs:
+            external = (run.get("transfer") or {}).get("external") or {}
+            detail_rows.append([
+                str(run.get("run", "")),
+                _sec(run.get("lcpMs")),
+                _sec(run.get("loadEventEndMs")),
+                _sec(run.get("appReadyMs")),
+                _fps(run.get("fpsStatic")),
+                _fps(run.get("fpsMotion")),
+                str(external.get("tileCount", "—")),
+                f"{external.get('tileDurationMs', 0)} ms",
+            ])
+        print(render_table(
+            ["轮", "LCP", "load", "应用就绪", "静止 fps", "运动 fps", "瓦片数", "瓦片耗时"],
+            detail_rows))
+        print()
+        print(f"浏览器：{env.get('chromeVersion') or env.get('chromeBinary') or '未知'}"
+              f"（{'headless' if env.get('headless') else 'headful'}）"
+              f" · 采样 {env.get('runs')} 轮 × {env.get('sampleSeconds')} 秒"
+              f" · 浏览器缓存"
+              f"{'已禁用（每轮都是首次访问）' if env.get('cacheDisabled') else '已启用'}")
+        print("口径  ：首屏 LCP 是浏览器的 Largest Contentful Paint。WebGL 画布不是 LCP 候选元素，")
+        print("        LCP 量到的是页面文字块；「3D 城市画出来」对应的口径是「应用就绪」那一行。")
+        print("        首屏量的是**浏览器已就绪之后**的页面加载；全新 Chrome 的冷启动首字节延迟")
+        print("        单独记在「冷启动」那一行（那是浏览器开销，不是产品成本）。")
+        print("外部网：高德瓦片来自 webrd0{1..4}.is.autonavi.com，等待时间是外部网络成本，")
+        print("        传输量已把它拆开单列——读首屏数字时别把它算到前端头上。")
         print()
 
     if frontend_summary:
