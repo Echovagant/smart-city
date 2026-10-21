@@ -4,7 +4,7 @@
   </div>
 </template>
 
-<script setup>
+<script setup lang="ts">
 import SmartCity from './components/SmartCity.vue'
 </script>
 

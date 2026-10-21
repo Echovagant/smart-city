@@ -10,7 +10,7 @@ import { dirname, resolve } from 'node:path'
 // "public/models/*.glb 根本不存在，一旦有人写了 uri: '/models/x.glb'
 //  Cesium 会在运行时静默加载失败" 这类回归。
 //
-// 其余行为断言一律放在 src/components/__tests__/SmartCity.lifecycle.test.js，
+// 其余行为断言一律放在 src/components/__tests__/SmartCity.lifecycle.test.ts，
 // 那里有唯一的 Cesium mock，直接 mount 组件后断言可观察效果。
 //
 // 路径解析说明：这里不能用 `new URL('../components/SmartCity.vue', import.meta.url)`。
@@ -25,7 +25,7 @@ const componentPath = resolve(
 const source = readFileSync(componentPath, 'utf-8')
 
 describe('SmartCity.vue asset wiring', () => {
-  it('does not reference any .glb asset (primitives only)', () => {
+  it('does not reference .glb assets (primitives only)', () => {
     expect(source).not.toMatch(/uri:\s*['"]\/models\/[^'"]+\.glb['"]/)
   })
 })

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import type { Mock } from 'vitest'
 import { defineComponent, h, isReactive } from 'vue'
 import { mount, flushPromises } from '@vue/test-utils'
 import { useCityData } from '@/composables/useCityData'
@@ -6,8 +7,12 @@ import { ApiError } from '@/api/client'
 
 const originalFetch = globalThis.fetch
 
+/** 本文件里的 fetch 桩。 */
+let fetchMock: Mock<typeof fetch>
+
 beforeEach(() => {
-  globalThis.fetch = vi.fn()
+  fetchMock = vi.fn<typeof fetch>()
+  globalThis.fetch = fetchMock
 })
 
 afterEach(() => {
@@ -17,20 +22,21 @@ afterEach(() => {
 // 挂载一个测试组件来跑 composable（composable 里有 onUnmounted，
 // 必须在组件上下文里注册才生效）。
 // 返回值里带上 wrapper：取消分支需要在请求还在飞的时候把组件卸载掉。
-const withSetup = (composable) => {
-  let result
+const withSetup = <T extends object>(composable: () => T) => {
+  let result: T | undefined
   const wrapper = mount(defineComponent({
     setup() {
       result = composable()
       return () => h('div')
     },
   }))
+  if (!result) throw new Error('composable 没有返回结果')
   return { ...result, wrapper }
 }
 
 describe('useCityData', () => {
   it('loadAll populates refs and clears error on success', async () => {
-    globalThis.fetch
+    fetchMock
       .mockResolvedValueOnce(new Response(JSON.stringify({ type: 'FeatureCollection', features: [] }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ type: 'FeatureCollection', features: [] }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ status: 'normal' }), { status: 200 }))
@@ -45,7 +51,7 @@ describe('useCityData', () => {
   })
 
   it('loadAll sets error on failure', async () => {
-    globalThis.fetch.mockRejectedValue(new TypeError('Failed to fetch'))
+    fetchMock.mockRejectedValue(new TypeError('Failed to fetch'))
     const { buildings, error, loadAll } = withSetup(useCityData)
     await loadAll()
     expect(buildings.value).toBeNull()
@@ -55,7 +61,7 @@ describe('useCityData', () => {
   it('loadAll stores the GeoJSON payload without deep reactivity', async () => {
     // 几 MB 的载荷如果被 Vue 深度响应式包装，遍历代价会高出一个数量级。
     // 载荷是整体替换的，用 shallowRef 即可：模板只需要知道「数据到了」。
-    globalThis.fetch
+    fetchMock
       .mockResolvedValueOnce(new Response(JSON.stringify({ type: 'FeatureCollection', features: [] }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ type: 'FeatureCollection', features: [] }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ status: 'normal' }), { status: 200 }))
@@ -64,14 +70,15 @@ describe('useCityData', () => {
     await loadAll()
 
     expect(buildings.value).not.toBeNull()
-    expect(isReactive(buildings.value)).toBe(false)
-    expect(isReactive(roads.value)).toBe(false)
+    // isReactive 只接受对象；载荷为 null 时用空对象占位——null 本身也不是响应式对象。
+    expect(isReactive(buildings.value ?? {})).toBe(false)
+    expect(isReactive(roads.value ?? {})).toBe(false)
   })
 
   it('loadAll requests the full collections without a bbox by default', async () => {
     // 默认 bbox 与 OSM 提取范围完全一致，过滤是空转；
     // 不带 bbox 直接取完整集合，请求更便宜。
-    globalThis.fetch
+    fetchMock
       .mockResolvedValueOnce(new Response(JSON.stringify({ type: 'FeatureCollection', features: [] }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ type: 'FeatureCollection', features: [] }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ status: 'normal' }), { status: 200 }))
@@ -79,13 +86,13 @@ describe('useCityData', () => {
     const { loadAll } = withSetup(useCityData)
     await loadAll()
 
-    const urls = globalThis.fetch.mock.calls.map(call => call[0])
+    const urls = fetchMock.mock.calls.map(call => call[0])
     expect(urls).toContain('/api/buildings')
     expect(urls).toContain('/api/roads')
   })
 
   it('loadAll still supports an explicit bbox', async () => {
-    globalThis.fetch
+    fetchMock
       .mockResolvedValueOnce(new Response(JSON.stringify({ type: 'FeatureCollection', features: [] }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ type: 'FeatureCollection', features: [] }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ status: 'normal' }), { status: 200 }))
@@ -93,14 +100,14 @@ describe('useCityData', () => {
     const { loadAll } = withSetup(useCityData)
     await loadAll({ bbox: '116.380,39.905,116.420,39.925' })
 
-    const urls = globalThis.fetch.mock.calls.map(call => call[0])
+    const urls = fetchMock.mock.calls.map(call => call[0])
     expect(urls).toContain('/api/buildings?bbox=116.380%2C39.905%2C116.420%2C39.925')
   })
 
   it('does not touch the refs when the component unmounts while the request is in flight', async () => {
     // 请求一直悬着，等组件卸载之后才回来。
-    const resolvers = []
-    globalThis.fetch.mockImplementation(() => new Promise((resolve) => {
+    const resolvers: Array<(response: Response) => void> = []
+    fetchMock.mockImplementation(() => new Promise<Response>((resolve) => {
       resolvers.push(resolve)
     }))
 
@@ -109,7 +116,7 @@ describe('useCityData', () => {
     await flushPromises()
 
     // 三个请求都已经发出去了，但都还没回来
-    expect(globalThis.fetch).toHaveBeenCalledTimes(3)
+    expect(fetchMock).toHaveBeenCalledTimes(3)
     expect(resolvers).toHaveLength(3)
 
     // 组件卸载 → composable 的 onUnmounted 把 cancelled 置为 true

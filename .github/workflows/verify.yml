@@ -58,6 +58,12 @@ jobs:
         working-directory: Data-driven-modeling
         run: npm run lint
 
+      # 类型检查是**门禁**：类型错误不会让 npm run build 失败
+      # （Vite 用 esbuild 转译，不查类型），所以必须是独立且阻塞的一步。
+      - name: 前端类型检查
+        working-directory: Data-driven-modeling
+        run: npm run typecheck
+
       - name: 前端构建
         working-directory: Data-driven-modeling
         run: npm run build
@@ -124,6 +130,12 @@ jobs:
       - name: 前端 lint
         working-directory: Data-driven-modeling
         run: npm run lint
+
+      # 类型检查是**门禁**：类型错误不会让 npm run build 失败
+      # （Vite 用 esbuild 转译，不查类型），所以必须是独立且阻塞的一步。
+      - name: 前端类型检查
+        working-directory: Data-driven-modeling
+        run: npm run typecheck
 
       - name: 前端构建
         working-directory: Data-driven-modeling
