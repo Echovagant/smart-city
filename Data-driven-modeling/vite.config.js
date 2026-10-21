@@ -87,7 +87,7 @@ export default defineConfig(({ mode }) => ({
       // all: true 让「没有被任何测试碰过」的文件也计入分母，
       // 否则覆盖率只反映被测文件、看不到真正的缺口。
       all: true,
-      include: ['src/**/*.{js,vue}'],
+      include: ['src/**/*.{js,ts,vue}'],
       exclude: ['src/**/__tests__/**', 'src/**/*.test.{js,ts}'],
       reporter: ['text', 'json', 'html'],
       // 覆盖率生成物默认落在 Data-driven-modeling/coverage/（已 gitignore）；
