@@ -69,6 +69,30 @@ jobs:
           Write-Host "dist/Cesium files: $count"
           if ($count -ne 380) { throw "dist/Cesium 文件数应为 380，实际 $count" }
 
+      # 验收度量：覆盖率 + API 延迟 + 产物体积，一次跑完并打印对照验收线的表格。
+      #
+      # continue-on-error：这一轮是「先看得见」，不是「变成红灯」。
+      # 度量脚本本身恒定返回 0（未达标的项在输出里逐条列出），
+      # 这里再兜一层底，是为了让覆盖率工具万一在某个平台上炸掉时也不阻塞 CI。
+      - name: 验收度量（报告，不阻塞）
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $root = $PWD.Path
+          New-Item -ItemType Directory -Force -Path "$root\.acceptance" | Out-Null
+          $env:COVERAGE_FILE = "$root\.acceptance\.coverage-backend"
+          $backendJson = "$root\.acceptance\backend-coverage.json"
+          $backendHtml = "$root\.acceptance\backend-htmlcov"
+          Push-Location backend-python
+          .\.venv\Scripts\python.exe -m pytest -q --cov=main --cov=data_processor --cov-report=term-missing --cov-report="json:$backendJson" --cov-report="html:$backendHtml"
+          Pop-Location
+          Push-Location Data-driven-modeling
+          $env:COVERAGE_DIR = "$root\.acceptance\frontend-coverage"
+          npm run test:coverage
+          Pop-Location
+          & "$root\backend-python\.venv\Scripts\python.exe" "$root\scripts\measure-acceptance.py"
+
   ubuntu:
     name: verify (ubuntu)
     runs-on: ubuntu-latest
@@ -111,3 +135,19 @@ jobs:
           count=$(find dist/Cesium -type f | wc -l)
           echo "dist/Cesium files: $count"
           if [ "$count" -ne 380 ]; then echo "dist/Cesium 文件数应为 380，实际 $count"; exit 1; fi
+
+      # 验收度量：覆盖率 + API 延迟 + 产物体积，一次跑完并打印对照验收线的表格。
+      #
+      # continue-on-error：这一轮是「先看得见」，不是「变成红灯」。
+      # 度量脚本本身恒定返回 0（未达标的项在输出里逐条列出），
+      # 这里再兜一层底，是为了让覆盖率工具万一在某个平台上炸掉时也不阻塞 CI。
+      - name: 验收度量（报告，不阻塞）
+        continue-on-error: true
+        run: |
+          set -u
+          ROOT="$PWD"
+          mkdir -p .acceptance
+          export COVERAGE_FILE="$ROOT/.acceptance/.coverage-backend"
+          ( cd backend-python && .venv/bin/python -m pytest -q --cov=main --cov=data_processor --cov-report=term-missing --cov-report="json:$ROOT/.acceptance/backend-coverage.json" --cov-report="html:$ROOT/.acceptance/backend-htmlcov" )
+          ( cd Data-driven-modeling && COVERAGE_DIR="$ROOT/.acceptance/frontend-coverage" npm run test:coverage )
+          backend-python/.venv/bin/python scripts/measure-acceptance.py
