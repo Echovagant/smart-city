@@ -11,6 +11,10 @@
         数据加载失败：{{ error.message }}<span v-if="error.status">（状态码 {{ error.status }}）</span>
       </div>
 
+      <!-- 实时交通读数：后端按时间推导的交通状态。
+           没有数据时不渲染这一行，绝不显示 undefined / NaN。 -->
+      <div v-if="trafficSummary" class="traffic-status">{{ trafficSummary }}</div>
+
       <!-- OSM 数据遵循 ODbL：展示这份数据必须署名。删掉这一行等于违反许可证。 -->
       <div class="attribution">数据 © OpenStreetMap contributors</div>
 
@@ -31,7 +35,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted, reactive, markRaw } from 'vue'
+import { ref, computed, onMounted, onUnmounted, reactive, markRaw } from 'vue'
 import * as Cesium from 'cesium'
 import 'cesium/Build/Cesium/Widgets/widgets.css'
 import { useCityData } from '@/composables/useCityData'
@@ -187,7 +191,83 @@ function resolveBuildingHeight(properties, fallback) {
 
 // 城市数据来源（通过 useCityData composable 从后端 /api/* 拉取 GeoJSON）
 // error / loading 必须一起取出来，否则后端挂了界面上一片空白、毫无提示
-const { buildings, roads, loadAll, error, loading } = useCityData()
+// trafficStatus 同样要取：它此前请求了却被丢弃，界面上看不到任何实时读数
+const { buildings, roads, trafficStatus, refreshTrafficStatus, loadAll, error, loading } = useCityData()
+
+// 把任意取值转成有限数字；null / undefined / 空串 / 非数字一律返回 null。
+function toFiniteNumber(value) {
+  if (value === null || value === undefined || value === '') return null
+  const num = Number(value)
+  return Number.isFinite(num) ? num : null
+}
+
+// 0..1 的指数 → 百分比文本；拿不到就返回 null（整段略过）。
+function formatRatio(value) {
+  const num = toFiniteNumber(value)
+  if (num === null) return null
+  return `${Math.round(num * 100)}%`
+}
+
+// 拥堵描述：优先用后端给的中文标签；没有标签时按拥堵指数自己分档。
+function formatCongestion(label, level) {
+  if (typeof label === 'string' && label.trim()) return label.trim()
+  const num = toFiniteNumber(level)
+  if (num === null) return null
+  if (num < 0.25) return '畅通'
+  if (num < 0.5) return '轻微拥堵'
+  if (num < 0.75) return '拥堵'
+  return '严重拥堵'
+}
+
+// ISO8601 时间戳 → 本地 HH:MM:SS；解析不了就返回 null（整段略过）。
+// 自己拼时间串而不用 toLocaleTimeString：后者受运行环境的 ICU 数据影响，
+// 输出格式不保证一致。
+function formatClock(value) {
+  if (typeof value !== 'string' || !value.trim()) return null
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return null
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${pad(parsed.getHours())}:${pad(parsed.getMinutes())}:${pad(parsed.getSeconds())}`
+}
+
+// 交通状态摘要：把后端返回的小对象整理成一行可读文本。
+// 任何一项字段缺失都整段略过，绝不把 undefined / NaN 显示到界面上。
+const trafficSummary = computed(() => {
+  const status = trafficStatus.value
+  if (!status || typeof status !== 'object') return null
+
+  const segments = ['实时交通']
+  const flow = formatRatio(status.flow)
+  if (flow) segments.push(`流量 ${flow}`)
+  const congestion = formatCongestion(status.congestion, status.congestion_level)
+  if (congestion) segments.push(congestion)
+  const clock = formatClock(status.update_time)
+  if (clock) segments.push(`更新于 ${clock}`)
+  return segments.join(' · ')
+})
+
+// 交通状态轮询间隔（毫秒）。计划书里的实时性主张是「5 秒级更新」；
+// 这个端点不带 API key，前端可以直接轮询。
+const TRAFFIC_POLL_INTERVAL_MS = 5000
+
+let trafficTimer = null
+
+// 挂上轮询：交通读数每 5 秒刷新一次。
+// 与 3D 渲染无关，Cesium 初始化失败时读数照样在动。
+const startTrafficPolling = () => {
+  stopTrafficPolling()
+  // refreshTrafficStatus 内部已经吞掉了所有失败，不会产生未处理的 rejection。
+  trafficTimer = setInterval(() => {
+    refreshTrafficStatus()
+  }, TRAFFIC_POLL_INTERVAL_MS)
+}
+
+// 停掉轮询：组件卸载后不再发请求，也不再往已卸载的组件里写数据。
+const stopTrafficPolling = () => {
+  if (trafficTimer === null) return
+  clearInterval(trafficTimer)
+  trafficTimer = null
+}
 
 // 高德 UrlTemplateImageryProvider —— 构造失败由 try/catch 包住，
 // 但即使失败也要继续（地球没底图也能看到星空，至少能验证 Viewer 起来了）。
@@ -596,6 +676,9 @@ const toggleView = () => {
 
 // 生命周期钩子
 onMounted(async () => {
+  // 交通状态与 Cesium 无关：先把轮询挂上，
+  // 即使 3D 初始化失败，控制面板上的实时读数也还在动。
+  startTrafficPolling()
   try {
     await initCesium()
     if (!viewer.value) return
@@ -615,6 +698,7 @@ onMounted(async () => {
 onUnmounted(() => {
   isMounted = false
   cancelAllAnimations()
+  stopTrafficPolling()
   if (viewer.value) {
     viewer.value.destroy()
     viewer.value = null
@@ -662,7 +746,8 @@ onUnmounted(() => {
 
 /* 数据加载状态提示：与控制面板同一套深色半透明观感 */
 .status-hint,
-.status-error {
+.status-error,
+.traffic-status {
   margin-bottom: 8px;
   padding: 6px 8px;
   border-radius: 4px;
@@ -678,6 +763,11 @@ onUnmounted(() => {
 
 .status-error {
   color: #ff6b6b;
+}
+
+/* 实时交通读数：与加载/错误提示同一套观感，只是换个颜色区分 */
+.traffic-status {
+  color: #7ed321;
 }
 
 /* OSM 署名：ODbL 要求，不可删除 */

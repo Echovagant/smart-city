@@ -40,9 +40,22 @@ export function useCityData() {
     }
   }
 
+  // 只刷新交通状态这一个端点。
+  // 它不参与 3D 渲染，单独取：轮询失败时保留上一次的读数，
+  // 不动 buildings / roads，也不把「数据加载失败」横幅拉起来。
+  const refreshTrafficStatus = async () => {
+    try {
+      const t = await apiGet('/api/traffic-status')
+      if (cancelled.value) return
+      trafficStatus.value = t
+    } catch {
+      // 轮询失败保持上一次的读数即可，不必打扰用户。
+    }
+  }
+
   onUnmounted(() => {
     cancelled.value = true
   })
 
-  return { buildings, roads, trafficStatus, loading, error, loadAll }
+  return { buildings, roads, trafficStatus, refreshTrafficStatus, loading, error, loadAll }
 }

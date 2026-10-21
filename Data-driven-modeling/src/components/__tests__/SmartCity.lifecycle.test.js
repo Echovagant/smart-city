@@ -1,5 +1,6 @@
 import { mount, flushPromises } from '@vue/test-utils'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { nextTick } from 'vue'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
@@ -609,5 +610,139 @@ describe('SmartCity behaviour', () => {
     expect(buttons[3].text()).toBe('切换鸟瞰')
 
     wrapper.unmount()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 实时交通读数：后端按时间推导 /api/traffic-status，前端把它显示在控制面板上。
+// 全部是行为断言（mount 组件 → 看渲染结果），不读源码文本。
+// ---------------------------------------------------------------------------
+describe('SmartCity traffic status', () => {
+  const trafficPayload = {
+    status: 'slow',
+    congestion_level: 0.42,
+    congestion: '轻微拥堵',
+    flow: 0.63,
+    update_time: '2026-10-21T04:52:31.123Z',
+  }
+
+  // 只替换交通端点的返回值，其它两个端点照常返回空集合。
+  // payload 可以直接给对象，也可以给一个取值的函数——后者用于「后端换了个新读数」。
+  const stubTrafficFetch = (payload) =>
+    vi.fn((url) => {
+      if (String(url).includes('traffic-status')) {
+        const body = typeof payload === 'function' ? payload() : payload
+        return Promise.resolve(jsonResponse(body))
+      }
+      return Promise.resolve(jsonResponse({ type: 'FeatureCollection', features: [] }))
+    })
+
+  it('shows the traffic reading on the control panel', async () => {
+    const fetchMock = stubTrafficFetch(trafficPayload)
+    globalThis.fetch = fetchMock
+
+    const wrapper = mount(SmartCity, { attachTo: document.body })
+
+    await vi.waitFor(() => {
+      expect(wrapper.find('.traffic-status').exists()).toBe(true)
+    })
+
+    const text = wrapper.find('.traffic-status').text()
+    expect(text).toContain('实时交通')
+    expect(text).toContain('63%') // flow 0.63 → 63%
+    expect(text).toContain('轻微拥堵')
+    expect(text).toMatch(/更新于 \d{2}:\d{2}:\d{2}/)
+    // 界面上不能出现 undefined / NaN
+    expect(text).not.toContain('undefined')
+    expect(text).not.toContain('NaN')
+
+    // 读数来自 API 层，不是组件里写死的
+    const urls = fetchMock.mock.calls.map(([url]) => url)
+    expect(urls).toContain('/api/traffic-status')
+
+    wrapper.unmount()
+  })
+
+  it('updates the reading when the traffic status is fetched again', async () => {
+    let payload = { ...trafficPayload, status: 'normal', congestion: '畅通', flow: 0.2 }
+    globalThis.fetch = stubTrafficFetch(() => payload)
+
+    const wrapper = mount(SmartCity, { attachTo: document.body })
+    await vi.waitFor(() => {
+      expect(wrapper.find('.traffic-status').exists()).toBe(true)
+    })
+    expect(wrapper.find('.traffic-status').text()).toContain('畅通')
+
+    // 后端给了新读数：面板上的数字必须跟着变
+    payload = {
+      status: 'congested',
+      congestion_level: 0.9,
+      congestion: '严重拥堵',
+      flow: 0.95,
+      update_time: '2026-10-21T04:57:36.123Z',
+    }
+    await wrapper.vm.refreshTrafficStatus()
+    await nextTick()
+
+    const text = wrapper.find('.traffic-status').text()
+    expect(text).toContain('严重拥堵')
+    expect(text).toContain('95%')
+    expect(text).not.toContain('畅通')
+
+    wrapper.unmount()
+  })
+
+  it('renders no traffic row when the traffic status is unavailable', async () => {
+    globalThis.fetch = stubApiFetch()
+
+    const wrapper = mount(SmartCity, { attachTo: document.body })
+    await flushPromises()
+
+    // 读数清空后不能留下空壳，也不能显示 undefined / NaN
+    wrapper.vm.trafficStatus = null
+    await nextTick()
+
+    expect(wrapper.find('.traffic-status').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('undefined')
+    expect(wrapper.text()).not.toContain('NaN')
+
+    wrapper.unmount()
+  })
+
+  it('omits missing traffic fields instead of showing undefined or NaN', async () => {
+    // 旧响应（或只有 status 的桩）里缺的字段整段略过
+    globalThis.fetch = stubTrafficFetch({ status: 'normal' })
+
+    const wrapper = mount(SmartCity, { attachTo: document.body })
+    await vi.waitFor(() => {
+      expect(wrapper.find('.traffic-status').exists()).toBe(true)
+    })
+
+    const text = wrapper.find('.traffic-status').text()
+    expect(text).toContain('实时交通')
+    expect(text).not.toContain('undefined')
+    expect(text).not.toContain('NaN')
+    expect(text).not.toContain('%')
+
+    wrapper.unmount()
+  })
+
+  it('polls the traffic status every five seconds and stops on unmount', async () => {
+    const setSpy = vi.spyOn(globalThis, 'setInterval')
+    const clearSpy = vi.spyOn(globalThis, 'clearInterval')
+    globalThis.fetch = stubApiFetch()
+
+    const wrapper = mount(SmartCity, { attachTo: document.body })
+    await flushPromises()
+
+    // 轮询间隔 5 秒（计划书里的「5 秒级更新」）
+    expect(setSpy.mock.calls.some(([, delay]) => delay === 5000)).toBe(true)
+
+    wrapper.unmount()
+    // 组件卸载后必须停掉轮询，否则会一直往后端打请求
+    expect(clearSpy).toHaveBeenCalled()
+
+    setSpy.mockRestore()
+    clearSpy.mockRestore()
   })
 })
