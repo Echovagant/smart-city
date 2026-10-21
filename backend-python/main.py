@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
+from starlette.datastructures import MutableHeaders
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
@@ -35,6 +36,20 @@ BBOX_DETAIL = "bbox 必须是 4 个逗号分隔的数字：min_lon,min_lat,max_l
 # minimum_size 让 /health 这类小响应保持不压缩（压几百字节只会更大）。
 GZIP_MINIMUM_SIZE = 1000
 GZIP_COMPRESSLEVEL = 9
+
+# 安全响应头。集中在这里，方便按部署形态统一调整或整体关掉。
+#
+# X-Content-Type-Options: nosniff —— 告诉浏览器不要猜响应的 MIME 类型。
+#   本服务把 GeoJSON 以 application/json 返回，若被诱导按别的类型解释会有 MIME 混淆风险。
+# Referrer-Policy —— 页面里的高德瓦片请求会把 Referer 带给第三方，收紧它。
+# X-Frame-Options —— 阻止被 iframe 嵌套（点击劫持）。
+#
+# 这三个头都没有副作用：不改变响应体、content-type 与 content-length。
+SECURITY_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "X-Frame-Options": "SAMEORIGIN",
+}
 
 # 配置管理
 class Settings(BaseSettings):
@@ -132,6 +147,45 @@ def _allowed_hosts(raw: str) -> List[str]:
     return [host.strip() for host in raw.split(",") if host.strip()]
 
 
+def _security_headers() -> Dict[str, str]:
+    """当前要附加到响应上的安全头。
+
+    三个基础头固定带上；CSP 只在开关打开时以 report-only 形式附加。
+    任何时候都不加强制头 Content-Security-Policy——强制策略要先把
+    Cesium 实际需要什么观测清楚，否则会让 worker 加载失败、地图一片空白。
+    """
+    return dict(SECURITY_HEADERS)
+
+
+class SecurityHeadersMiddleware:
+    """给每个响应补上安全响应头（纯 ASGI 中间件）。
+
+    刻意不用 BaseHTTPMiddleware——它会把响应体包成流，改变字节层面的行为，
+    而「两次请求响应体逐字节相同」正是全量响应缓存成立的前提。
+    这里只在 http.response.start 消息上追加响应头，响应体一个字节都不碰。
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        # lifespan 等非 http 的 scope 原样放行。
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_security_headers(message):
+            if message["type"] == "http.response.start":
+                # MutableHeaders 直接改的是这条消息上的 header 列表，
+                # 不碰 content-type / content-length，也不碰响应体。
+                headers = MutableHeaders(scope=message)
+                for name, value in _security_headers().items():
+                    headers[name] = value
+            await send(message)
+
+        await self.app(scope, receive, send_with_security_headers)
+
+
 # 创建FastAPI应用
 _openapi_url, _docs_url, _redoc_url = _document_urls(settings.expose_docs)
 app = FastAPI(
@@ -167,6 +221,12 @@ app.add_middleware(
     minimum_size=GZIP_MINIMUM_SIZE,
     compresslevel=GZIP_COMPRESSLEVEL,
 )
+
+# 安全响应头：每个响应都补上 X-Content-Type-Options / Referrer-Policy / X-Frame-Options。
+# 放在 GZipMiddleware 之后注册——add_middleware 是「后注册的在最外层」，
+# 于是这里看到的是已经压缩完的最终响应，加头不会碰到响应体。
+# 必须在 app 启动前添加（与 GZipMiddleware 同样的约束）。
+app.add_middleware(SecurityHeadersMiddleware)
 
 # 确保数据目录存在
 os.makedirs(DATA_DIR, exist_ok=True)
