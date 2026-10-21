@@ -749,6 +749,10 @@ const initCesium = async () => {
   viewer.value = new Cesium.Viewer(cesiumContainer.value, {
     timeline: false,
     animation: false,
+    homeButton: false,        // 浅色圆角按钮跟深色大屏不搭（计划书要求深色底座）
+    sceneModePicker: false,   // 同上：2D/3D 切换在这里用不到
+    navigationHelpButton: false,
+    navigationInstructionsInitiallyVisible: false, // 同上：说明板跟深色大屏不搭
     baseLayerPicker: false, // 禁用底图切换 UI（避免 ion 401）
     geocoder: false,        // 禁用地理编码 UI（避免 ion 401）
     infoBox: false,         // 禁用信息框（消除 about:blank sandboxed iframe 警告）

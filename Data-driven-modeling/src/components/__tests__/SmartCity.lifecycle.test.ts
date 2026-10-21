@@ -208,13 +208,30 @@ interface MockViewer {
   destroy: Mock<() => void>
   camera: {
     flyTo: Mock<(options: { destination: { z: number }; orientation: { pitch: number } }) => void>
-    setView: Mock<(options: unknown) => void>
+    setView: Mock<
+      (options: {
+        destination: { x: number; y: number; z: number }
+        orientation: { heading: number; pitch: number; roll: number }
+      }) => void
+    >
+    /** 自转恢复时用它反算轨道状态（经度/纬度是**弧度**）。 */
+    positionCartographic: { longitude: number; latitude: number; height: number }
   }
   scene: {
     globe: { enableLighting: boolean; baseColor: unknown }
     fog: { density: number; near: number; far: number }
     postProcessStages: { fxaa: { enabled: boolean } }
     maximumFrameRate: number
+    /** 自转挂在 preRender 上；测试要能把它注册的监听器取出来触发。 */
+    preRender: {
+      addEventListener: Mock<(listener: () => void) => void>
+      removeEventListener: Mock<(listener: () => void) => void>
+    }
+    /** 批量描边 / 网格 / 流动光效都是 Primitive；测试要能检查它们。 */
+    primitives: {
+      add: Mock<(primitive: MockPrimitive) => void>
+      remove: Mock<(primitive: unknown) => void>
+    }
   }
   entities: {
     add: Mock<(descriptor: EntityDescriptor) => MockEntity>
@@ -226,6 +243,26 @@ interface MockViewer {
     add: Mock<(layer: unknown) => void>
     get: Mock<(index: number) => unknown>
     length: number
+  }
+}
+
+/** 桩里的 Primitive（批量描边 / 网格 / 流动光效共用）。 */
+interface MockPrimitive {
+  show: boolean
+  geometryInstances: Array<{
+    geometry: {
+      positions: Array<{ x: number; y: number; z: number }>
+      width?: number
+    }
+  }>
+  appearance: {
+    material: {
+      type: string
+      uniforms: {
+        color: { name?: string; alpha?: number }
+        dashLength?: number
+      }
+    }
   }
 }
 
@@ -650,6 +687,17 @@ describe('SmartCity behaviour', () => {
     wrapper.unmount()
   })
 
+  it('disables the Cesium default widgets that clash with the dark board', () => {
+    // 深色大屏上，Cesium 默认的浅色圆角按钮（home / 地球 / ?）与 NavigationHelp
+    // 说明板是破功的：纯黑背景上尤其扎眼。全部关掉。
+    const options = extractViewerOptions(componentSource)
+    expect(options).not.toBeNull()
+    expect(options).toMatch(/\bhomeButton:\s*false\b/)
+    expect(options).toMatch(/\bsceneModePicker:\s*false\b/)
+    expect(options).toMatch(/\bnavigationHelpButton:\s*false\b/)
+    expect(options).toMatch(/\bnavigationInstructionsInitiallyVisible:\s*false\b/)
+  })
+
   it('loads the building and road GeoJSON into the viewer on mount', async () => {
     installFetch(stubApiFetch())
 
@@ -930,5 +978,263 @@ describe('SmartCity traffic status', () => {
 
     setSpy.mockRestore()
     clearSpy.mockRestore()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 深色底座：相机自转、数字底座网格、流动光效层、广场材质
+//
+// 这些是 Plan S0 新加的行为，全部用**行为断言**（触发真实回调 → 看可观察效果），
+// 不读源码文本。
+// ---------------------------------------------------------------------------
+describe('深色底座', () => {
+  /** 取组件挂在 scene.preRender 上的自转监听器。 */
+  const preRenderListenerOf = (wrapper: VueWrapper<SmartCityVm>): (() => void) => {
+    const scene = mockViewerOf(wrapper).scene
+    const calls = scene.preRender.addEventListener.mock.calls
+    expect(calls.length).toBeGreaterThan(0)
+    return calls[0][0]
+  }
+
+  /** 取交互监听器注册的所有回调（触发任意一个都算「用户操作了」）。 */
+  const interactionActionsOf = (): Array<() => void> => {
+    const handler = (
+      Cesium as unknown as {
+        ScreenSpaceEventHandler: Mock<
+          () => { setInputAction: Mock<(action: () => void) => void> }
+        >
+      }
+    ).ScreenSpaceEventHandler.mock.results[0].value
+    return handler.setInputAction.mock.calls.map((call: unknown[]) => call[0] as () => void)
+  }
+
+  /** 城心坐标（弧度），与组件里的 cityConfig.center 一致。 */
+  const CENTER_LNG = 116.3976
+  const CENTER_LAT = 39.9055
+
+  /** 一条主干的原始 GeoJSON 要素（1~2 级 → 会叠流动光效）。 */
+  const primaryRoadFeature = {
+    type: 'Feature',
+    geometry: {
+      type: 'LineString',
+      coordinates: [
+        [116.39, 39.9],
+        [116.42, 39.9]
+      ]
+    },
+    properties: { highway: 'primary' }
+  }
+
+  /** 一栋楼的原始 GeoJSON 要素（多边形，用来定网格范围）。 */
+  const buildingFeature = {
+    type: 'Feature',
+    geometry: {
+      type: 'Polygon',
+      coordinates: [
+        [
+          [116.39, 39.9],
+          [116.395, 39.9],
+          [116.395, 39.905],
+          [116.39, 39.905],
+          [116.39, 39.9]
+        ]
+      ]
+    },
+    properties: { building: 'yes' }
+  }
+
+  /** 返回带真实要素的 API 桩（让组件能算出网格范围与流动光效层）。 */
+  const stubFetchWithCity = () =>
+    vi.fn<(url: string, options: RequestInit) => Promise<Response>>((url) => {
+      const target = String(url)
+      const body = target.includes('traffic-status')
+        ? { status: 'normal' }
+        : target.includes('buildings')
+          ? { type: 'FeatureCollection', features: [buildingFeature] }
+          : { type: 'FeatureCollection', features: [primaryRoadFeature] }
+      return Promise.resolve(jsonResponse(body))
+    })
+
+  it('空闲时自转把鸟瞰视角落到相机上', async () => {
+    const wrapper = mountSmartCity()
+    await flushPromises()
+
+    // 时间推到「相机飞行结束」之后，否则自转会让位给飞行
+    // （基准取真实时间 + 10 s，保证一定晚于飞行保护期）
+    const base = performance.now()
+    const nowSpy = vi.spyOn(performance, 'now').mockReturnValue(base + 10_000)
+    const setView = mockViewerOf(wrapper).camera.setView
+    setView.mockClear()
+
+    preRenderListenerOf(wrapper)()
+
+    expect(setView).toHaveBeenCalled()
+    const view = setView.mock.calls[0][0]
+    // 俯视：pitch 为负、roll 为 0
+    expect(view.orientation.pitch).toBeLessThan(0)
+    expect(view.orientation.roll).toBe(0)
+    // 相机在城心正上方（高度 1500 m 那一档）
+    expect(view.destination.z).toBeGreaterThan(0)
+
+    nowSpy.mockRestore()
+    wrapper.unmount()
+  })
+
+  it('鼠标一操作就停自转，超过 4 秒才恢复', async () => {
+    const wrapper = mountSmartCity()
+    await flushPromises()
+
+    const base = performance.now()
+    const nowSpy = vi.spyOn(performance, 'now').mockReturnValue(base + 10_000)
+    const setView = mockViewerOf(wrapper).camera.setView
+    setView.mockClear()
+    const listener = preRenderListenerOf(wrapper)
+
+    // 触发一次交互（按下/拖拽/滚轮都算）
+    const actions = interactionActionsOf()
+    expect(actions.length).toBeGreaterThan(0)
+    actions.forEach((action) => action())
+
+    listener()
+    expect(setView).not.toHaveBeenCalled()
+
+    // 还不到 4 秒：仍然不动
+    nowSpy.mockReturnValue(base + 13_000)
+    listener()
+    expect(setView).not.toHaveBeenCalled()
+
+    // 超过 4 秒：恢复自转
+    nowSpy.mockReturnValue(base + 14_001)
+    listener()
+    expect(setView).toHaveBeenCalled()
+
+    nowSpy.mockRestore()
+    wrapper.unmount()
+  })
+
+  it('恢复自转时从相机当前位置反算轨道，不硬拽回轨道起点', async () => {
+    const wrapper = mountSmartCity()
+    await flushPromises()
+
+    // 把相机放到城心以东 0.01° 处（用户拖过去了）
+    const viewer = mockViewerOf(wrapper)
+    viewer.camera.positionCartographic = {
+      longitude: ((CENTER_LNG + 0.01) * Math.PI) / 180,
+      latitude: (CENTER_LAT * Math.PI) / 180,
+      height: 1500
+    }
+
+    const base = performance.now()
+    const nowSpy = vi.spyOn(performance, 'now').mockReturnValue(base + 10_000)
+    const setView = viewer.camera.setView
+    setView.mockClear()
+    const listener = preRenderListenerOf(wrapper)
+
+    interactionActionsOf().forEach((action) => action())
+    nowSpy.mockReturnValue(base + 15_000)
+    listener()
+
+    expect(setView).toHaveBeenCalled()
+    const destination = setView.mock.calls[0][0].destination
+    // 恢复后的相机仍然在城心以东（= 接着用户停下的地方转），而不是被拽回正北
+    expect(destination.x).toBeGreaterThan(CENTER_LNG)
+
+    nowSpy.mockRestore()
+    wrapper.unmount()
+  })
+
+  it('平视（1.7m）不自转', async () => {
+    const wrapper = mountSmartCity()
+    await flushPromises()
+
+    wrapper.vm.toggleView()
+    expect(wrapper.vm.state.viewMode).toBe('street')
+
+    const base = performance.now()
+    const nowSpy = vi.spyOn(performance, 'now').mockReturnValue(base + 10_000)
+    const setView = mockViewerOf(wrapper).camera.setView
+    setView.mockClear()
+
+    preRenderListenerOf(wrapper)()
+    expect(setView).not.toHaveBeenCalled()
+
+    nowSpy.mockRestore()
+    wrapper.unmount()
+  })
+
+  it('在数据范围上铺出 200 米间距的发光网格', async () => {
+    installFetch(stubFetchWithCity())
+
+    const wrapper = mountSmartCity()
+    await vi.waitFor(() => {
+      expect(mockViewerOf(wrapper).scene.primitives.add).toHaveBeenCalled()
+    })
+
+    const added = mockViewerOf(wrapper).scene.primitives.add.mock.calls.map(([p]) => p)
+    // 网格是那条 alpha 0.15 的 PolylineGlow（建筑描边是主强调蓝、alpha 1）
+    const grid = added.find(
+      (p) => p.appearance?.material?.uniforms?.color?.name === '#3b82f6'
+    )
+    expect(grid).toBeDefined()
+
+    const instances = grid!.geometryInstances
+    expect(instances.length).toBeGreaterThan(5)
+
+    // 竖线（两端 x 相同）之间的间距 ≈ 200 米
+    const verticals = instances.filter(
+      (instance) => instance.geometry.positions[0].x === instance.geometry.positions[1].x
+    )
+    expect(verticals.length).toBeGreaterThan(1)
+    const xs = verticals.map((instance) => instance.geometry.positions[0].x).sort((a, b) => a - b)
+    const spacingMeters =
+      (xs[1] - xs[0]) * 111320 * Math.cos((CENTER_LAT * Math.PI) / 180)
+    expect(Math.abs(spacingMeters - 200)).toBeLessThan(5)
+
+    // 网格要盖住数据范围（116.39 ~ 116.42）
+    expect(Math.min(...xs)).toBeGreaterThanOrEqual(116.389)
+    expect(Math.max(...xs)).toBeLessThanOrEqual(116.421)
+
+    wrapper.unmount()
+  })
+
+  it('1~2 级道路额外叠一层流动虚线', async () => {
+    installFetch(stubFetchWithCity())
+
+    const wrapper = mountSmartCity()
+    await vi.waitFor(() => {
+      expect(mockViewerOf(wrapper).scene.primitives.add).toHaveBeenCalled()
+    })
+
+    const added = mockViewerOf(wrapper).scene.primitives.add.mock.calls.map(([p]) => p)
+    const flow = added.find((p) => p.appearance?.material?.type === 'PolylineDash')
+    expect(flow).toBeDefined()
+    expect(flow!.appearance.material.uniforms.dashLength).toBe(24)
+    expect(flow!.appearance.material.uniforms.color?.name).toBe('#22d3ee')
+    // 流动层与道路同宽（主干道 14），盖得住路面
+    expect(flow!.geometryInstances[0].geometry.width).toBe(14)
+
+    wrapper.unmount()
+  })
+
+  it('道路数据里的广场/地面多边形拿到深色材质（不是随机色）', async () => {
+    // **回归测试**：`GeoJsonDataSource` 给没设过 material 的要素发的是
+    // `Color.fromRandomColor()`（随机颜色）—— 广场就会在深色底上留下随机色斑点。
+    // 注意这个要素**没有 polyline**：道路数据里的广场/地面是 Polygon。
+    const plaza = {
+      position: null,
+      show: true,
+      point: {},
+      polygon: {},
+      properties: { highway: { getValue: () => undefined } }
+    } as unknown as MockEntity & { polygon: { material?: { name?: string } } }
+    cesiumStub.GeoJsonDataSource.load.mockResolvedValue({ entities: { values: [plaza] } })
+
+    const wrapper = mountSmartCity()
+    wrapper.vm.roads = { type: 'FeatureCollection', features: [] }
+    await wrapper.vm.loadGeoJSONRoads()
+
+    expect(plaza.polygon.material?.name).toBe('#0d1a2e')
+
+    wrapper.unmount()
   })
 })

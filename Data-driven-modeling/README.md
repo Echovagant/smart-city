@@ -43,7 +43,7 @@ npm run dev                             # http://localhost:5173/
 | `npm run lint:fix` | ESLint 修复版（会改文件，按需使用） |
 | `npm run typecheck` | `vue-tsc --noEmit` 类型检查（CI 里是**阻塞门禁**） |
 | `npm run format` | Prettier 格式化 `src/` |
-| `npm test -- --run` | 单次跑完测试（5 个文件 / **40 个用例**，全部是 `.ts`） |
+| `npm test -- --run` | 单次跑完测试（6 个文件 / **63 个用例**，全部是 `.ts`） |
 | `npm run test:run` | 同上，等价写法 |
 | `npm run test:coverage` | 跑测试并出覆盖率报告（v8 provider）；报告默认落在 `coverage/`（已 gitignore），要放到仓库外设 `COVERAGE_DIR` |
 | `npm test` | ⚠️ **watch 模式**，不会自己退出；脚本里不要用 |
@@ -71,7 +71,8 @@ vue-tsc ^3.3.13（实装 3.3.13）、typescript-eslint ^8.72.0（实装 8.72.0�
 
 > 覆盖率 `include` 写在 `vite.config.js` 里（`src/**/*.{js,ts,vue}`），**迁到 TypeScript
 > 之后要记得复查它** —— 原先只写了 `.{js,vue}`，源码全迁成 `.ts` 之后报告里就只剩 `.vue`
-> 了，看着漂亮、实际统计的是子集。当前全口径：语句 **92.61%**、函数 **90.24%**、分支 **81.86%**。
+> 了，看着漂亮、实际统计的是子集。当前全口径：语句 **94.19%**、函数 **93.84%**、分支 **80.21%**
+> （含 Plan S0 新增的 `src/theme/dark.ts`，语句与函数都是 100%）。
 
 ## 关键文件
 
@@ -178,6 +179,11 @@ Vite 默认不提供这些文件，所以 `vite-plugins/cesium-assets.js` 负责
 **`baseLayer: false` 不能去掉** —— 去掉它 Cesium 会自己走 `fromWorldImagery()` → ion 401。
 底座是自绘的纯色地面 + 发光网格，不接任何瓦片服务。
 
+**Cesium 默认控件也全关了**：`homeButton: false` / `sceneModePicker: false` /
+`navigationHelpButton: false` / `navigationInstructionsInitiallyVisible: false` ——
+浅色圆角按钮与浅灰说明板在纯黑大屏上就是破功。副作用：实际加载集从 64 降到 **55**
+（9 个 `NavigationHelp/*.svg` 不再请求；它们在剪枝清单的 kept 集合里，清单与 `dist/Cesium` 不受影响）。
+
 ### Cesium 运行时的剪枝（Plan C1）
 
 `dist/Cesium/` 里有一大半文件本应用**永远用不到**（maki 地点图标、NaturalEarthII 的
@@ -215,7 +221,7 @@ node vite-plugins/cesium-prune.mjs --write
 真实 headless Chrome 实测（生产构建 + 后端单端口托管，跑完 10 个交互动作后，
 2026-10-21）：
 
-- **实际加载集 = 64 个文件**（Assets 10 / Widgets 9 / **Workers 45**）。
+- **实际加载集 = 55 个文件**（Assets 10 / **Widgets 0** / Workers 45）。
   这个数取的是**两个口径的并集**：
   1. **CDP `Network.*` 事件**（能看到 worker 内部的请求，但 Chrome 的网络日志有条数上限，
      高德瓦片会把早期的 Cesium 请求挤掉）；
@@ -228,6 +234,8 @@ node vite-plugins/cesium-prune.mjs --write
 - **判定必须在全部 10 个交互动作跑完之后做** —— 首屏只加载 42 个，跑完交互才 65 个。
   多出来的包括 6 张 SkyBox 贴图、`IAU2006_XYS_18.json`、`ion-credit.png`、
   `moonSmall.jpg` 与 9 个 NavigationHelp 的 `.svg`。
+  —— **Plan S0 之后 Widgets 是 0**：Cesium 默认控件（home / 地球 / ? 与 NavigationHelp 说明板）
+  全关了，那 9 个 SVG 不再被请求（它们**在剪枝清单的 kept 集合里**，清单与 `dist/Cesium` 不受影响）。
 - **「本次没被请求」≠「运行时用不到」**：一次相机交互就能把某个「从未请求」的文件翻转成
   「已请求」。所以剪枝的判据是「静态不可达 ∪（静态可达 ∧ 属于已论证的组 ∧ 实测未加载 ∧
   回归通过）」。
