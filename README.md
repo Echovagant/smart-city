@@ -2,7 +2,7 @@
 
 天安门一带的 OpenStreetMap 建筑与道路数据，在浏览器里以 3D 城市的形式呈现。
 
-前端 Vue 3 + Vite + Cesium，后端 FastAPI。两端代码库分离、只通过 REST 通信；
+前端 Vue 3 + Vite + Cesium + TypeScript（严格模式），后端 FastAPI。两端代码库分离、只通过 REST 通信；
 生产形态由后端进程自己托管前端的构建产物，**一个 uvicorn 进程同时提供接口与页面**。
 
 数据是 OpenStreetMap 的公开抽取（ODbL），随应用展示时必须署名 —— 界面里已常驻署名行。
@@ -44,7 +44,7 @@ cd backend-python      && ./.venv/Scripts/python.exe main.py   # http://127.0.0.
 ```
 
 Linux / macOS 用 `./verify.sh`。CI（`.github/workflows/verify.yml`）在 Windows 与 Ubuntu
-两个 job 上跑同一套验证，外加 eslint 与前端构建。
+两个 job 上跑同一套验证，外加 eslint、**TypeScript 类型检查**与前端构建。
 
 ## 验收指标
 
@@ -58,8 +58,8 @@ Linux / macOS 用 `./verify.sh`。CI（`.github/workflows/verify.yml`）在 Wind
 | 首屏（LargestContentfulPaint） | < 3 s | **0.81 s** |
 | 3D 渲染帧率（静止 / 相机运动） | ≥ 30 fps | **97.2 / 162.1 fps** |
 | 打包体积（应用自身产物，不含 Cesium 运行时） | < 5 MB | **3.92 MB** |
-| 测试覆盖率（后端 `main.py` + `data_processor.py`） | > 90% | **93.87%** |
-| 测试覆盖率（前端 `src/**`） | > 80% | **94.49%** |
+| 测试覆盖率（后端 `main.py` + `data_processor.py`） | > 90% | **93.76%** |
+| 测试覆盖率（前端 `src/**`，含 `.ts` 与 `.vue`） | > 80% | **92.61%** |
 
 复跑：
 
@@ -83,10 +83,12 @@ backend-python/        FastAPI 后端
   data_processor.py    GeoJSON 加载与 bbox 过滤
   scripts/             OSM 数据抓取
   tests/               pytest 套件
-Data-driven-modeling/  Vue 3 + Cesium 前端
+Data-driven-modeling/  Vue 3 + Cesium + TypeScript 前端
   src/components/      SmartCity.vue —— 3D 场景与控制面板
   src/composables/     数据获取
   src/api/             fetch 封装
+  types/               城市类型系统（types/city.ts）
+  tsconfig.json        TypeScript 严格模式配置
 deploy/                nginx 反代配置
 scripts/               验收度量脚本
 docs/superpowers/      设计文档与实现计划

@@ -1,6 +1,6 @@
 # Data-driven-modeling —— 智慧城市 3D 可视化前端
 
-基于 **Vue 3 + Vite + Cesium** 的 3D 城市浏览器，把后端提供的北京天安门一带 OSM
+基于 **Vue 3 + Vite + Cesium + TypeScript（严格模式）** 的 3D 城市浏览器，把后端提供的北京天安门一带 OSM
 建筑/道路 GeoJSON 渲染成可拉伸的三维建筑与分级道路，并附带一个可开关的交通模拟。
 
 ## 前置条件
@@ -34,12 +34,13 @@ npm run dev                             # http://localhost:5173/
 | 命令 | 说明 |
 |---|---|
 | `npm run dev` | 开发服务器，http://localhost:5173/ |
-| `npm run build` | 生产构建，产物在 `dist/`（Cesium 静态资源在 `dist/Cesium/`，实测 380 个文件；`dist/` 共 385 个文件、10.48 MB）；**默认不产 sourcemap**，要排障用 `SOURCEMAP=true npm run build` |
+| `npm run build` | 生产构建，产物在 `dist/`（Cesium 静态资源在 `dist/Cesium/`，实测 380 个文件；`dist/` 共 385 个文件、10.49 MB）；**默认不产 sourcemap**，要排障用 `SOURCEMAP=true npm run build` |
 | `npm run preview` | 预览构建产物 |
 | `npm run lint` | ESLint **只检查不修改**（`eslint . --no-fix`） |
 | `npm run lint:fix` | ESLint 修复版（会改文件，按需使用） |
+| `npm run typecheck` | `vue-tsc --noEmit` 类型检查（CI 里是**阻塞门禁**） |
 | `npm run format` | Prettier 格式化 `src/` |
-| `npm test -- --run` | 单次跑完测试（5 个文件 / **40 个用例**） |
+| `npm test -- --run` | 单次跑完测试（5 个文件 / **40 个用例**，全部是 `.ts`） |
 | `npm run test:run` | 同上，等价写法 |
 | `npm run test:coverage` | 跑测试并出覆盖率报告（v8 provider）；报告默认落在 `coverage/`（已 gitignore），要放到仓库外设 `COVERAGE_DIR` |
 | `npm test` | ⚠️ **watch 模式**，不会自己退出；脚本里不要用 |
@@ -48,22 +49,52 @@ Node 版本要求 `^20.19.0 || >=22.12.0`（`package.json:6-8`）。
 
 **依赖版本**：运行时 cesium ^1.134.1、pinia ^3.0.3、vue ^3.5.44、vue-router ^4.6.3；
 开发期 vite ^7.1.11（实装 7.3.7）、vitest ^2.1.0（实装 2.1.9）、@vitest/coverage-v8 ^2.1.9、
-eslint ^9.37.0、@vue/test-utils ^2.4.6、jsdom ^25.0.0。
+eslint ^9.37.0、@vue/test-utils ^2.4.6、jsdom ^25.0.0、typescript ^5.9.3（实装 5.9.3）、
+vue-tsc ^3.3.13（实装 3.3.13）、typescript-eslint ^8.72.0（实装 8.72.0）。
 
 仓库根目录的 `verify.ps1`（Windows）/ `verify.sh`（POSIX）会一次跑完后端 pytest
 与前端 vitest，任一失败即以非零码退出。
+
+### `lint` 与 `typecheck` 各管一半
+
+| 命令 | 管什么 | 当前状态 |
+|---|---|---|
+| `npm run lint` | 风格与静态规则（ESLint，**不带类型信息**） | 0 problem |
+| `npm run typecheck` | 类型（`vue-tsc --noEmit`，`tsconfig.json` 是 `strict: true`） | 0 error |
+
+**类型错误不会让 `npm run build` 失败** —— Vite 用 esbuild 转译、不查类型 ——
+所以 `typecheck` 是独立且阻塞的一步，CI 里两个 job 都跑它。两者**不重复**：类型归
+`vue-tsc`，风格归 ESLint。
+
+> 覆盖率 `include` 写在 `vite.config.js` 里（`src/**/*.{js,ts,vue}`），**迁到 TypeScript
+> 之后要记得复查它** —— 原先只写了 `.{js,vue}`，源码全迁成 `.ts` 之后报告里就只剩 `.vue`
+> 了，看着漂亮、实际统计的是子集。当前全口径：语句 **92.61%**、函数 **90.24%**、分支 **81.87%**。
 
 ## 关键文件
 
 | 文件 | 作用 |
 |---|---|
-| `src/components/SmartCity.vue` | 唯一的功能组件：Cesium 视图、GeoJSON 加载、交通模拟、实时交通读数、鸟瞰↔平视切换 |
-| `src/api/client.js` | 极简 fetch 封装：超时（默认 15 s）、`ApiError` 规范化；请求结束时会摘掉挂在调用方 signal 上的 abort 监听器 |
-| `src/composables/useCityData.js` | 三个接口的调用方；`buildings`/`roads` 用 `shallowRef`（载荷是几 MB 的 GeoJSON，不能深度响应式）；另有只刷新交通状态一个端点的 `refreshTrafficStatus()` |
-| `src/main.js` / `src/App.vue` | 引导入口；`App.vue` 只渲染 `<SmartCity />` |
+| `src/components/SmartCity.vue` | 唯一的功能组件：Cesium 视图、GeoJSON 加载、交通模拟、实时交通读数、鸟瞰↔平视切换（`<script setup lang="ts">`） |
+| `src/api/client.ts` | 极简 fetch 封装：超时（默认 15 s）、`ApiError` 规范化；请求结束时会摘掉挂在调用方 signal 上的 abort 监听器 |
+| `src/composables/useCityData.ts` | 三个接口的调用方；`buildings`/`roads` 用 `shallowRef`（载荷是几 MB 的 GeoJSON，不能深度响应式）；另有只刷新交通状态一个端点的 `refreshTrafficStatus()` |
+| `src/main.ts` / `src/App.vue` | 引导入口；`App.vue` 只渲染 `<SmartCity />` |
+| `types/city.ts` | 城市类型系统（345 行）：GeoJSON 泛型子集、`OSMProperties`、三个端点的响应契约、视图状态，以及**补 Cesium 类型缺口**的 `Writable*` 与模块增强 |
+| `tsconfig.json` | TypeScript 严格模式配置（22 行）：`strict: true`、`noEmit: true`，`paths` 里的别名必须与 `vite.config.js` 一致 |
+| `src/env.d.ts` | `import.meta.env` 的类型（`/// <reference types="vite/client" />`） |
 | `vite.config.js` | dev 代理、`@`/`cesium` 别名、Cesium 独立 chunk、Vitest 配置；`build.sourcemap` 由 `SOURCEMAP` 环境变量控制、默认关 |
 | `vite-plugins/cesium-assets.js` | 自定义 Vite 插件：dev 提供 `/Cesium/*`，build 拷进 `dist/Cesium/` |
-| `src/router/index.js` | `createWebHistory`，**目前 routes 为空** |
+| `src/router/index.ts` | `createWebHistory`，**目前 routes 为空** |
+
+> **别名的两处必须一致**：`vite.config.js` 的 `resolve.alias`（`@` → `./src`、
+> `cesium` → `./node_modules/cesium`）与 `tsconfig.json` 的 `paths` 是同一条规则的
+> 两份拷贝。**只改一边**，IDE / `vue-tsc` 与实际构建就会对不上 —— 症状是
+> 「类型检查说模块不存在，构建却能跑」。新增别名时两边一起改。
+
+> **`types/city.ts` 里的 Cesium 补法是我们自己写的**：Cesium 1.134 的 `.d.ts` 与运行时
+> 有出入（实例属性只声明了 `Property` 一侧、`Scene.maximumFrameRate` / `Fog.near` /
+> `Fog.far` / `Viewer.ConstructorOptions.errorHandler` 都没声明），`types/city.ts` 用
+> `Writable*` 类型 + `declare module 'cesium'` / `declare global` 补上了。
+> **将来升级 Cesium 时必须复查这里** —— 升级之后这些补法会变成冗余，而不是错误。
 
 ## 控制面板的实时交通状态
 
@@ -108,13 +139,13 @@ SOURCEMAP=true npm run build
 
 ### `dist/` 的体积口径
 
-实测（`dist/` 共 385 个文件 / **10.48 MB**）：
+实测（`dist/` 共 385 个文件 / **10.49 MB**）：
 
 | 口径 | 体积 | 文件数 | 说明 |
 |---|---|---|---|
-| **Vite 产物（应用自身）** | **3.91 MB** | 5 | `index.html`、`favicon.ico`、`assets/cesium-*.js`、`assets/index-*.js`、`assets/index-*.css`；**已达计划书的 < 5 MB** |
+| **Vite 产物（应用自身）** | **3.92 MB** | 5 | `index.html`、`favicon.ico`、`assets/cesium-*.js`、`assets/index-*.js`、`assets/index-*.css`；**已达计划书的 < 5 MB** |
 | **自托管 Cesium 运行时** | 6.57 MB | 380 | `dist/Cesium/`，厂商运行时，不是应用产物；由 `vite-plugins/cesium-assets.js` 整棵拷贝 |
-| `dist/` 合计 | 10.48 MB | 385 | 计划书写的是 < 5 MB —— **按「整个 `dist/`」口径不达标，按「应用自身产物」口径达标** |
+| `dist/` 合计 | 10.49 MB | 385 | 计划书写的是 < 5 MB —— **按「整个 `dist/`」口径不达标，按「应用自身产物」口径达标** |
 
 说「产物体积」时要分清是**应用产物**还是**整个 `dist/`**。`assets/cesium-*.js`
 一个文件就占 3,973,988 字节（gzip 后约 1.07 MB 线上），是首屏最大的一块。
@@ -205,17 +236,21 @@ Chrome / 构建失败 / 后端起不来）→ 1，**不产出假数字**。
 ## CI
 
 `.github/workflows/verify.yml` 在 push 到 `main`、PR 或手动触发时跑前端这套：
-`npm ci` → `npm run lint` → `npm run build` → 断言 `dist/Cesium` 的文件数是 **380**。
-Windows 与 Ubuntu 两个 job 各跑一遍；测试部分复用仓库根的 `verify.ps1` / `verify.sh`。
+`npm ci` → `npm run lint` → `npm run typecheck` → `npm run build` → 断言 `dist/Cesium`
+的文件数是 **380**。Windows 与 Ubuntu 两个 job 各跑一遍；测试部分复用仓库根的
+`verify.ps1` / `verify.sh`。
 
 - `npm ci` 走 `https://registry.npmmirror.com`（`package-lock.json` 已与 `package.json` 同步）。
 - `dist/Cesium` 断言的是**精确的 380**，不是「大于 0」——它能在 CI 上第一时间发现
   `vite-plugins/cesium-assets.js` 的输出路径被改坏。
 - 跑测试用的是 `npm test -- --run` / `npm run test:run`，**不要用 `npm test`**（watch 模式）。
+- **`npm run typecheck` 是阻塞门禁**：类型错误不会让 `npm run build` 失败（Vite 用
+  esbuild 转译、不查类型），所以类型检查必须是独立的一步。
 - Ubuntu job 另有两步「**报告，不阻塞**」（`continue-on-error: true`）：**浏览器端度量**
   与**验收度量**。它们证明脚本在干净环境里跑得通，但 runner 的 CPU / 网络与本机不同，
   **数字不可与本机直接比较**；权威数字来自本地跑。
-- **本仓库目前没有配置任何 git remote**，这份工作流要等仓库推到 GitHub 之后才会真正运行。
+- **仓库已经推送到 GitHub**（`origin` = `https://github.com/Echovagant/smart-city.git`），
+  这份工作流**会真正运行**：push 到 `main`、提 PR 或手动触发都会触发上面那两个 job。
 
 ## 常见问题
 

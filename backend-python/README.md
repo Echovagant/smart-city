@@ -249,7 +249,7 @@ report-only **不拦截**任何东西，只让浏览器把违规报出来 ——
   font-src 'self' data:
   ```
 
-  - 瓦片主机是 `webrd0{1,2,3,4}.is.autonavi.com`（`Data-driven-modeling/src/components/SmartCity.vue:280-281`），
+  - 瓦片主机是 `webrd0{1,2,3,4}.is.autonavi.com`（`Data-driven-modeling/src/components/SmartCity.vue:329-330`），
     **不是** `*.amap.com`。
   - `script-src` 的 `'unsafe-eval'`、`style-src` 的 `'unsafe-inline'` 是**实测结论**：
     Cesium 需要求值（`eval` / `new Function`）与编译 WebAssembly，Cesium 的 widget
@@ -442,12 +442,12 @@ node scripts\measure-browser-performance.mjs
 | 指标 | 验收线 | 实测 | 判定 |
 |---|---|---|---|
 | 后端覆盖率（`main.py` + `data_processor.py`） | > 90% | **93.76%**（449 条语句 / 28 条未覆盖；`main.py` 95.99%、`data_processor.py` 89.33%） | 达标 |
-| 前端覆盖率（`src/**`） | > 80% | **94.54%** 语句（710/751）、92.31% 函数（36/39）、83.05% 分支（147/177） | 达标 |
+| 前端覆盖率（`src/**` 全口径） | > 80% | **92.61%** 语句（564/609）、90.24% 函数（37/41）、81.87% 分支（149/182） | 达标 |
 | `/api/buildings`（全量）P95 | < 200 ms | **27.0 ms**（gzip 29.1 ms） | 达标 |
 | `/api/roads`（全量）P95 | < 200 ms | **15.8 ms** | 达标 |
 | 带 bbox 的路径 P95 | < 200 ms | **89.2 ms** | 达标 |
-| Vite 产物体积（不含 Cesium 运行时） | < 5 MB | **3.91 MB**（5 个文件） | 达标 |
-| `dist/` 总体积 | 计划书写的是 < 5 MB，但含 6.6 MB 自托管 Cesium 运行时 | 10.48 MB（385 个文件） | **口径差异**（不判达标/不达标） |
+| Vite 产物体积（不含 Cesium 运行时） | < 5 MB | **3.92 MB**（5 个文件） | 达标 |
+| `dist/` 总体积 | 计划书写的是 < 5 MB，但含 6.6 MB 自托管 Cesium 运行时 | 10.49 MB（385 个文件） | **口径差异**（不判达标/不达标） |
 | 首屏 LCP | < 3 s | **0.78 s** | 达标 |
 | 页面 load 事件 | < 3 s | **0.91 s** | 达标 |
 | 帧率（静止 / 相机运动） | ≥ 30 fps | **89.0 / 163.1 fps** | 达标 |
