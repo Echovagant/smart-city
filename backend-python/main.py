@@ -12,9 +12,11 @@ from collections import OrderedDict
 import logging
 import math
 import os
+import time
 import uvicorn
 import json
 import zlib
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 from data_processor import DataProcessorError, get_data_processor
@@ -482,15 +484,109 @@ async def get_roads(request: Request, bbox: Optional[str] = None):
         raise HTTPException(status_code=503, detail=DATA_UNAVAILABLE_DETAIL)
 
 
+# 交通状态模型。
+#
+# 值全部由时间确定性地推导（同一个时间戳永远得到同样的结果），不用随机量：
+# 随机值每次刷新都跳变，既不像真实数据，也让测试无法断言。
+#
+# 三个分量的周期互不成整数倍，叠加后不会同步重复，
+# 看起来像真实车流那样「有节律但不可预测」。
+_TRAFFIC_PERIOD_DAY = 86400.0        # 一天一个潮汐：白天车多、夜里车少
+_TRAFFIC_PERIOD_TIDE = 900.0         # 15 分钟一次中等波动
+_TRAFFIC_PERIOD_JITTER = 20.0        # 20 秒一次细节抖动
+
+# 车流量指数的基准值与三个分量的权重。权重之和为 1，
+# 加上基准值后结果天然落在 0..1 内，不需要额外裁剪。
+_TRAFFIC_FLOW_BASE = 0.55
+_TRAFFIC_FLOW_WEIGHT_DAY = 0.30
+_TRAFFIC_FLOW_WEIGHT_TIDE = 0.12
+_TRAFFIC_FLOW_WEIGHT_JITTER = 0.03
+
+# 拥堵分档：拥堵指数 0..1，越大越堵。
+_TRAFFIC_CONGESTION_LEVELS = (
+    (0.25, "畅通"),
+    (0.50, "轻微拥堵"),
+    (0.75, "拥堵"),
+)
+_TRAFFIC_CONGESTION_SEVERE = "严重拥堵"
+
+_TWO_PI = 2.0 * math.pi
+
+
+def _now() -> float:
+    """当前时间（Unix 时间戳，秒）。
+
+    单独抽成模块级函数是为了让测试能替换成可控时钟：
+    于是「同一个端点、两个不同时刻」的结果可以被确定性地断言，
+    不必靠 time.sleep 赌时序。
+    """
+    return time.time()
+
+
+def _iso_utc(now: float) -> str:
+    """Unix 时间戳 → ISO8601（UTC、毫秒精度、Z 结尾）。"""
+    moment = datetime.fromtimestamp(now, tz=timezone.utc)
+    return moment.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def _traffic_flow(now: float) -> float:
+    """由时间推导路网车流量指数（0..1，越大车越多）。"""
+    daily = math.sin(_TWO_PI * now / _TRAFFIC_PERIOD_DAY + 0.4)
+    tide = math.sin(_TWO_PI * now / _TRAFFIC_PERIOD_TIDE + 1.1)
+    jitter = math.sin(_TWO_PI * now / _TRAFFIC_PERIOD_JITTER + 2.3)
+    return (
+        _TRAFFIC_FLOW_BASE
+        + _TRAFFIC_FLOW_WEIGHT_DAY * daily
+        + _TRAFFIC_FLOW_WEIGHT_TIDE * tide
+        + _TRAFFIC_FLOW_WEIGHT_JITTER * jitter
+    )
+
+
+def _traffic_congestion_label(level: float) -> str:
+    """拥堵指数 → 中文标签。"""
+    for threshold, label in _TRAFFIC_CONGESTION_LEVELS:
+        if level < threshold:
+            return label
+    return _TRAFFIC_CONGESTION_SEVERE
+
+
+def _traffic_status_code(level: float) -> str:
+    """拥堵指数 → 粗粒度状态（机器可读）。"""
+    if level < 0.25:
+        return "normal"
+    if level < 0.75:
+        return "slow"
+    return "congested"
+
+
+def _traffic_status_payload(now: float) -> Dict[str, Any]:
+    """把时间换算成一份交通状态响应（纯函数）。
+
+    同样的时间戳永远得到同样的结果：既能当「实时读数」用，也能被测试断言。
+    """
+    flow = round(_traffic_flow(now), 4)
+    # 拥堵指数：车流越大越堵，但不是线性关系——
+    # 路网容量有限，高车流不会线性地变成高拥堵，所以取流量的平方。
+    congestion_level = round(flow * flow, 4)
+    return {
+        "status": _traffic_status_code(congestion_level),
+        "congestion_level": congestion_level,
+        "congestion": _traffic_congestion_label(congestion_level),
+        "flow": flow,
+        "update_time": _iso_utc(now),
+    }
+
+
 @app.get("/api/traffic-status")
 async def get_traffic_status():
-    """获取交通状态（占位实现：返回固定值；后续接入实时数据时改造）。"""
-    # OSM 不带实时流量；这里保留一个稳定的占位响应，前端 plan 007 会调用它。
-    return {
-        "status": "normal",
-        "congestion_level": 0.3,
-        "update_time": "2024-04-24T10:00:00Z",
-    }
+    """获取交通状态。
+
+    值由当前时间确定性地推导（同样的时间得到同样的值）：
+    既没有写死的常量，也不含随机跳变——前端拿到的是一条会动的读数。
+
+    不挂 require_api_key：前端不携带 key，这个端点必须始终可访问。
+    """
+    return _traffic_status_payload(_now())
 
 def mount_frontend(app: FastAPI, dist_dir: Path) -> bool:
     """把前端构建产物挂到根路径。返回是否挂载成功。
