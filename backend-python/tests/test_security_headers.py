@@ -211,3 +211,34 @@ def test_middleware_is_pure_asgi_not_base_http_middleware():
     """
     assert not issubclass(main.SecurityHeadersMiddleware, BaseHTTPMiddleware)
     assert not hasattr(main.SecurityHeadersMiddleware, "dispatch")
+
+
+# --- CSP：只观测，不强制 ----------------------------------------------------
+
+
+def test_csp_report_only_is_off_by_default(client, monkeypatch):
+    """默认不带任何 CSP 头——包括强制头。"""
+    monkeypatch.setattr(main, "CSP_REPORT_ONLY", "")
+
+    response = client.get("/health")
+    assert "content-security-policy-report-only" not in response.headers
+    assert "content-security-policy" not in response.headers
+
+
+def test_csp_report_only_header_appears_when_the_switch_is_on(client, monkeypatch):
+    """开关打开时只加 report-only 头，绝不出现强制头。"""
+    policy = "default-src 'self'; script-src 'self' 'unsafe-eval' blob:; worker-src 'self' blob:"
+    monkeypatch.setattr(main, "CSP_REPORT_ONLY", policy)
+
+    response = client.get("/health")
+    assert response.headers["content-security-policy-report-only"] == policy
+    assert "content-security-policy" not in response.headers
+
+
+def test_csp_switch_reads_the_environment(monkeypatch):
+    """开关来自环境变量；没设就是空串（默认关闭）。"""
+    monkeypatch.delenv("CSP_REPORT_ONLY", raising=False)
+    assert main._read_csp_report_only() == ""
+
+    monkeypatch.setenv("CSP_REPORT_ONLY", "  default-src 'self'  ")
+    assert main._read_csp_report_only() == "default-src 'self'"

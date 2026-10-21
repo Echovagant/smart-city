@@ -51,6 +51,19 @@ SECURITY_HEADERS = {
     "X-Frame-Options": "SAMEORIGIN",
 }
 
+
+def _read_csp_report_only() -> str:
+    """读 CSP report-only 开关（环境变量 CSP_REPORT_ONLY）。空串表示关闭。
+
+    CSP 只以 report-only 形式开启：先观测 Cesium 实际需要什么，
+    再决定要不要升级成强制策略。report-only 不拦截任何东西，只报告。
+    """
+    return os.environ.get("CSP_REPORT_ONLY", "").strip()
+
+
+# 开关的当前值：import 时读一次环境变量。
+CSP_REPORT_ONLY = _read_csp_report_only()
+
 # 配置管理
 class Settings(BaseSettings):
     app_name: str = "SmartCityBackend"
@@ -154,7 +167,10 @@ def _security_headers() -> Dict[str, str]:
     任何时候都不加强制头 Content-Security-Policy——强制策略要先把
     Cesium 实际需要什么观测清楚，否则会让 worker 加载失败、地图一片空白。
     """
-    return dict(SECURITY_HEADERS)
+    headers = dict(SECURITY_HEADERS)
+    if CSP_REPORT_ONLY:
+        headers["Content-Security-Policy-Report-Only"] = CSP_REPORT_ONLY
+    return headers
 
 
 class SecurityHeadersMiddleware:
