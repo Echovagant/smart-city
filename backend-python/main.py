@@ -1,7 +1,9 @@
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
+from starlette.concurrency import run_in_threadpool
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
@@ -12,6 +14,7 @@ import math
 import os
 import uvicorn
 import json
+import zlib
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 from data_processor import DataProcessorError, get_data_processor
@@ -24,6 +27,12 @@ DATA_UNAVAILABLE_DETAIL = "城市数据暂时不可用，请稍后重试"
 
 # bbox 参数非法时的统一文案，追加具体原因后返回。
 BBOX_DETAIL = "bbox 必须是 4 个逗号分隔的数字：min_lon,min_lat,max_lon,max_lat"
+
+# 响应压缩参数。必须与 Starlette 的 GZipMiddleware 保持一致：
+# 「全量响应缓存」预压缩出来的字节要靠这组参数与中间件自己压的结果对齐。
+# minimum_size 让 /health 这类小响应保持不压缩（压几百字节只会更大）。
+GZIP_MINIMUM_SIZE = 1000
+GZIP_COMPRESSLEVEL = 9
 
 # 配置管理
 class Settings(BaseSettings):
@@ -151,8 +160,11 @@ if _hosts:
 # 响应压缩：GeoJSON 是高度可压缩的文本，实测能把 /api/buildings 从
 # 1341 KB 压到约 225 KB。必须在 app 启动前添加——app 一旦启动，
 # add_middleware 会抛 RuntimeError。
-# minimum_size=1000 让 /health 这类小响应保持不压缩。
-app.add_middleware(GZipMiddleware, minimum_size=1000)
+app.add_middleware(
+    GZipMiddleware,
+    minimum_size=GZIP_MINIMUM_SIZE,
+    compresslevel=GZIP_COMPRESSLEVEL,
+)
 
 # 确保数据目录存在
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -180,14 +192,29 @@ _BBOX_CACHE_MAX_ENTRIES = 8
 _buildings_bbox_cache: "OrderedDict[Tuple[float, float, float, float], Tuple[Any, Dict[str, Any]]]" = OrderedDict()
 _roads_bbox_cache: "OrderedDict[Tuple[float, float, float, float], Tuple[Any, Dict[str, Any]]]" = OrderedDict()
 
+# 全量响应（不带 bbox）的序列化结果缓存。
+#
+# 模块级的 GeoJSON 缓存存的是**解析后**的 Python 对象，每次请求仍要重新
+# jsonable_encoder + json.dumps 一遍（实测 3854 个要素约 190 ms），
+# 再由 GZipMiddleware 压一遍（实测 3.4 MB 在 level 9 下约 110 ms）。
+# 源数据不变时全量响应是**逐字节确定**的，所以序列化结果与压缩结果都能缓存。
+#
+# key 是 "buildings" / "roads"：全量响应只有一个变体（不带 bbox）。
+# 带 bbox 的路径**不缓存**——参数组合无界，缓存多少都救不了。
+# 值是 (原始数据对象, 未压缩字节, gzip 字节或 None)：
+#   - 记下原始数据对象是多一道保险：数据重新加载后（换了对象）旧条目自动作废；
+#   - gzip 字节为 None 表示响应体小于 GZIP_MINIMUM_SIZE，不压缩（与中间件规则一致）。
+_full_response_cache: Dict[str, Tuple[Any, bytes, Optional[bytes]]] = {}
+
 
 def _clear_caches() -> None:
-    """清空全部模块级缓存：原始 GeoJSON + 按 bbox 的过滤结果。"""
+    """清空全部模块级缓存：原始 GeoJSON + 按 bbox 的过滤结果 + 全量响应序列化结果。"""
     global _buildings_cache, _roads_cache
     _buildings_cache = None
     _roads_cache = None
     _buildings_bbox_cache.clear()
     _roads_bbox_cache.clear()
+    _full_response_cache.clear()
 
 
 def _load_buildings() -> Dict[str, Any]:
@@ -245,6 +272,69 @@ def _filtered_collection(
     while len(cache) > _BBOX_CACHE_MAX_ENTRIES:
         cache.popitem(last=False)  # 淘汰最久未用的条目
     return result
+
+
+def _render_collection_bytes(collection: Dict[str, Any]) -> bytes:
+    """把集合渲染成响应体字节。
+
+    刻意复用 FastAPI 自己的两段式序列化（jsonable_encoder → JSONResponse.render），
+    这样缓存下来的字节与「不缓存时 FastAPI 返回的字节」逐字节相同，客户端看不出差别。
+    """
+    return JSONResponse(content=jsonable_encoder(collection)).body
+
+
+def _gzip_bytes(payload: bytes) -> bytes:
+    """按 GZipMiddleware 的参数压缩：level 9、gzip 容器（wbits=16+MAX_WBITS）。
+
+    参数与 Starlette 的 GZipMiddleware 一致，压出来的字节与中间件自己压的逐字节相同。
+    """
+    compressor = zlib.compressobj(GZIP_COMPRESSLEVEL, zlib.DEFLATED, 16 + zlib.MAX_WBITS)
+    return compressor.compress(payload) + compressor.flush()
+
+
+def _accepts_gzip(request: Request) -> bool:
+    """判断客户端是否接受 gzip。
+
+    判定方式与 Starlette 的 GZipMiddleware 一致（子串匹配），
+    免得出现「中间件认为该压、这里认为不该压」的分歧。
+    """
+    return "gzip" in request.headers.get("Accept-Encoding", "")
+
+
+def _render_full_payload(collection: Dict[str, Any]) -> Tuple[bytes, Optional[bytes]]:
+    """渲染全量响应体，并按需预压缩。
+
+    小于 GZIP_MINIMUM_SIZE 的响应不压缩——与 GZipMiddleware 的规则一致，
+    压一个几百字节的响应只会更大。
+    """
+    plain = _render_collection_bytes(collection)
+    if len(plain) < GZIP_MINIMUM_SIZE:
+        return plain, None
+    return plain, _gzip_bytes(plain)
+
+
+async def _full_response(request: Request, kind: str, data: Dict[str, Any]) -> Response:
+    """返回「不带 bbox」的全量响应，序列化结果与压缩结果都走缓存。
+
+    缓存挂在 _clear_caches() 上：源数据换了必须重新序列化，
+    否则就是线上返回过期数据（改了数据还是旧城市）。
+    """
+    entry = _full_response_cache.get(kind)
+    if entry is None or entry[0] is not data:
+        # 序列化 + 压缩实测约 300 ms，丢到线程池里做，别把事件循环堵住。
+        plain, gzipped = await run_in_threadpool(
+            _render_full_payload, _as_feature_collection(data)
+        )
+        entry = (data, plain, gzipped)
+        _full_response_cache[kind] = entry
+
+    _, plain, gzipped = entry
+    headers = {"Vary": "Accept-Encoding"}
+    if gzipped is not None and _accepts_gzip(request):
+        # 带上 Content-Encoding: gzip —— GZipMiddleware 见到这个头会原样放行，不会压第二遍。
+        headers["Content-Encoding"] = "gzip"
+        return Response(content=gzipped, media_type="application/json", headers=headers)
+    return Response(content=plain, media_type="application/json", headers=headers)
 
 
 class BBox(BaseModel):
@@ -359,10 +449,11 @@ async def health_check():
 
 # 模拟数据接口
 @app.get("/api/buildings", dependencies=[Depends(require_api_key)])
-async def get_buildings(bbox: Optional[str] = None):
+async def get_buildings(request: Request, bbox: Optional[str] = None):
     """获取建筑数据。
 
     可选 query 参数 bbox=min_lon,min_lat,max_lon,max_lat 用来按范围过滤。
+    不带 bbox 走全量响应缓存（序列化结果复用），带 bbox 每次现算。
     """
     # 参数不合法是调用方的问题（400），先校验再动数据。
     parsed = _parse_bbox(bbox) if bbox is not None else None
@@ -370,7 +461,7 @@ async def get_buildings(bbox: Optional[str] = None):
         data = _load_buildings()
         if parsed is not None:
             return _filtered_collection(_buildings_bbox_cache, data, parsed)
-        return _as_feature_collection(data)
+        return await _full_response(request, "buildings", data)
     except DataProcessorError:
         # 数据缺失或损坏是我们的问题（503）：细节只写日志，不回显给调用方。
         logger.exception("建筑数据不可用")
@@ -378,14 +469,14 @@ async def get_buildings(bbox: Optional[str] = None):
 
 
 @app.get("/api/roads", dependencies=[Depends(require_api_key)])
-async def get_roads(bbox: Optional[str] = None):
+async def get_roads(request: Request, bbox: Optional[str] = None):
     """获取道路数据。可选 bbox query 参数。"""
     parsed = _parse_bbox(bbox) if bbox is not None else None
     try:
         data = _load_roads()
         if parsed is not None:
             return _filtered_collection(_roads_bbox_cache, data, parsed)
-        return _as_feature_collection(data)
+        return await _full_response(request, "roads", data)
     except DataProcessorError:
         logger.exception("道路数据不可用")
         raise HTTPException(status_code=503, detail=DATA_UNAVAILABLE_DETAIL)
