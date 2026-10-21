@@ -71,9 +71,15 @@ jobs:
       - name: 确认 Cesium 静态资源进了产物
         working-directory: Data-driven-modeling
         run: |
-          $count = (Get-ChildItem dist\Cesium -Recurse -File | Measure-Object).Count
+          $count = (Get-ChildItem dist\Cesium -Recurse -File | Where-Object { $_.Name -ne 'pruned-manifest.json' } | Measure-Object).Count
           Write-Host "dist/Cesium files: $count"
-          if ($count -ne 380) { throw "dist/Cesium 文件数应为 380，实际 $count" }
+          if ($count -ne 98) { throw "dist/Cesium 文件数应为 98，实际 $count" }
+
+      # 剪枝清单与实际产物必须一致。
+      # 清单是入库的（Data-driven-modeling/cesium-runtime-manifest.json），
+      # Cesium 升级或应用功能变了都可能让它过期 —— 这一步是那个哨兵。
+      - name: 确认剪枝清单与产物一致
+        run: node scripts/check-cesium-runtime-manifest.mjs
 
       # 验收度量：覆盖率 + API 延迟 + 产物体积，一次跑完并打印对照验收线的表格。
       #
@@ -144,9 +150,15 @@ jobs:
       - name: 确认 Cesium 静态资源进了产物
         working-directory: Data-driven-modeling
         run: |
-          count=$(find dist/Cesium -type f | wc -l)
+          count=$(find dist/Cesium -type f ! -name pruned-manifest.json | wc -l)
           echo "dist/Cesium files: $count"
-          if [ "$count" -ne 380 ]; then echo "dist/Cesium 文件数应为 380，实际 $count"; exit 1; fi
+          if [ "$count" -ne 98 ]; then echo "dist/Cesium 文件数应为 98，实际 $count"; exit 1; fi
+
+      # 剪枝清单与实际产物必须一致。
+      # 清单是入库的（Data-driven-modeling/cesium-runtime-manifest.json），
+      # Cesium 升级或应用功能变了都可能让它过期 —— 这一步是那个哨兵。
+      - name: 确认剪枝清单与产物一致
+        run: node scripts/check-cesium-runtime-manifest.mjs
 
       # 浏览器端度量：首屏（LCP / load）+ 3D 渲染帧率。
       #

@@ -72,8 +72,10 @@ cd Data-driven-modeling && npm run test:coverage
 python scripts/measure-acceptance.py
 ```
 
-`dist/` 目录总计 10.49 MB，其中 6.57 MB 是**自托管的 Cesium 运行时**（厂商运行时，不是应用产物），
-按「整个 `dist/`」口径不满足 5 MB，按「应用自身产物」口径满足。
+`dist/` 目录总计 **7.67 MB**（104 个文件），其中 **3.75 MB** 是**自托管的 Cesium 运行时**
+（98 个文件；厂商运行时，不是应用产物 —— 已按入库的剪枝清单裁掉本应用用不到的部分，
+剪枝前是 6.57 MB / 380 个文件）。按「整个 `dist/`」口径仍不满足 5 MB，
+按「应用自身产物」口径满足（3.92 MB）。
 
 ## 仓库结构
 
@@ -89,8 +91,10 @@ Data-driven-modeling/  Vue 3 + Cesium + TypeScript 前端
   src/api/             fetch 封装
   types/               城市类型系统（types/city.ts）
   tsconfig.json        TypeScript 严格模式配置
+  vite-plugins/        Cesium 静态资源插件 + 运行时剪枝分析器
+  cesium-runtime-manifest.json   入库的 Cesium 运行时剪枝清单
 deploy/                nginx 反代配置
-scripts/               验收度量脚本
+scripts/               验收度量脚本（含 Cesium 运行时裁剪回归）
 docs/superpowers/      设计文档与实现计划
 plans/                 首轮审计报告与计划
 ```

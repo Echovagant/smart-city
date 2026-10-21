@@ -10,16 +10,27 @@
 // 关键:不能走 server.transformRequest —— Vite 会把 .json 当 ES module 转译,
 // 返回 "export const ..." 字符串,但 Cesium 内部 fetchJson 会 JSON.parse 它,
 // 抛 "Unexpected token 'e' in export def..."。
-// build 阶段：closeBundle 后把同样的目录拷贝到 dist/Cesium/。
+// build 阶段：closeBundle 后把同样的目录拷贝到 dist/Cesium/，
+//              再按入库的剪枝清单把「本应用永远用不到」的文件删掉。
+//
+// 剪枝（Plan C1）
+// --------------
+//   清单：Data-driven-modeling/cesium-runtime-manifest.json（入库，可 review、可 diff）
+//   逃生舱：环境变量 CESIUM_RUNTIME=full → 一个都不剪，dist/Cesium 保持完整的 380 个文件。
+//   自检：剪完后的实际文件集合必须与清单的 kept 集合一致，不一致直接让构建失败
+//         （说明 Cesium 版本变了但清单没重新生成 —— 这时候必须重新生成清单，而不是
+//          让一个悄悄多出来的文件混进产物）。
 //
 // 用法（vite.config.js）：
 //   import cesiumAssets from './vite-plugins/cesium-assets.js'
 //   plugins: [vue(), cesiumAssets()]
-import { copyFileSync, mkdirSync, existsSync, readdirSync, statSync } from 'node:fs'
+import { copyFileSync, mkdirSync, existsSync, readdirSync, readFileSync, statSync, rmSync, writeFileSync } from 'node:fs'
 import { resolve, join, normalize, sep, extname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createReadStream } from 'node:fs'
 import { pipeline } from 'node:stream/promises'
+import process from 'node:process'
+import { applyManifest } from './cesium-prune.mjs'
 
 const CESIUM_BUILD_DIR = resolve(
   fileURLToPath(new URL('../node_modules/cesium/Build/Cesium', import.meta.url)),
@@ -28,6 +39,19 @@ const CESIUM_BUILD_DIR = resolve(
 const CESIUM_SUBDIRS = ['Workers', 'ThirdParty', 'Assets', 'Widgets']
 
 const DEV_MOUNT = '/Cesium'
+
+/** 入库的剪枝清单。 */
+const RUNTIME_MANIFEST = resolve(
+  fileURLToPath(new URL('../cesium-runtime-manifest.json', import.meta.url)),
+)
+
+/** 构建产物里的排查报告（写进 dist/Cesium/ 里，排查时一眼能看到剪了什么）。 */
+const PRUNE_REPORT_NAME = 'pruned-manifest.json'
+
+/** 逃生舱：CESIUM_RUNTIME=full → 不剪。 */
+function pruningDisabled() {
+  return (process.env.CESIUM_RUNTIME || '').toLowerCase() === 'full'
+}
 
 // 根据扩展名返回正确的 Content-Type。
 // Cesium 内部 fetchJson 会检查 Content-Type 含 "application/json" 来决定
@@ -147,10 +171,13 @@ export default function cesiumAssets(options = {}) {
         }
       })
     },
-    // build: closeBundle 后复制到 dist/Cesium/
+    // build: closeBundle 后复制到 dist/Cesium/，再按清单剪枝
     closeBundle() {
       const outBase = resolve(resolvedOutDir || 'dist')
       const outDir = join(outBase, 'Cesium')
+      // 先清空：dist/Cesium 完全由这个插件拥有。
+      // 不清的话，上一版 Cesium 残留的文件会混进产物，让「产物 == 清单」的自检失真。
+      rmSync(outDir, { recursive: true, force: true })
       for (const sub of CESIUM_SUBDIRS) {
         const src = join(CESIUM_BUILD_DIR, sub)
         const dest = join(outDir, sub)
@@ -159,6 +186,65 @@ export default function cesiumAssets(options = {}) {
           console.log(`[cesium-assets] copied ${sub}/ -> ${dest}`)
         }
       }
+      pruneRuntime(outDir)
     },
   }
+}
+
+/**
+ * 按入库的剪枝清单裁掉 dist/Cesium 里本应用永远用不到的文件。
+ *
+ * 逃生舱：CESIUM_RUNTIME=full → 一个都不剪。
+ */
+function pruneRuntime(outDir) {
+  if (pruningDisabled()) {
+    console.log('[cesium-assets] CESIUM_RUNTIME=full → 不剪枝，dist/Cesium 保持完整运行时')
+    return
+  }
+  if (!existsSync(RUNTIME_MANIFEST)) {
+    console.warn(
+      `[cesium-assets] 找不到剪枝清单 ${RUNTIME_MANIFEST}，本次不剪枝。` +
+        '生成方式：node vite-plugins/cesium-prune.mjs --write',
+    )
+    return
+  }
+
+  const manifest = JSON.parse(readFileSync(RUNTIME_MANIFEST, 'utf8'))
+  const report = applyManifest({ runtimeRoot: outDir, manifest })
+
+  // 自检：产物里的文件集合必须与清单的 kept 集合一致。
+  const unexpected = report.unexpected.filter((rel) => rel !== PRUNE_REPORT_NAME)
+  const missingKept = report.missingKept
+  if (unexpected.length || missingKept.length) {
+    throw new Error(
+      '[cesium-assets] 剪枝结果与清单不一致 —— Cesium 版本或应用功能变了，剪枝清单需要重新生成。\n' +
+        `  多出来的文件：${unexpected.slice(0, 10).join(', ')}${unexpected.length > 10 ? ' …' : ''}\n` +
+        `  清单里却没有的文件：${missingKept.slice(0, 10).join(', ')}${missingKept.length > 10 ? ' …' : ''}\n` +
+        '  重新生成：node vite-plugins/cesium-prune.mjs --write',
+    )
+  }
+
+  writeFileSync(
+    join(outDir, PRUNE_REPORT_NAME),
+    JSON.stringify(
+      {
+        schema: 'smart-city/cesium-prune-report/1',
+        generatedAt: new Date().toISOString(),
+        cesiumVersion: manifest.cesiumVersion,
+        source: manifest.generatedFrom,
+        prunedFiles: report.pruned,
+        prunedBytes: report.prunedBytes,
+        keptFiles: report.remaining,
+        keptBytes: report.remainingBytes,
+        layers: manifest.layers,
+      },
+      null,
+      2,
+    ) + '\n',
+    'utf8',
+  )
+  console.log(
+    `[cesium-assets] 剪掉 ${report.pruned} 个文件 / ${report.prunedBytes} 字节，` +
+      `dist/Cesium 剩 ${report.remaining} 个 / ${report.remainingBytes} 字节`,
+  )
 }

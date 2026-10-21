@@ -34,7 +34,7 @@ npm run dev                             # http://localhost:5173/
 | 命令 | 说明 |
 |---|---|
 | `npm run dev` | 开发服务器，http://localhost:5173/ |
-| `npm run build` | 生产构建，产物在 `dist/`（Cesium 静态资源在 `dist/Cesium/`，实测 380 个文件；`dist/` 共 385 个文件、10.49 MB）；**默认不产 sourcemap**，要排障用 `SOURCEMAP=true npm run build` |
+| `npm run build` | 生产构建，产物在 `dist/`（Cesium 静态资源在 `dist/Cesium/`，剪枝后实测 **98 个文件**；`dist/` 共 104 个文件、7.67 MB）；**默认不产 sourcemap**，要排障用 `SOURCEMAP=true npm run build` |
 | `npm run preview` | 预览构建产物 |
 | `npm run lint` | ESLint **只检查不修改**（`eslint . --no-fix`） |
 | `npm run lint:fix` | ESLint 修复版（会改文件，按需使用） |
@@ -82,7 +82,9 @@ vue-tsc ^3.3.13（实装 3.3.13）、typescript-eslint ^8.72.0（实装 8.72.0�
 | `tsconfig.json` | TypeScript 严格模式配置（22 行）：`strict: true`、`noEmit: true`，`paths` 里的别名必须与 `vite.config.js` 一致 |
 | `src/env.d.ts` | `import.meta.env` 的类型（`/// <reference types="vite/client" />`） |
 | `vite.config.js` | dev 代理、`@`/`cesium` 别名、Cesium 独立 chunk、Vitest 配置；`build.sourcemap` 由 `SOURCEMAP` 环境变量控制、默认关 |
-| `vite-plugins/cesium-assets.js` | 自定义 Vite 插件：dev 提供 `/Cesium/*`，build 拷进 `dist/Cesium/` |
+| `vite-plugins/cesium-assets.js` | 自定义 Vite 插件：dev 提供 `/Cesium/*`，build 拷进 `dist/Cesium/` 并按剪枝清单裁剪 |
+| `vite-plugins/cesium-prune.mjs` | Cesium 运行时静态可达性分析器（4 种加载机制 + worker import 闭包）；也是重新生成剪枝清单的 CLI |
+| `cesium-runtime-manifest.json` | **入库**的剪枝清单：剪掉什么、留下什么、各自的理由 |
 | `src/router/index.ts` | `createWebHistory`，**目前 routes 为空** |
 
 > **别名的两处必须一致**：`vite.config.js` 的 `resolve.alias`（`@` → `./src`、
@@ -139,13 +141,16 @@ SOURCEMAP=true npm run build
 
 ### `dist/` 的体积口径
 
-实测（`dist/` 共 385 个文件 / **10.49 MB**）：
+实测（`dist/` 共 104 个文件 / **7.67 MB**，Plan C1 剪枝后重测）：
 
 | 口径 | 体积 | 文件数 | 说明 |
 |---|---|---|---|
 | **Vite 产物（应用自身）** | **3.92 MB** | 5 | `index.html`、`favicon.ico`、`assets/cesium-*.js`、`assets/index-*.js`、`assets/index-*.css`；**已达计划书的 < 5 MB** |
-| **自托管 Cesium 运行时** | 6.57 MB | 380 | `dist/Cesium/`，厂商运行时，不是应用产物；由 `vite-plugins/cesium-assets.js` 整棵拷贝 |
-| `dist/` 合计 | 10.49 MB | 385 | 计划书写的是 < 5 MB —— **按「整个 `dist/`」口径不达标，按「应用自身产物」口径达标** |
+| **自托管 Cesium 运行时** | 3.75 MB | 99 | `dist/Cesium/`：98 个运行时文件 + 1 个 `pruned-manifest.json` 排查报告；厂商运行时，不是应用产物；由 `vite-plugins/cesium-assets.js` 拷贝后**按剪枝清单裁剪** |
+| `dist/` 合计 | **7.67 MB** | 104 | 计划书写的是 < 5 MB —— **按「整个 `dist/`」口径不达标，按「应用自身产物」口径达标** |
+
+剪枝前是 10.49 MB / 385 个文件（Cesium 运行时 6.57 MB / 380 个文件）；
+**剪掉 282 个文件、2,979,559 字节**。
 
 说「产物体积」时要分清是**应用产物**还是**整个 `dist/`**。`assets/cesium-*.js`
 一个文件就占 3,973,988 字节（gzip 后约 1.07 MB 线上），是首屏最大的一块。
@@ -157,7 +162,8 @@ Vite 默认不提供这些文件，所以 `vite-plugins/cesium-assets.js` 负责
 
 - **dev**：中间件把 `/Cesium/*` 直接映射回 `node_modules/cesium/Build/Cesium`（带正确的
   Content-Type；不能走 `server.transformRequest`，它会把 `.json` 当 ES module 转译）。
-- **build**：`closeBundle` 之后把同一棵树拷进 `dist/Cesium/`（约 380 个文件）。
+- **build**：`closeBundle` 之后把同一棵树拷进 `dist/Cesium/`，**再按剪枝清单裁掉本应用
+  用不到的部分**（380 → 98 个文件）。
 
 `vite.config.js` 里 `vite-plugin-vue-devtools` 与该插件都挂在 `mode !== 'test'` 后面：
 去掉前者会让 Vitest 启动即崩，去掉后者会让插件在每次跑测试时把 Cesium 资源白拷一遍。
@@ -167,22 +173,61 @@ Vite 默认不提供这些文件，所以 `vite-plugins/cesium-assets.js` 负责
 `geocoder: false`、`baseLayer: false` 三项关掉会触发 ion 401 的功能，底图改用高德
 `UrlTemplateImageryProvider`。
 
+### Cesium 运行时的剪枝（Plan C1）
+
+`dist/Cesium/` 里有一大半文件本应用**永远用不到**（maki 地点图标、NaturalEarthII 的
+TMS 瓦片、3D Tiles 的 Draco/KTX2 解码器、几十个用不到的 worker 与各 widget 的独立 CSS）。
+裁掉它们，`dist/` 从 10.49 MB 降到 **7.67 MB**。
+
+| 东西 | 位置 | 说明 |
+|---|---|---|
+| 分析器 | `vite-plugins/cesium-prune.mjs` | Cesium 运行时的 4 种加载机制（路径字面量 / 模板串 / 目录字面量 / worker 裸名 + import 闭包）的静态可达性分析；也是 CLI |
+| 剪枝清单 | `cesium-runtime-manifest.json` | **入库**、可 review、可 diff；每条都带「为什么被剪 / 为什么被留」 |
+| 剪枝动作 | `vite-plugins/cesium-assets.js` 的 `closeBundle` | 先整棵拷贝，再按清单删；产物里写一份 `dist/Cesium/pruned-manifest.json` 排查报告 |
+| 回归验证 | 仓库根 `scripts/verify-cesium-runtime.mjs` | 10 个交互动作 + 零 404 + 被剪文件零命中 |
+| 清单自检 | 仓库根 `scripts/check-cesium-runtime-manifest.mjs` | 「产物 == 清单的 kept 集合」，CI 里跑 |
+
+**逃生舱**：环境变量 `CESIUM_RUNTIME=full` → 一个都不剪，`dist/Cesium` 保持完整的
+380 个文件（实测 6,890,404 字节）。要临时开某个 Cesium 特性时用它。
+
+```powershell
+# 临时要完整运行时
+$env:CESIUM_RUNTIME = 'full'; npm run build
+```
+
+**清单不会自己跟上 Cesium 版本**。升级 Cesium 或改了应用功能之后，重新生成一次：
+
+```bash
+cd Data-driven-modeling
+node vite-plugins/cesium-prune.mjs --write
+```
+
+构建时插件会自检「产物 == 清单的 kept 集合」，对不上**直接让构建失败** ——
+比默默多出一个文件强。CI 里还有一条同样的检查。
+
 ### 实际被请求了哪些 Cesium 文件
 
-真实 headless Chrome 实测（生产构建 + 后端单端口托管，2026-10-21）：
+真实 headless Chrome 实测（生产构建 + 后端单端口托管，跑完 10 个交互动作后，
+2026-10-21）：
 
-- 首屏一共打到 **375 条 `/Cesium/` 记录**，**47 个不同文件**
-  （Assets 10 / Widgets 9 / **Workers 28**）。
-- 其中 23 个是页面级请求（`Assets/IAU2006_XYS/`、6 张 SkyBox 贴图、
-  `approximateTerrainHeights.json`、`ion-credit.png`、`moonSmall.jpg`、
-  9 个 NavigationHelp 的 `.svg`、4 个 `Workers/*.js`）。
-- 另 24 个是 **worker chunk**（`Workers/chunk-*.js`）—— 它们在 **Web Worker 的
-  target** 里被加载，**页面级的抓包看不到它们**。这就是为什么「首屏只用到 23 个
-  Cesium 文件」这种说法是错的。
-- 相机会动的时候，**一次相机交互就能把某个「从未请求」的文件翻转成「已请求」**：
-  对照组（不动相机）22 个不同文件，实验组（拖拽 + 缩放 + 切视角）23 个，差集只有
-  `Workers/combineGeometry.js`。所以「本次没被请求」**不能**推出「运行时用不到」，
-  `dist/Cesium` 里那 316 个「运行时可达但本次没触发」的文件不可贸然删。
+- **实际加载集 = 65 个文件**（Assets 10 / Widgets 9 / **Workers 46**）。
+  这个数取的是**两个口径的并集**：
+  1. **CDP `Network.*` 事件**（能看到 worker 内部的请求，但 Chrome 的网络日志有条数上限，
+     高德瓦片会把早期的 Cesium 请求挤掉）；
+  2. **页面内 `performance.getEntriesByType('resource')`**（没有条数上限，但看不到 worker
+     target 内部的 chunk 导入）。
+  只用其中一个都会漏。
+- 抓 worker 请求**必须**发 `Target.setAutoAttach({ autoAttach: true, waitForDebuggerOnStart:
+  true, flatten: true })`，并对**每个 attach 进来的 worker target** 单独 `Network.enable`
+  —— 否则 worker 的请求一个都抓不到。
+- **判定必须在全部 10 个交互动作跑完之后做** —— 首屏只加载 42 个，跑完交互才 65 个。
+  多出来的包括 6 张 SkyBox 贴图、`IAU2006_XYS_18.json`、`ion-credit.png`、
+  `moonSmall.jpg` 与 9 个 NavigationHelp 的 `.svg`。
+- **「本次没被请求」≠「运行时用不到」**：一次相机交互就能把某个「从未请求」的文件翻转成
+  「已请求」。所以剪枝的判据是「静态不可达 ∪（静态可达 ∧ 属于已论证的组 ∧ 实测未加载 ∧
+  回归通过）」。
+- 剪枝后的实际加载集与剪枝前**逐文件相同**（65 个，一个不多一个不少），
+  282 个被剪文件**零命中**，**零 404**。
 
 ## 浏览器端度量
 
@@ -237,12 +282,14 @@ Chrome / 构建失败 / 后端起不来）→ 1，**不产出假数字**。
 
 `.github/workflows/verify.yml` 在 push 到 `main`、PR 或手动触发时跑前端这套：
 `npm ci` → `npm run lint` → `npm run typecheck` → `npm run build` → 断言 `dist/Cesium`
-的文件数是 **380**。Windows 与 Ubuntu 两个 job 各跑一遍；测试部分复用仓库根的
-`verify.ps1` / `verify.sh`。
+的文件数是 **98** → 断言**剪枝清单与产物一致**。Windows 与 Ubuntu 两个 job 各跑一遍；
+测试部分复用仓库根的 `verify.ps1` / `verify.sh`。
 
 - `npm ci` 走 `https://registry.npmmirror.com`（`package-lock.json` 已与 `package.json` 同步）。
-- `dist/Cesium` 断言的是**精确的 380**，不是「大于 0」——它能在 CI 上第一时间发现
-  `vite-plugins/cesium-assets.js` 的输出路径被改坏。
+- `dist/Cesium` 断言的是**精确的 98**（不含构建时写的 `pruned-manifest.json` 报告），
+  不是「大于 0」——它能在 CI 上第一时间发现 `vite-plugins/cesium-assets.js` 的输出路径被改坏。
+- 「剪枝清单与产物一致」那条检查跑的是 `node scripts/check-cesium-runtime-manifest.mjs`：
+  清单是入库的，Cesium 升级或应用功能变了都可能让它过期，这条检查就是那个哨兵。
 - 跑测试用的是 `npm test -- --run` / `npm run test:run`，**不要用 `npm test`**（watch 模式）。
 - **`npm run typecheck` 是阻塞门禁**：类型错误不会让 `npm run build` 失败（Vite 用
   esbuild 转译、不查类型），所以类型检查必须是独立的一步。
