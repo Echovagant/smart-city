@@ -238,6 +238,16 @@ export interface RoadTier {
  * ---------------------------------------------------------------------- */
 
 /**
+ * 读一个 OSM 标签值的回调。
+ *
+ * 同一份「建筑高度口径」要同时服务两条路：Cesium 实体上的 `PropertyBag`
+ * （取值要过 `getValue()`）与原始 GeoJSON 里的普通对象（取值就是字符串）。
+ * 做成回调，两条路共用**同一个**高度实现，口径不会分叉 ——
+ * 批量描边画出来的高度必须与建筑本体完全一致。
+ */
+export type OSMTagReader = (tag: string) => unknown
+
+/**
  * **缺口一：图元属性只声明了「包装后」的一侧。**
  *
  * 构造选项（`PolygonGraphics.ConstructorOptions` 等）允许裸值：
