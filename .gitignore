@@ -9,6 +9,14 @@ node_modules/
 __pycache__/
 *.pyc
 
+# 验收度量的生成物：覆盖率报告、度量脚本的产物目录。
+# 全部可复跑（scripts/measure-acceptance.py 会重新生成），不进版本管理。
+/.acceptance/
+htmlcov/
+.coverage
+.coverage.*
+coverage.json
+
 # 本地工作区：执行计划时的 git worktree 与 SDD 进度/交接文件
 /.worktrees/
 /.superpowers/
