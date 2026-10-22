@@ -49,11 +49,15 @@ const emit = defineEmits<{
 <style scoped>
 .dc-topbar {
   position: relative;
-  display: flex;
-  flex-direction: column;
+  /* 两行三列：标题在中间列（视口居中），读数带在右列，页签独占第二行。
+     读数带与页签**分属两行** —— 它们不再抢同一条水平线，
+     所以窄屏（1600px 上下）也不会出现「读数带压住最后一个页签」的重叠。 */
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  grid-template-rows: auto auto;
   align-items: center;
-  justify-content: center;
-  gap: 6px;
+  justify-items: center;
+  gap: 6px 0;
   height: 100%;
   padding: 8px 12px;
   background: linear-gradient(
@@ -66,6 +70,7 @@ const emit = defineEmits<{
 }
 
 .dc-topbar-title {
+  grid-area: 1 / 2 / 2 / 3;
   margin: 0;
   font-size: var(--dc-title-size, 20px);
   font-weight: 600;
@@ -77,11 +82,14 @@ const emit = defineEmits<{
 }
 
 .dc-tabs {
+  /* 页签行通栏居中：它与读数带不在同一行，横向互不影响。 */
+  grid-area: 2 / 1 / 3 / 4;
   display: flex;
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
   justify-content: center;
+  min-width: 0;
 }
 
 .dc-tab {
@@ -109,24 +117,25 @@ const emit = defineEmits<{
 }
 
 /* 右侧读数带：S1 的指标带 + 实时交通读数。
-   绝对定位在右上角，标题与页签仍然居中。
-   宽度要克制 —— 读数带一旦压到标题上，大屏就废了。 */
+   与标题**同一行**（页签在第二行），靠右对齐。
+   宽度要克制 —— 读数带一旦压到标题上，大屏就废了。
+   `min-width: 0` 让它能在窄屏里收缩（内部格子会截断，不换行）。 */
 .dc-topbar-extra {
-  position: absolute;
-  right: 12px;
-  top: 50%;
-  transform: translateY(-50%);
+  grid-area: 1 / 3 / 2 / 4;
+  justify-self: end;
+  align-self: center;
   display: flex;
   align-items: center;
   gap: 8px;
-  max-width: 44%;
+  min-width: 0;
+  max-width: 100%;
 }
 
 /* 窄屏：读数带压缩 —— 来源小字收窄（完整内容在 title 属性里），
    但**不隐藏数值**：隐藏 = 大屏上少了一组读数。 */
 @media (max-width: 1500px) {
   .dc-topbar-extra {
-    max-width: 40%;
+    max-width: 100%;
   }
 }
 </style>

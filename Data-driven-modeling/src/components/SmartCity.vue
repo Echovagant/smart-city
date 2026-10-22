@@ -1658,16 +1658,20 @@ onUnmounted(() => {
 }
 
 /* 城市运行指标带：**顶栏右侧**的一条紧凑横向读数带。
-   三个槽并排，每槽「标签 + 数值 + 来源小字」。 */
+   三个槽并排，每槽「标签 + 数值 + 来源小字」。
+   槽位**允许收缩**（`min-width: 0` + 省略号）：窄屏时宁可截断标签，
+   也不能把读数带撑到压住标题或页签。 */
 .metric-strip {
   display: flex;
   flex-wrap: nowrap;
   gap: 6px;
+  min-width: 0;
 }
 
 .metric-slot {
-  flex: 0 0 auto;
-  min-width: 84px;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
   padding: 4px 8px;
   background: var(--dc-panel-surface, rgba(5, 10, 20, 0.55));
   border: 1px solid rgba(22, 93, 255, 0.28);
@@ -1679,6 +1683,7 @@ onUnmounted(() => {
   align-items: baseline;
   justify-content: space-between;
   gap: 6px;
+  min-width: 0;
 }
 
 .metric-label {
@@ -1686,6 +1691,8 @@ onUnmounted(() => {
   letter-spacing: 0.1em;
   color: rgba(226, 232, 240, 0.72);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* 模型估算标记：橙色（预警色），与「实测」区分开 */
@@ -1754,7 +1761,7 @@ onUnmounted(() => {
 /* 来源标注：来源名 + 观测时间。悬停出完整信息（地址、观测时间、取数时间） */
 .metric-source {
   margin-top: 2px;
-  max-width: 104px;
+  max-width: 100%;
   font-size: 9px;
   line-height: 1.3;
   color: rgba(226, 232, 240, 0.42);
@@ -1770,6 +1777,7 @@ onUnmounted(() => {
   flex-wrap: nowrap;
   align-items: baseline;
   gap: 6px 8px;
+  min-width: 0;
   padding: 4px 8px;
   background: var(--dc-panel-surface, rgba(5, 10, 20, 0.55));
   border: 1px solid rgba(22, 93, 255, 0.28);
