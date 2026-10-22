@@ -45,7 +45,7 @@ npm run dev                             # http://localhost:5173/
 | `npm run lint:fix` | ESLint 修复版（会改文件，按需使用） |
 | `npm run typecheck` | `vue-tsc --noEmit` 类型检查（CI 里是**阻塞门禁**） |
 | `npm run format` | Prettier 格式化 `src/` |
-| `npm test -- --run` | 单次跑完测试（9 个文件 / **113 个用例**，全部是 `.ts`） |
+| `npm test -- --run` | 单次跑完测试（12 个文件 / **145 个用例**，全部是 `.ts`） |
 | `npm run test:run` | 同上，等价写法 |
 | `npm run test:coverage` | 跑测试并出覆盖率报告（v8 provider）；报告默认落在 `coverage/`（已 gitignore），要放到仓库外设 `COVERAGE_DIR` |
 | `npm test` | ⚠️ **watch 模式**，不会自己退出；脚本里不要用 |
@@ -73,18 +73,20 @@ vue-tsc ^3.3.13（实装 3.3.13）、typescript-eslint ^8.72.0（实装 8.72.0�
 
 > 覆盖率 `include` 写在 `vite.config.js` 里（`src/**/*.{js,ts,vue}`），**迁到 TypeScript
 > 之后要记得复查它** —— 原先只写了 `.{js,vue}`，源码全迁成 `.ts` 之后报告里就只剩 `.vue`
-> 了，看着漂亮、实际统计的是子集。当前全口径：语句 **96.67%**、函数 **96.23%**、分支 **82.01%**
+> 了，看着漂亮、实际统计的是子集。当前全口径：语句 **96.77%**、函数 **94.73%**、分支 **83.87%**
 > （含 `src/theme/dark.ts` 与 `src/theme/dashboard.ts`，语句与函数都是 100%）。
 
 ## 关键文件
 
 | 文件 | 作用 |
 |---|---|
-| `src/components/SmartCity.vue` | 唯一的功能组件：Cesium 视图、GeoJSON 加载、交通模拟、实时交通读数、**城市运行指标带**、鸟瞰↔平视切换、**相机缓慢自转**（`<script setup lang="ts">`）；大屏这一轮只改了它的**模板外层结构与样式**，Cesium 逻辑一行没动 |
-| `src/components/DashboardOverlay.vue` | **16:9 大屏骨架**：CSS Grid（顶栏 / 左列 / 中心场景 / 右列 / 底栏），面板浮在场景之上；overlay 容器 `pointer-events: none`，只有面板 `auto` |
+| `src/components/SmartCity.vue` | 唯一的功能组件：Cesium 视图、GeoJSON 加载、交通模拟、实时交通读数、**城市运行指标带**、**事件标记（光柱 + 脉冲环）与点击定位**、**页签联动场景**、鸟瞰↔平视切换、**相机缓慢自转**（`<script setup lang="ts">`） |
+| `src/components/DashboardOverlay.vue` | **16:9 大屏骨架**：CSS Grid（顶栏 / 左列 / 中心场景 / 右列 / 底栏），面板浮在场景之上；overlay 容器 `pointer-events: none`，只有面板 `auto`；把「点了一条事件」抛给上层 |
 | `src/components/dashboard/` | 大屏面板与图表（**纯 SVG，无图表库**）：`TopBar.vue` / `PanelCard.vue` / `MetricCard.vue` / `LineChart.vue` / `DonutChart.vue` / `BarChart.vue` / `EventStream.vue` |
 | `src/composables/useDashboardData.ts` | 页签 → 图表数据的**纯函数** `resolveTabView(tab, overview)`：不碰 Vue 响应式，好测；取不到的指标输出 `value: null` + `unavailable` |
 | `src/composables/useDashboardState.ts` | 页签状态（**模块级单例**）：`activeTabKey` / `setTab`，大屏与场景共用同一份 |
+| `src/composables/useEventStream.ts` | 事件流的**纯函数**辅助：`dedupeEvents()`（按 id 去重）、`formatEventTime()`（本地 HH:MM）、`explainEmptyEvents()`（**空态解释**：为什么没有事件） |
+| `src/composables/useSceneLinkage.ts` | 页签 → 场景联动的**纯函数**：`resolveSceneLinkage()` / `resolveFocusBuildingIds()`（焦点建筑来自**后端** `facilities[].members`） |
 | `src/theme/dashboard.ts` | 大屏**设计 token**（尺寸与排版：圆角 / 描边 / 内边距 / 列宽 / 行高 / 字号阶梯 / 间距）+ 图表色序 `CHART_COLORS`（只从 `DARK_PALETTE` 取）；颜色本身仍在 `dark.ts` |
 | `src/theme/dark.ts` | **深色大屏的色板与材质工厂**（`DARK_PALETTE` / `ROAD_COLORS` / 辉光材质 / 流动虚线材质 / 拥堵分档色 / CSS 变量注入）——视觉的唯一事实来源 |
 | `src/api/client.ts` | 极简 fetch 封装：超时（默认 15 s）、`ApiError` 规范化；请求结束时会摘掉挂在调用方 signal 上的 abort 监听器 |
@@ -164,6 +166,60 @@ vue-tsc ^3.3.13（实装 3.3.13）、typescript-eslint ^8.72.0（实装 8.72.0�
 > 后端实现在 `backend-python/city_data/`。**每个 metric 都必须带 source** ——
 > 改契约要同时改两边（没有共享 schema 文件）。
 
+## 派生事件流与场景联动
+
+右列的「实时事件流」里的每一条，都是后端从**真实指标派生**出来的
+（`GET /api/city/overview` 的 `events`）：
+
+```
+● 空气质量由优转为良   城心（数据范围中心）   提示   11:00
+```
+
+> **这个项目没有告警系统、没有摄像头、没有工单系统。**
+> 事件全部是从真实指标推导出来的（规则见后端 `city_data/events.py`），
+> **派生不出来就是空数组** —— 空事件流是数据现实，不是故障。
+> 空态会把「检查了哪些条件、为什么没触发」写清楚，例如
+> 「当前无触发事件 —— 最近 24 小时 AQI 等级未变化（当前「良」）；路网负载 63.5 低于阈值 80」。
+
+事件的三条硬约定：
+
+- **每条都带来源**：来源名、观测时间、`metric_key`、发生时间都在事件里（悬停可见）；
+- **id 稳定**：同一条事件重复派生时 id 不变 —— 前端按 id 去重，60 秒一次的轮询不会重复插入；
+- **模型估算派生的标「（模型估算）」**：目前只有路网负载这一类。
+
+### 场景里怎么标事件
+
+| 图元 | 做法 | 为什么 |
+|---|---|---|
+| **垂直光柱** | 300 m 高的竖直 polyline + 底下半径 40 m 的半透明圆柱 | 自己建的 `Primitive`（`asynchronous: false`）—— 实体的非贴地 polyline 会去请求被剪枝掉的 Cesium worker，404 会让整个页面停摆 |
+| **告警脉冲环** | 贴地（`clampToGround: true`）的 dynamic polyline，半径 20 → 260 m 扩张并淡出，周期 2.4 s | 贴地的 dynamic polyline 走 `GroundPolylinePrimitive`（主线程建几何），不碰被剪掉的 worker。**`clampToGround` 是硬要求** |
+| **点事件 → 定位** | 点事件流里的一行 → 相机飞到事件点正南 800 m、高 800 m、俯角 45°，1.2 s | 飞行期间暂停自转，飞行后从相机当前位置反算轨道状态（不硬拽回去） |
+
+场景里最多画 **8** 个标记，其中前 **3** 个带脉冲环（多了帧率会掉）。
+组件卸载时全部清掉 —— 重新挂载不叠加。
+
+### 页签切换 → 场景联动
+
+| 页签 | 场景动作 |
+|---|---|
+| 区域概览 | 无联动（全部正常显示） |
+| 空气质量 | 不联动（全市指标，没有空间定位），面板里写一句说明 |
+| 公共安全 | 高亮 `public_safety` + `medical` 分类的建筑，**其余压暗** |
+| 城市文旅 | 高亮 `heritage` 分类的建筑，其余压暗 |
+| 路网运行 | 不压暗建筑；把流动光效层的颜色提亮 |
+
+- **焦点建筑集合来自后端** `facilities[].members`（建筑的 OSM id），前端**按 id 匹配**，
+  **不重新实现 OSM 分类规则**（规则只写在后端 `city_data/sources/facilities.py`）。
+- **压暗 / 提亮只改一个材质 uniform**（`material.uniforms.color`）：Cesium 的
+  `Material._uniforms[name]` 是每帧求值的取值函数，所以换掉它下一帧就生效 ——
+  不重建几何、不换 appearance。
+- **绝不逐个改 3854 个建筑的 `polygon.material`**：那会打散 Cesium 的批处理 → 全量几何重建 → 卡死。
+- **切页签不移动相机**：用户没点事件，就不许乱飞。切回「区域概览」必须完全恢复。
+
+实测（2026-10-22，生产构建 + 真实 Chrome）：5 个页签的切换耗时
+**22.5 / 34.7 / 42.8 / 33.3 / 23.7 ms**（验收线 < 300 ms），有脉冲环时帧率
+**108.6 fps**（验收线 ≥ 30 fps），页面**没有** "Rendering has stopped."。
+
 ## 16:9 大屏骨架
 
 `DashboardOverlay.vue` 把面板摆成 **16:9** 的一屏：
@@ -227,7 +283,7 @@ vue-tsc ^3.3.13（实装 3.3.13）、typescript-eslint ^8.72.0（实装 8.72.0�
 | `LineChart.vue` | 折线 | `v` 为 null 的点**断线**（不补 0）；空数据 → 诚实的空态 |
 | `DonutChart.vue` | 环形（`stroke-dasharray`）+ 图例 | 圆心是**各段之和**；配色取自 `CHART_COLORS`（蓝青 6 档序列色） |
 | `BarChart.vue` | 横向条形 | `value` 为 null → 画成空槽并标「暂无」 |
-| `EventStream.vue` | 事件流 | 本轮 `events` 恒为空 → 诚实的空态「暂无事件数据」 |
+| `EventStream.vue` | 事件流 | 渲染**派生**事件（时间 · 标题 · 位置标签 · 严重度徽标），点一行抛 `select`；没有事件 → **说明性空态**（为什么没触发），不编条目 |
 
 **分类图表里一档橙红都没有**：普通分类（人行道 / 历史建筑 / 商业与办公）**不是告警**，
 画成橙色会被读成一条告警 —— 那是语义级错误。所以 `CHART_COLORS` 只取
@@ -260,13 +316,16 @@ SOURCEMAP=true npm run build
 
 ### `dist/` 的体积口径
 
-实测（`dist/` 共 104 个文件 / **7.71 MB**，Plan S2 大屏骨架后重测）：
+实测（`dist/` 共 104 个文件 / **7.72 MB**，Plan S3 事件流与场景联动后重测）：
 
 | 口径 | 体积 | 文件数 | 说明 |
 |---|---|---|---|
-| **Vite 产物（应用自身）** | **3.96 MB** | 5 | `index.html`、`favicon.ico`、`assets/cesium-*.js`、`assets/index-*.js`、`assets/index-*.css`；**已达计划书的 < 5 MB** |
-| **自托管 Cesium 运行时** | 3.73 MB | 99 | `dist/Cesium/`：98 个运行时文件 + 1 个 `pruned-manifest.json` 排查报告；厂商运行时，不是应用产物；由 `vite-plugins/cesium-assets.js` 拷贝后**按剪枝清单裁剪** |
-| `dist/` 合计 | **7.71 MB** | 104 | 计划书写的是 < 5 MB —— **按「整个 `dist/`」口径不达标，按「应用自身产物」口径达标** |
+| **Vite 产物（应用自身）** | **3.97 MB** | 5 | `index.html`、`favicon.ico`、`assets/cesium-*.js`、`assets/index-*.js`、`assets/index-*.css`；**已达计划书的 < 5 MB** |
+| **自托管 Cesium 运行时** | 3.75 MB | 99 | `dist/Cesium/`：98 个运行时文件 + 1 个 `pruned-manifest.json` 排查报告；厂商运行时，不是应用产物；由 `vite-plugins/cesium-assets.js` 拷贝后**按剪枝清单裁剪** |
+| `dist/` 合计 | **7.72 MB** | 104 | 计划书写的是 < 5 MB —— **按「整个 `dist/`」口径不达标，按「应用自身产物」口径达标** |
+
+Plan S3 相对上一版只多了 **7.3 KB**（8,088,665 → 8,096,141 字节），`dist/Cesium` 仍 **98** 个文件 ——
+事件标记与联动**没引任何依赖**（脉冲环与光柱都是 Cesium 现有图元）。
 
 剪枝前是 10.49 MB / 385 个文件（Cesium 运行时 6.57 MB / 380 个文件）；
 **剪掉 282 个文件、2,979,559 字节**。

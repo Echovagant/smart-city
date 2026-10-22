@@ -31,7 +31,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-from ..models import Metric, SourceInfo, SourceResult
+from ..models import EventLocation, Metric, RoadAnchor, SourceInfo, SourceResult
 
 # 数据目录：默认在 backend-python/geojson/。
 # 上层（main.py）会把实际使用的文件路径传进来，避免两处路径漂移。
@@ -41,6 +41,13 @@ DEFAULT_BUILDINGS_PATH = GEOJSON_DIR / "buildings.geojson"
 DEFAULT_ROADS_PATH = GEOJSON_DIR / "roads.geojson"
 
 SOURCE_NAME = "本地 OSM 路网数据"
+
+# 场景里「城市中心」的位置标签。
+#
+# 用的是**本地 OSM 快照的围中心**，不是行政区划意义上的市中心 ——
+# cnemc 给的北京市中心在北纬 40.06，离这片数据范围（39.905~39.925）有 15 公里，
+# 标在那里的话事件标记会落在场景之外。写清楚来源，界面上不误导人。
+SCENE_CENTER_LABEL = "城心（数据范围中心）"
 
 # 降级时占位指标的槽位（路网负载那一格）。
 SLOTS = (("road_load_index", "路网负载（模型估算）", "指数"),)
@@ -155,6 +162,99 @@ def area_km2(bbox: Tuple[float, float, float, float]) -> float:
     return width_m * height_m / 1_000_000.0
 
 
+def center_of(bbox: Tuple[float, float, float, float]) -> Tuple[float, float]:
+    """bbox 的中心经纬度。"""
+    west, south, east, north = bbox
+    return (west + east) / 2.0, (south + north) / 2.0
+
+
+def polyline_midpoint(coordinates: List[Any]) -> Optional[Tuple[float, float]]:
+    """折线**按弧长**的中点经纬度。
+
+    事件位置要落在真实几何上，不能用城心假装是路段 ——
+    所以这里按长度插值取中点，而不是取首尾坐标的平均。
+    """
+    points = [
+        (point[0], point[1])
+        for point in coordinates
+        if isinstance(point, (list, tuple)) and len(point) >= 2
+    ]
+    if not points:
+        return None
+    if len(points) < 2:
+        return points[0]
+    total = polyline_length_m(coordinates)
+    if total <= 0:
+        return points[0]
+    half = total / 2.0
+    walked = 0.0
+    for index in range(len(points) - 1):
+        segment = segment_length_m(points[index], points[index + 1])
+        if segment <= 0:
+            continue
+        if walked + segment >= half:
+            ratio = (half - walked) / segment
+            start = points[index]
+            end = points[index + 1]
+            return (
+                start[0] + (end[0] - start[0]) * ratio,
+                start[1] + (end[1] - start[1]) * ratio,
+            )
+        walked += segment
+    return points[-1]
+
+
+def longest_main_road_anchor(
+    road_features: List[Dict[str, Any]],
+) -> Optional[RoadAnchor]:
+    """等级最高且最长的一条道路的中点。
+
+    「等级最高」按 :data:`ROAD_TIERS` 的顺序（主干道 > 次干道 > 支路 > 人行道）；
+    同一等级里取最长的那条。面要素（广场、人造地面）不算道路。
+
+    找不到任何线要素时返回 ``None`` —— 调用方不许拿城心假装成路段。
+    """
+    tier_rank = {key: index for index, (key, _label, _tags) in enumerate(ROAD_TIERS)}
+    best_rank = -1
+    best_length = -1.0
+    best_feature: Optional[Dict[str, Any]] = None
+    best_coordinates: List[Any] = []
+
+    for feature in road_features:
+        if not isinstance(feature, dict):
+            continue
+        geometry = feature.get("geometry") or {}
+        if geometry.get("type") != "LineString":
+            continue
+        properties = feature.get("properties") or {}
+        rank = tier_rank.get(tier_of(properties.get("highway")), len(ROAD_TIERS))
+        length = polyline_length_m(geometry.get("coordinates") or [])
+        if length <= 0:
+            continue
+        # 等级优先（rank 越小等级越高），同级里比长度。
+        better = (
+            best_feature is None
+            or rank < best_rank
+            or (rank == best_rank and length > best_length)
+        )
+        if not better:
+            continue
+        best_rank = rank
+        best_length = length
+        best_feature = feature
+        best_coordinates = geometry.get("coordinates") or []
+
+    if best_feature is None:
+        return None
+    midpoint = polyline_midpoint(best_coordinates)
+    if midpoint is None:
+        return None
+    feature_id = best_feature.get("id")
+    label = "主路段（OSM %s）" % (feature_id if feature_id else "未知要素")
+    return RoadAnchor(lng=midpoint[0], lat=midpoint[1], label=label)
+
+
+
 def load_geojson(path: Path) -> Dict[str, Any]:
     """读一个 GeoJSON 文件。读不了就抛异常（上层会把它算作降级）。"""
     with open(path, "r", encoding="utf-8") as handle:
@@ -254,6 +354,16 @@ def fetch(
     bbox = bbox_of(building_features + road_features)
     coverage_area = area_km2(bbox) if bbox else None
 
+    # 场景参考点：城心（数据围中心）与最长主干道中点。
+    # 事件派生要用它们定位（规则 3 的位置必须是真实道路几何）。
+    scene_center: Optional[EventLocation] = None
+    if bbox is not None:
+        center_lng, center_lat = center_of(bbox)
+        scene_center = EventLocation(
+            lng=center_lng, lat=center_lat, label=SCENE_CENTER_LABEL
+        )
+    road_anchor = longest_main_road_anchor(road_features)
+
     metrics: List[Metric] = [
         Metric(
             key="building_count",
@@ -338,4 +448,9 @@ def fetch(
         )
     )
 
-    return SourceResult(metrics=metrics, series=[])
+    return SourceResult(
+        metrics=metrics,
+        series=[],
+        scene_center=scene_center,
+        road_anchor=road_anchor,
+    )

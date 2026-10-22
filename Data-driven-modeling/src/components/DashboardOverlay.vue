@@ -9,6 +9,8 @@ import PanelCard from './dashboard/PanelCard.vue'
 import TopBar from './dashboard/TopBar.vue'
 import { useDashboardState } from '@/composables/useDashboardState'
 import { resolveTabView } from '@/composables/useDashboardData'
+import { explainEmptyEvents } from '@/composables/useEventStream'
+import { resolveSceneLinkage } from '@/composables/useSceneLinkage'
 import { applyDashboardVariables } from '@/theme/dashboard'
 import type { CityEvent, CityOverview, DashboardTab } from '../../types/city'
 
@@ -31,8 +33,8 @@ const props = withDefaults(
     /**
      * 事件流。
      *
-     * 本轮（S2）恒为空 —— 本项目没有告警系统，线框稿里的事件是占位符，
-     * 编出来就是假数据。S3 接上真实事件源后才会有内容。
+     * **全部是从真实指标派生出来的**（后端 `city_data/events.py`）：
+     * 派生不出来就是空数组 —— 空事件流是数据现实，不是故障。
      */
     events?: CityEvent[]
   }>(),
@@ -43,13 +45,37 @@ const props = withDefaults(
   },
 )
 
+const emit = defineEmits<{
+  /** 用户点了事件流里的一条事件。 */
+  'select-event': [event: CityEvent]
+}>()
+
 const { tabs, activeTabKey, activeTab, setTab } = useDashboardState()
 
 /** 当前页签的视图数据（纯函数算出来的）。 */
 const view = computed(() => resolveTabView(activeTab.value, props.overview))
 
+/**
+ * 事件流为空时的文案。
+ *
+ * 说清楚「检查了哪些条件、为什么没触发」——
+ * 这比编三条假事件有信息量得多。
+ */
+const eventEmptyText = computed(() =>
+  props.overview ? explainEmptyEvents(props.overview) : '暂无事件数据',
+)
+
+/** 当前页签的联动说明（有的页签没有空间定位，就直说）。 */
+const linkageNote = computed(() => resolveSceneLinkage(activeTab.value.key).note)
+
+/** 事件流角标：有几条 / 没有。 */
+const eventBadge = computed(() => (props.events.length > 0 ? `${props.events.length} 条` : '派生'))
+
 /** 切页签。 */
 const onSelect = (tab: DashboardTab) => setTab(tab.key)
+
+/** 点了事件：抛给上层（上层负责把相机飞过去）。 */
+const onSelectEvent = (event: CityEvent) => emit('select-event', event)
 
 onMounted(() => {
   // 大屏的尺寸 token 写进 CSS 自定义属性（颜色由 dark.ts 的 applyThemeVariables 写）。
@@ -108,8 +134,9 @@ onMounted(() => {
             :center-value="view.donut.centerValue"
           />
         </PanelCard>
-        <PanelCard title="实时事件流" badge="待接入" class="dashboard-events-panel">
-          <EventStream :events="events" />
+        <PanelCard title="实时事件流" :badge="eventBadge" class="dashboard-events-panel">
+          <p v-if="linkageNote" class="dc-event-note">{{ linkageNote }}</p>
+          <EventStream :events="events" :empty-text="eventEmptyText" @select="onSelectEvent" />
         </PanelCard>
       </div>
 
@@ -255,6 +282,14 @@ onMounted(() => {
   flex: 1 1 auto;
   min-height: 90px;
   max-height: 340px;
+}
+
+/* 联动说明（例如「空气质量为全市指标，无空间定位」） */
+.dc-event-note {
+  margin: 0 0 6px;
+  font-size: var(--dc-label-size, 11px);
+  line-height: 1.4;
+  color: rgba(226, 232, 240, 0.5);
 }
 
 /* 底栏卡片：内部一行（条形图 + 右侧操作区），不滚动 */

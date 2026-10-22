@@ -6,7 +6,11 @@
     <div ref="cesiumContainer" class="cesium-container"></div>
 
     <!-- 16:9 大屏骨架：顶栏（标题 + 页签 + 读数带）/ 左列 / 中心场景 / 右列 / 通栏底栏 -->
-    <DashboardOverlay :overview="cityOverview">
+    <DashboardOverlay
+      :overview="cityOverview"
+      :events="events"
+      @select-event="flyToEvent"
+    >
       <!-- 顶栏右侧读数带：S1 的城市运行指标带 + 实时交通读数。
            类名与内容一个字没改，只是从左列搬到了顶栏右侧 ——
            同一个数字不在大屏上出现两次（左列的指标卡不再重复它们）。 -->
@@ -86,26 +90,36 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, reactive, markRaw, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, reactive, markRaw, nextTick, watch } from 'vue'
 import * as Cesium from 'cesium'
 import 'cesium/Build/Cesium/Widgets/widgets.css'
 import { useCityData } from '@/composables/useCityData'
+import { useDashboardState } from '@/composables/useDashboardState'
+import { dedupeEvents } from '@/composables/useEventStream'
+import { resolveFocusBuildingIds, resolveSceneLinkage } from '@/composables/useSceneLinkage'
 import DashboardOverlay from './DashboardOverlay.vue'
 import {
+  BUILDING_GLOW_DIMMED,
   DARK_PALETTE,
+  EVENT_COLORS,
+  FLOW_HIGHLIGHT,
   GRID_COLOR,
   ROAD_COLORS,
   applyThemeVariables,
   createFlowDashMaterial,
   createGlowMaterial,
   createPrimitiveGlowMaterial,
+  createPulseGlowMaterial,
   cssColor,
   flowDashLength,
   resolveTrafficTone,
+  setMaterialColor,
 } from '@/theme/dark'
-import type { TrafficTone } from '@/theme/dark'
+import type { EventTone, TrafficTone } from '@/theme/dark'
 import type {
+  CityEvent,
   CityViewState,
+  EventLocation,
   HeightMeters,
   LngLat,
   Metric,
@@ -379,6 +393,10 @@ const {
   error,
   loading,
 } = useCityData()
+
+// 大屏页签状态是**模块级单例**（S2 做的）：大屏与 3D 场景共用同一份 ——
+// 「页签切换 → 场景联动」就靠它。
+const { activeTabKey } = useDashboardState()
 
 // 把任意取值转成有限数字；null / undefined / 空串 / 非数字一律返回 null。
 function toFiniteNumber(value: unknown): number | null {
@@ -794,6 +812,15 @@ let interactionHandler: Cesium.ScreenSpaceEventHandler | null = null
 /** 建筑描边的批量 Primitive（一个绘制调用管全部 3854 栋楼）。 */
 let buildingGlowPrimitive: Cesium.Primitive | null = null
 
+/**
+ * 建筑描边的材质。
+ *
+ * 单独存一份是为了页签联动时能改它的 ``color`` uniform
+ * （其余建筑压暗 / 恢复）—— 改 uniform **不重建几何**，
+ * 也不去动 3854 个建筑的 ``polygon.material``（那会打散批处理 → 卡死）。
+ */
+let buildingGlowMaterial: Cesium.Material | null = null
+
 /** 城心在城心 ENU 平面上的经纬度换算系数。 */
 const centerLatRad = (cityConfig.center.lat * Math.PI) / 180
 
@@ -1071,17 +1098,15 @@ const BUILDING_GLOW_WIDTH = 2
 const BUILDING_OUTLINE_LIFT_M = 0.5
 
 /**
- * 批量生成建筑描边。
+ * 建筑描边的几何实例（每个面的外环，抬到顶面高度处）。
  *
- * **必须批量**：3854 栋楼各建一个描边实体，实体数会翻倍到 ~7700，帧率会掉。
- * 这里把所有楼的闭合轮廓合成**一个** Primitive（一次绘制调用）。
- *
- * 描边画在**顶面高度**处：俯视看到的是屋顶轮廓，斜视看到的是发光的屋顶边线。
+ * 「全量描边」与「焦点描边」（页签联动）**共用这一份实现** ——
+ * 两者的差别只是建筑集合，高度口径必须完全一致，
+ * 否则描边会与楼体对不齐。
  */
-const createBuildingGlow = (features: Array<{ geometry: { type: string; coordinates: unknown }; properties?: Record<string, unknown> }>) => {
-  const activeViewer = viewer.value
-  if (!activeViewer) return
-
+const collectBuildingOutlines = (
+  features: Array<{ geometry: { type: string; coordinates: unknown }; properties?: Record<string, unknown> }>,
+): Cesium.GeometryInstance[] => {
   const instances: Cesium.GeometryInstance[] = []
   for (const feature of features) {
     const geometry = feature.geometry
@@ -1120,13 +1145,33 @@ const createBuildingGlow = (features: Array<{ geometry: { type: string; coordina
       )
     }
   }
+  return instances
+}
+
+/**
+ * 批量生成建筑描边。
+ *
+ * **必须批量**：3854 栋楼各建一个描边实体，实体数会翻倍到 ~7700，帧率会掉。
+ * 这里把所有楼的闭合轮廓合成**一个** Primitive（一次绘制调用）。
+ *
+ * 描边画在**顶面高度**处：俯视看到的是屋顶轮廓，斜视看到的是发光的屋顶边线。
+ */
+const createBuildingGlow = (features: Array<{ geometry: { type: string; coordinates: unknown }; properties?: Record<string, unknown> }>) => {
+  const activeViewer = viewer.value
+  if (!activeViewer) return
+
+  const instances = collectBuildingOutlines(features)
   if (instances.length === 0) return
+
+  // 材质单独存一份：页签联动时要改它的 color uniform（压暗 / 恢复），
+  // 改 uniform 不重建几何 —— 这是最省的一刀。
+  buildingGlowMaterial = createPrimitiveGlowMaterial(DARK_PALETTE.accent, BUILDING_GLOW_POWER)
 
   // asynchronous: false —— 同步建几何，不去动剪过枝的 worker（见 createBaseGrid 的说明）。
   const primitive = new Cesium.Primitive({
     geometryInstances: instances,
     appearance: new Cesium.PolylineMaterialAppearance({
-      material: createPrimitiveGlowMaterial(DARK_PALETTE.accent, BUILDING_GLOW_POWER)
+      material: buildingGlowMaterial
     }),
     asynchronous: false
   })
@@ -1474,6 +1519,371 @@ const createTrafficSystem = () => {
 }
 
 /* ---------------------------------------------------------------------------
+ * 事件标记：告警脉冲环 + 垂直光柱
+ *
+ * 事件全部是后端从**真实指标派生**出来的（`/api/city/overview` 的 `events`）。
+ * 派生不出来就是空数组 —— 那时场景里什么也不画，**不许编造标记**。
+ * ------------------------------------------------------------------------- */
+
+/** 场景里最多渲染几个事件标记（列表里全给，场景里只给前几个）。 */
+const MAX_EVENT_MARKERS = 8
+
+/** 同时最多几个脉冲环（多了帧率会掉）。 */
+const MAX_PULSE_RINGS = 3
+
+/** 光柱的高度（米）。 */
+const EVENT_COLUMN_HEIGHT_M = 300
+
+/** 光柱的线宽（像素）。 */
+const EVENT_COLUMN_WIDTH_PX = 10
+
+/** 光柱的辉光强度。 */
+const EVENT_COLUMN_GLOW_POWER = 0.3
+
+/** 光柱底部的半透明圆柱半径（米）—— 只为增加体量感。 */
+const EVENT_VOLUME_RADIUS_M = 40
+
+/** 光柱底部的半透明圆柱透明度。 */
+const EVENT_VOLUME_ALPHA = 0.18
+
+/** 脉冲环的最大半径（米）。 */
+const PULSE_RING_RADIUS_M = 260
+
+/** 脉冲环的最小半径（米）：环不会缩到 0（半径为 0 时几何退化，Cesium 会跳过这一帧）。 */
+const PULSE_RING_MIN_RADIUS_M = 20
+
+/** 脉冲环一个完整周期的时长（毫秒）。 */
+const PULSE_PERIOD_MS = 2400
+
+/** 脉冲环的线宽（像素）。 */
+const PULSE_RING_WIDTH_PX = 3
+
+/** 脉冲环的起始透明度（随周期淡出）。 */
+const PULSE_RING_ALPHA = 0.9
+
+/** 脉冲环的圆周分段数。 */
+const PULSE_RING_SEGMENTS = 48
+
+/** 点击事件后相机飞到的高度（米，与鸟瞰视高同量级）。 */
+const EVENT_FOCUS_HEIGHT_M = 800
+
+/** 点击事件后飞行时长（秒）。 */
+const EVENT_FOCUS_DURATION_S = 1.2
+
+/** 点击事件后的俯角（弧度，负数 = 从上往下看 45°）。 */
+const EVENT_FOCUS_PITCH_RAD = -Math.PI / 4
+
+/**
+ * 事件标记的句柄。
+ *
+ * 组件卸载时必须**全部**清掉（重新挂载不许叠加）。
+ */
+interface EventMarker {
+  /** 光柱（自己建的 Primitive）。 */
+  column: Cesium.Primitive | null
+  /** 半透明体量圆柱（实体）。 */
+  volume: Cesium.Entity | null
+  /** 脉冲环（实体，**贴地**）。 */
+  ring: Cesium.Entity | null
+}
+
+/** 当前挂在场景里的事件标记。 */
+let eventMarkers: EventMarker[] = []
+
+/** 事件标记的签名（用来判断要不要重建）。 */
+let eventMarkerSignature = ''
+
+/**
+ * 派生事件（按 id 去重，新的在前）。
+ *
+ * 事件的 id 是**稳定**的（后端保证），所以 60 秒一次的轮询
+ * 不会在场景里越积越多标记。
+ */
+const events = computed<CityEvent[]>(() => dedupeEvents(cityOverview.value?.events))
+
+/** 圆环上的点（贴地，高度 0）。 */
+const ringPositions = (lng: number, lat: number, radius: number): Cesium.Cartesian3[] => {
+  const points: Cesium.Cartesian3[] = []
+  if (radius <= 0) return points
+  const latRad = (lat * Math.PI) / 180
+  const metersPerDegreeLng = METERS_PER_DEGREE_LAT * Math.cos(latRad)
+  for (let index = 0; index <= PULSE_RING_SEGMENTS; index++) {
+    const angle = (index / PULSE_RING_SEGMENTS) * Math.PI * 2
+    points.push(
+      Cesium.Cartesian3.fromDegrees(
+        lng + (Math.cos(angle) * radius) / metersPerDegreeLng,
+        lat + (Math.sin(angle) * radius) / METERS_PER_DEGREE_LAT,
+        0
+      )
+    )
+  }
+  return points
+}
+
+/**
+ * 事件光柱（自己建的 Primitive，`asynchronous: false`）。
+ *
+ * **必须自己建 Primitive**：实体的非贴地 polyline 走 Cesium 的异步路径 →
+ * 需要 `Workers/createPolylineGeometry.js` —— 那个 worker 被剪枝清单剪掉了 →
+ * 404 → 页面报 "Rendering has stopped."，整个城市画不出来。
+ */
+const createEventColumn = (
+  activeViewer: Cesium.Viewer,
+  location: EventLocation,
+  tone: EventTone
+): Cesium.Primitive => {
+  const geometry = new Cesium.PolylineGeometry({
+    positions: [
+      Cesium.Cartesian3.fromDegrees(location.lng, location.lat, 0),
+      Cesium.Cartesian3.fromDegrees(location.lng, location.lat, EVENT_COLUMN_HEIGHT_M),
+    ],
+    width: EVENT_COLUMN_WIDTH_PX,
+    vertexFormat: Cesium.PolylineMaterialAppearance.VERTEX_FORMAT,
+    arcType: Cesium.ArcType.RHUMB,
+  })
+  const primitive = new Cesium.Primitive({
+    geometryInstances: [new Cesium.GeometryInstance({ geometry })],
+    appearance: new Cesium.PolylineMaterialAppearance({
+      material: createPrimitiveGlowMaterial(EVENT_COLORS[tone], EVENT_COLUMN_GLOW_POWER, 0.85),
+    }),
+    asynchronous: false,
+  })
+  activeViewer.scene.primitives.add(primitive)
+  return primitive
+}
+
+/** 光柱底部的半透明圆柱（实体）—— 只为增加体量感。 */
+const createEventVolume = (
+  activeViewer: Cesium.Viewer,
+  location: EventLocation,
+  tone: EventTone
+): Cesium.Entity =>
+  activeViewer.entities.add({
+    name: 'EventVolume',
+    position: Cesium.Cartesian3.fromDegrees(
+      location.lng,
+      location.lat,
+      EVENT_COLUMN_HEIGHT_M / 2
+    ),
+    cylinder: {
+      length: EVENT_COLUMN_HEIGHT_M,
+      topRadius: 0,
+      bottomRadius: EVENT_VOLUME_RADIUS_M,
+      material: cssColor(EVENT_COLORS[tone], EVENT_VOLUME_ALPHA),
+    },
+  })
+
+/**
+ * 告警脉冲环（**贴地**的 dynamic polyline 实体）。
+ *
+ * `clampToGround: true` 是**硬要求**：贴地的 dynamic polyline 走
+ * `GroundPolylinePrimitive`（主线程建几何），不会去请求被剪掉的 worker；
+ * 非贴地的 dynamic polyline 会走异步 `Primitive` 路径 → 404 →
+ * "Rendering has stopped."（这是 S0 踩过的真 bug，不许重犯）。
+ */
+const createPulseRing = (
+  activeViewer: Cesium.Viewer,
+  event: CityEvent,
+  location: EventLocation,
+  tone: EventTone
+): Cesium.Entity => {
+  const startedAt = performance.now()
+  const phaseOf = () =>
+    ((performance.now() - startedAt) % PULSE_PERIOD_MS) / PULSE_PERIOD_MS
+  const positions = new Cesium.CallbackProperty(
+    () =>
+      ringPositions(
+        location.lng,
+        location.lat,
+        PULSE_RING_MIN_RADIUS_M +
+          (PULSE_RING_RADIUS_M - PULSE_RING_MIN_RADIUS_M) * phaseOf()
+      ),
+    false
+  )
+  return activeViewer.entities.add({
+    name: `EventPulse ${event.id}`,
+    polyline: {
+      positions,
+      width: PULSE_RING_WIDTH_PX,
+      // 辉光强度是常量（createPulseGlowMaterial 已经包好），
+      // 只有透明度随周期淡出（前半程基本不透明，后半程快速淡出）。
+      material: createPulseGlowMaterial(EVENT_COLORS[tone], () => {
+        const phase = phaseOf()
+        // 透明度按 (1 - phase)^0.6 衰减：前半程基本不透明（环看得见），
+        // 后半程快速淡出 —— 直线淡出会让环「刚变大就看不见了」。
+        return PULSE_RING_ALPHA * Math.pow(1 - phase, 0.6)
+      }),
+      clampToGround: true,
+    },
+  })
+}
+
+/** 清掉全部事件标记（组件卸载、切页签、事件集合变化时都要调）。 */
+const clearEventMarkers = () => {
+  const activeViewer = viewer.value
+  if (activeViewer) {
+    eventMarkers.forEach(marker => {
+      if (marker.column) activeViewer.scene.primitives.remove(marker.column)
+      if (marker.volume) activeViewer.entities.remove(marker.volume)
+      if (marker.ring) activeViewer.entities.remove(marker.ring)
+    })
+  }
+  eventMarkers = []
+}
+
+/**
+ * 按当前事件集合重建场景里的标记。
+ *
+ * 幂等：事件集合没变就不重建（不重复挂实体）。
+ */
+const syncEventMarkers = () => {
+  const activeViewer = viewer.value
+  if (!activeViewer) return
+  const list = events.value.slice(0, MAX_EVENT_MARKERS)
+  const signature = list
+    .map(event => `${event.id}@${event.location?.lng ?? ''},${event.location?.lat ?? ''}`)
+    .join('|')
+  if (signature === eventMarkerSignature) return
+  eventMarkerSignature = signature
+
+  clearEventMarkers()
+  list.forEach((event, index) => {
+    const location = event.location
+    if (!location) return
+    const tone = (event.level ?? 'info') as EventTone
+    eventMarkers.push({
+      column: createEventColumn(activeViewer, location, tone),
+      volume: createEventVolume(activeViewer, location, tone),
+      ring:
+        index < MAX_PULSE_RINGS
+          ? createPulseRing(activeViewer, event, location, tone)
+          : null,
+    })
+  })
+}
+
+/**
+ * 点击事件 → 相机飞到事件位置。
+ *
+ * - 飞行期间**不推进自转**（飞行与自转会互相打架）；
+ * - 飞行结束后自转从**相机当前位置**反算轨道状态，不硬拽回去；
+ * - 这是用户主动触发的，**不算「相机交互」** —— 不把自转永久停掉。
+ */
+const flyToEvent = (event: CityEvent) => {
+  const activeViewer = viewer.value
+  const location = event.location
+  if (!activeViewer || !location) return
+  // 目标高度 800 m、俯角 45° → 相机落在事件点正南 800 m 处，朝北俯视。
+  const southOffsetDeg = EVENT_FOCUS_HEIGHT_M / METERS_PER_DEGREE_LAT
+  const destination = Cesium.Cartesian3.fromDegrees(
+    location.lng,
+    location.lat - southOffsetDeg,
+    EVENT_FOCUS_HEIGHT_M
+  )
+  cameraFlightUntil =
+    performance.now() + EVENT_FOCUS_DURATION_S * 1000 + CAMERA_FLIGHT_GUARD_MS
+  cameraOrbit.needsResync = true
+  activeViewer.camera.flyTo({
+    destination,
+    orientation: { heading: 0, pitch: EVENT_FOCUS_PITCH_RAD, roll: 0 },
+    duration: EVENT_FOCUS_DURATION_S,
+  })
+}
+
+/* ---------------------------------------------------------------------------
+ * 页签切换 → 场景联动
+ *
+ * 「高亮 + 压暗」的实现顺序（按代价从低到高）：
+ * 1. **改材质 uniform**（本轮采用）：焦点建筑单独一条批量描边 Primitive，
+ *    其余建筑把**全量描边**的 color uniform 调暗 —— 建筑本体保持可见，
+ *    保留空间上下文。改 uniform 不重建几何，代价最低。
+ * 2. 换整个 appearance（可能触发批处理重建）。
+ * 3. 隐藏非焦点建筑（那是**隐藏**不是压暗，属于降级方案）。
+ *
+ * **绝不做**：逐个改 3854 个建筑的 `polygon.material` —— 那会打散批处理 →
+ * 全量几何重建 → 卡死。
+ * ------------------------------------------------------------------------- */
+
+/** 焦点建筑描边的辉光强度。 */
+const FOCUS_GLOW_POWER = 0.35
+
+/** 焦点建筑的批量描边 Primitive（一个绘制调用）。 */
+let focusGlowPrimitive: Cesium.Primitive | null = null
+
+/** 拆掉焦点描边。 */
+const removeFocusGlow = () => {
+  const activeViewer = viewer.value
+  if (focusGlowPrimitive && activeViewer) {
+    activeViewer.scene.primitives.remove(focusGlowPrimitive)
+  }
+  focusGlowPrimitive = null
+}
+
+/**
+ * 应用页签联动。
+ *
+ * 幂等：同一页签反复切不会叠加高亮。
+ */
+const applySceneLinkage = () => {
+  const linkage = resolveSceneLinkage(activeTabKey.value)
+
+  // 其余建筑的描边：压暗 / 恢复（只改一个 uniform）
+  setMaterialColor(
+    buildingGlowMaterial,
+    linkage.dimBuildings ? BUILDING_GLOW_DIMMED : DARK_PALETTE.accent
+  )
+
+  // 流动光效层：提亮 / 恢复
+  setMaterialColor(
+    flowMaterial,
+    linkage.brightenFlow ? FLOW_HIGHLIGHT : DARK_PALETTE.flow,
+    0.95
+  )
+
+  // 焦点描边：重建（建筑集合很小，重建成本可忽略）
+  removeFocusGlow()
+  const activeViewer = viewer.value
+  if (!activeViewer || linkage.focusFacilityKeys.length === 0) return
+
+  // 焦点集合来自**后端** `facilities[].members` —— 前端不重新实现分类规则。
+  const focusIds = resolveFocusBuildingIds(
+    cityOverview.value?.facilities,
+    linkage.focusFacilityKeys
+  )
+  if (focusIds.size === 0) return
+  const features = (buildings.value?.features ?? []).filter(
+    feature => feature.id !== undefined && focusIds.has(String(feature.id))
+  )
+  const instances = collectBuildingOutlines(features)
+  if (instances.length === 0) return
+  const primitive = new Cesium.Primitive({
+    geometryInstances: instances,
+    appearance: new Cesium.PolylineMaterialAppearance({
+      material: createPrimitiveGlowMaterial(DARK_PALETTE.flow, FOCUS_GLOW_POWER),
+    }),
+    asynchronous: false,
+  })
+  activeViewer.scene.primitives.add(primitive)
+  focusGlowPrimitive = primitive
+}
+
+// 页签切换 → 重新应用联动（不移动相机：用户没点事件，就不许乱飞）。
+watch(activeTabKey, () => {
+  applySceneLinkage()
+})
+
+// 事件集合变化 → 重建场景里的标记（光柱 + 脉冲环）。
+watch(events, () => {
+  syncEventMarkers()
+})
+
+// 数据到位后补一次：页签可能在建筑/指标加载完之前就切过了。
+watch([() => cityOverview.value, () => buildings.value], () => {
+  applySceneLinkage()
+  syncEventMarkers()
+})
+
+/* ---------------------------------------------------------------------------
  * 控制函数
  * ------------------------------------------------------------------------- */
 
@@ -1553,6 +1963,9 @@ onMounted(async () => {
     const extent = computeExtent(collections)
     if (extent) createBaseGrid(extent)
     createTrafficSystem()
+    // 事件标记与页签联动：场景装好了才挂（挂早了没有几何可定位）。
+    syncEventMarkers()
+    applySceneLinkage()
     // 城市真的入场景了：横幅可以撤了
     sceneAssembled.value = true
   } catch (error) {
@@ -1567,6 +1980,9 @@ onUnmounted(() => {
   cancelAllAnimations()
   stopTrafficPolling()
   stopCityOverviewPolling()
+  // 事件标记与焦点描边必须清掉：重新挂载不许叠加。
+  clearEventMarkers()
+  removeFocusGlow()
   if (interactionHandler) {
     interactionHandler.destroy()
     interactionHandler = null
