@@ -84,6 +84,35 @@ export const PANEL_SURFACE = 'rgba(5, 10, 20, 0.55)'
 /** 交通拥堵的分档色调。 */
 export type TrafficTone = 'ok' | 'warn' | 'alert'
 
+/** 事件严重度：提示 / 预警 / 告警。 */
+export type EventTone = 'info' | 'warn' | 'alert'
+
+/**
+ * 事件严重度 → 颜色。
+ *
+ * 沿用全项目的一条语义线：**蓝色只做强调、橙色只做预警、红色只做告警**。
+ * 「提示级」事件（空气质量等级变化）用强调蓝，不占用预警/告警色。
+ */
+export const EVENT_COLORS: Record<EventTone, string> = {
+  info: DARK_PALETTE.accent,
+  warn: DARK_PALETTE.warning,
+  alert: DARK_PALETTE.alert,
+}
+
+/**
+ * 建筑描边「压暗」后的颜色。
+ *
+ * 页签联动时非焦点建筑的描边要压暗（建筑本体保持可见，保留空间上下文）。
+ * 用材质 uniform 就地换色即可 —— **不重建几何，也不去动 3854 个建筑的
+ * `polygon.material`**（那会打散 Cesium 的批处理 → 全量几何重建 → 卡死）。
+ */
+export const BUILDING_GLOW_DIMMED = '#0b2550'
+
+/**
+ * 流动光效层在「路网运行」页签下的高亮颜色（比常态更亮）。
+ */
+export const FLOW_HIGHLIGHT = '#a5f3fc'
+
 /** 把色板里的 CSS 颜色转成 Cesium 颜色。 */
 export const cssColor = (hex: string, alpha = 1): Cesium.Color =>
   Cesium.Color.fromCssColorString(hex).withAlpha(alpha)
@@ -159,6 +188,49 @@ export const flowDashLength = (baseLength: number, periodSeconds: number): numbe
   const phase = (performance.now() / 1000 / periodSeconds) % 1
   const wave = phase < 0.5 ? phase * 2 : (1 - phase) * 2
   return baseLength * (0.6 + 0.8 * wave)
+}
+
+/**
+ * 脉冲环的辉光材质：透明度由回调驱动，辉光强度是**常量**。
+ *
+ * 两条约定：
+ * 1. **`glowPower` 必须包成 `ConstantProperty`** —— 裸数字会让 Cesium 判这条线
+ *    「非常量」，贴地几何每帧重建（见 `createGlowMaterial` 的说明）。
+ * 2. 透明度是动态的，所以这条线整体是 *dynamic*：贴地的 dynamic polyline 走
+ *    `GroundPolylinePrimitive`（主线程建几何），**不会**去请求被剪枝清单剪掉的
+ *    `Workers/createPolylineGeometry.js` —— 非贴地的 dynamic polyline 才会，
+ *    那个 404 会让整个渲染循环停摆（页面报 "Rendering has stopped."）。
+ *
+ * @param hex 环的颜色（取自 `EVENT_COLORS`）。
+ * @param alphaAt 回调：返回当前透明度（0~1）。
+ */
+export const createPulseGlowMaterial = (
+  hex: string,
+  alphaAt: () => number,
+  glowPower = 0.3,
+): Cesium.PolylineGlowMaterialProperty =>
+  new Cesium.PolylineGlowMaterialProperty({
+    color: new Cesium.CallbackProperty(() => cssColor(hex, alphaAt()), false),
+    glowPower: new Cesium.ConstantProperty(glowPower),
+  })
+
+/**
+ * 换掉一个 Primitive 材质里的颜色 uniform。
+ *
+ * **只改一个 uniform 值**：不重建几何、不换 appearance，代价最低。
+ * Cesium 的 `Material._uniforms[name]` 是个**每帧求值**的取值函数
+ * （`function() { return material.uniforms[name]; }`），
+ * 所以换掉 `uniforms.color` 下一帧就生效。
+ *
+ * 同款做法：流动光效层每帧改 `material.uniforms.dashLength` 推进相位。
+ */
+export const setMaterialColor = (
+  material: Cesium.Material | null | undefined,
+  hex: string,
+  alpha = 1,
+): void => {
+  if (!material || !material.uniforms) return
+  material.uniforms.color = cssColor(hex, alpha)
 }
 
 /**

@@ -1,13 +1,16 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { formatEventTime } from '@/composables/useEventStream'
 import type { CityEvent } from '../../../types/city'
 
 /**
  * 实时事件流。
  *
- * **本轮（S2）事件流只有空态**：本项目没有告警系统、没有摄像头，
- * 线框稿里的那些事件是占位符 —— 不许编出来。
- * S3 接上真实事件源之后，这里才会渲染事件条目。
+ * 每一条事件都是后端从**真实指标派生**出来的（`/api/city/overview` 的 `events`）。
+ * 本项目没有告警系统 —— 派生不出来就是**空数组**，所以空态要说清楚
+ * 「检查了哪些条件、为什么没触发」（文案由 `emptyText` 传入）。
+ *
+ * 点一行 → 向上抛 `select` → 相机飞到事件位置（由 `SmartCity.vue` 执行）。
  */
 const props = withDefaults(
   defineProps<{
@@ -21,27 +24,49 @@ const props = withDefaults(
   },
 )
 
+const emit = defineEmits<{
+  /** 用户点了某一条事件。 */
+  select: [event: CityEvent]
+}>()
+
 const isEmpty = computed(() => props.events.length === 0)
 
-/** 时间戳 → HH:MM:SS（本地时区）。解析不了就不显示。 */
-const formatClock = (value?: string): string | null => {
-  if (typeof value !== 'string' || !value.trim()) return null
-  const parsed = new Date(value)
-  if (Number.isNaN(parsed.getTime())) return null
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return `${pad(parsed.getHours())}:${pad(parsed.getMinutes())}:${pad(parsed.getSeconds())}`
+/** 严重度 → 徽标文案。 */
+const LEVEL_LABELS: Record<CityEvent['level'], string> = {
+  info: '提示',
+  warn: '预警',
+  alert: '告警',
 }
+
+/** 点一行：把事件抛给上层（上层负责飞相机）。 */
+const onSelect = (event: CityEvent) => emit('select', event)
 </script>
 
 <template>
   <div class="dc-event-stream">
     <p v-if="isEmpty" class="dc-event-empty">{{ emptyText }}</p>
     <ul v-else class="dc-event-list">
-      <li v-for="event in events" :key="event.id" class="dc-event-item" :class="`tone-${event.level}`">
-        <span class="dc-event-dot" aria-hidden="true"></span>
-        <span class="dc-event-title">{{ event.title }}</span>
-        <span v-if="event.detail" class="dc-event-detail">{{ event.detail }}</span>
-        <span v-if="formatClock(event.time)" class="dc-event-time">{{ formatClock(event.time) }}</span>
+      <li
+        v-for="event in events"
+        :key="event.id"
+        class="dc-event-row"
+        :class="`tone-${event.level}`"
+      >
+        <button
+          type="button"
+          class="dc-event-item"
+          :title="event.detail || event.title"
+          @click="onSelect(event)"
+        >
+          <span class="dc-event-dot" aria-hidden="true"></span>
+          <span class="dc-event-title">{{ event.title }}</span>
+          <span v-if="event.estimated" class="dc-event-estimate">（模型估算）</span>
+          <span v-if="event.location" class="dc-event-place">{{ event.location.label }}</span>
+          <span class="dc-event-badge">{{ LEVEL_LABELS[event.level] }}</span>
+          <span v-if="formatEventTime(event.time)" class="dc-event-time">{{
+            formatEventTime(event.time)
+          }}</span>
+        </button>
       </li>
     </ul>
   </div>
@@ -60,14 +85,27 @@ const formatClock = (value?: string): string | null => {
   list-style: none;
 }
 
+.dc-event-row {
+  border-bottom: 1px solid rgba(22, 93, 255, 0.18);
+}
+
 .dc-event-item {
   display: flex;
   align-items: baseline;
   gap: 6px;
+  width: 100%;
   padding: 4px 0;
-  border-bottom: 1px solid rgba(22, 93, 255, 0.18);
+  background: none;
+  border: 0;
+  font-family: inherit;
   font-size: var(--dc-label-size, 11px);
   color: rgba(226, 232, 240, 0.78);
+  text-align: left;
+  cursor: pointer;
+}
+
+.dc-event-item:hover {
+  color: var(--dc-text, #e2e8f0);
 }
 
 .dc-event-dot {
@@ -75,7 +113,7 @@ const formatClock = (value?: string): string | null => {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--dc-flow, #22d3ee);
+  background: var(--dc-accent, #165dff);
 }
 
 .tone-warn .dc-event-dot {
@@ -87,21 +125,52 @@ const formatClock = (value?: string): string | null => {
 }
 
 .dc-event-title {
-  flex: 1;
+  flex: 1 1 auto;
   min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.dc-event-detail {
+/* 模型估算标记：与 S1 指标带的说法一致（模型估算必须标出来） */
+.dc-event-estimate {
+  flex: 0 0 auto;
+  font-size: 9px;
+  white-space: nowrap;
+  color: var(--dc-warning, #f59e0b);
+}
+
+.dc-event-place {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 40%;
   color: rgba(226, 232, 240, 0.55);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
+/* 严重度徽标：提示=强调蓝 / 预警=预警橙 / 告警=告警红 */
+.dc-event-badge {
+  flex: 0 0 auto;
+  padding: 0 4px;
+  border: 1px solid currentColor;
+  border-radius: 2px;
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  color: var(--dc-accent, #165dff);
+}
+
+.tone-warn .dc-event-badge {
+  color: var(--dc-warning, #f59e0b);
+}
+
+.tone-alert .dc-event-badge {
+  color: var(--dc-alert, #f43f5e);
+}
+
 .dc-event-time {
+  flex: 0 0 auto;
   font-family: Consolas, 'SF Mono', 'Roboto Mono', ui-monospace, monospace;
   color: rgba(226, 232, 240, 0.5);
 }
@@ -110,6 +179,7 @@ const formatClock = (value?: string): string | null => {
 .dc-event-empty {
   margin: 0;
   font-size: var(--dc-label-size, 11px);
+  line-height: 1.5;
   color: rgba(226, 232, 240, 0.42);
 }
 </style>

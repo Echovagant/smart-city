@@ -25,9 +25,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from . import city_codes
+from . import city_codes, events
 from .http import SourceUnavailable
-from .models import CityOverview, FacilityCategory, Metric, Series, SourceResult, unavailable_metrics
+from .models import (
+    CityEvent,
+    CityOverview,
+    EventLocation,
+    FacilityCategory,
+    Metric,
+    RoadAnchor,
+    Series,
+    SourceResult,
+    unavailable_metrics,
+)
 from .sources import air_quality, facilities, road_network, weather
 
 logger = logging.getLogger(__name__)
@@ -262,6 +272,8 @@ async def build_city_overview(
     series: List[Series] = []
     facility_categories: List[FacilityCategory] = []
     degraded: List[str] = []
+    scene_center: Optional[EventLocation] = None
+    road_anchor: Optional[RoadAnchor] = None
     city_info: Dict[str, Any] = {
         "code": city_code,
         "name": city_codes.city_name(city_code),
@@ -289,6 +301,23 @@ async def build_city_overview(
         facility_categories.extend(outcome.facilities)
         if outcome.city:
             city_info = outcome.city
+        if outcome.scene_center is not None:
+            scene_center = outcome.scene_center
+        if outcome.road_anchor is not None:
+            road_anchor = outcome.road_anchor
+
+    # 事件流在**所有源都返回之后**派生（要一起看 AQI、序列、路网负载与天气）。
+    # 派生本身永不抛异常：任何一条规则出错只是跳过那条规则。
+    derived_events: List[CityEvent] = []
+    try:
+        derived_events = events.derive_events(
+            metrics,
+            series,
+            center=scene_center,
+            road_anchor=road_anchor,
+        )
+    except Exception:  # noqa: BLE001 —— 事件派生失败不许让端点 500
+        logger.warning("事件派生失败，事件流留空", exc_info=True)
 
     return CityOverview(
         city=city_info,
@@ -296,5 +325,6 @@ async def build_city_overview(
         metrics=_order_metrics(metrics),
         series=series,
         facilities=facility_categories,
+        events=derived_events,
         degraded=degraded,
     )

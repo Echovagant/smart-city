@@ -135,6 +135,32 @@ def count_by_category(features: List[Dict[str, Any]]) -> Dict[str, int]:
     return counts
 
 
+def members_by_category(features: List[Dict[str, Any]]) -> Dict[str, List[str]]:
+    """每个分类下建筑的 **OSM id** 列表。
+
+    场景联动（页签切换时高亮某类建筑）靠它 —— 前端按 id 匹配，
+    **不重新实现分类规则**（规则只写这一处）。
+
+    id 形如 ``relation/3464247``（来自 OSM 要素的 ``id`` 字段）。
+    没有 id 的要素进不了列表（前端无从匹配）；分类计数里仍然算数，
+    所以 ``count`` 与 ``len(members)`` 可能不等 —— 这是事实，不许凑数。
+    """
+    members: Dict[str, List[str]] = {
+        key: [] for key, _label, _rules in FACILITY_CATEGORIES
+    }
+    for feature in features:
+        if not isinstance(feature, dict):
+            continue
+        key = classify(feature.get("properties"))
+        if key is None:
+            continue
+        feature_id = feature.get("id")
+        if feature_id is None:
+            continue
+        members[key].append(str(feature_id))
+    return members
+
+
 def fetch(buildings_path: Optional[Path] = None) -> SourceResult:
     """统计本地建筑数据里的设施分类，产出分类计数 + 总数指标。
 
@@ -144,6 +170,7 @@ def fetch(buildings_path: Optional[Path] = None) -> SourceResult:
     data = load_geojson(path)
     features = data.get("features") or []
     counts = count_by_category(features)
+    members = members_by_category(features)
 
     observed_at = data.get("timestamp")
     source = SourceInfo(
@@ -162,6 +189,7 @@ def fetch(buildings_path: Optional[Path] = None) -> SourceResult:
             label=label,
             count=counts[key],
             criteria=criteria_of(key),
+            members=members.get(key, []),
             source=source,
         )
         for key, label, _rules in FACILITY_CATEGORIES

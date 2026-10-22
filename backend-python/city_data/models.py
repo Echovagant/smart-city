@@ -14,7 +14,7 @@
    后者是我们取到它的时间；缓存命中时 fetched_at 仍是**首次**取数的时间。
 """
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, Union
 
 from pydantic import BaseModel, Field
 
@@ -90,6 +90,9 @@ class FacilityCategory(BaseModel):
     - ``label``：中文名。
     - ``count``：命中该分类的建筑数。
     - ``criteria``：依据的 OSM 标签（例如 ``["building=hospital"]``）。
+    - ``members``：该分类下建筑的 **OSM id**（形如 ``relation/3464247``）。
+      场景联动（页签切换时高亮某类建筑）按 id 匹配，**前端不重新实现分类规则**。
+      没有成员时是**空数组**（不是 None）。
     - ``source``：**每个分类都要带来源** —— 没有来源的计数不许出现在响应里。
     """
 
@@ -97,7 +100,66 @@ class FacilityCategory(BaseModel):
     label: str
     count: int
     criteria: List[str] = Field(default_factory=list)
+    members: List[str] = Field(default_factory=list)
     source: SourceInfo
+
+
+class EventLocation(BaseModel):
+    """事件发生的位置。
+
+    - ``lng`` / ``lat``：WGS-84 经纬度（与场景里画的 OSM 原始坐标同坐标系）。
+    - ``label``：人话位置标签（「城市中心」/「主路段（OSM way/41662973）」）。
+    """
+
+    lng: float
+    lat: float
+    label: str
+
+
+class CityEvent(BaseModel):
+    """一条**派生**事件。
+
+    本项目**没有告警系统**：每一条事件都是从真实指标派生出来的，
+    派生不出来就是没有事件（空数组），不许编。
+
+    - ``id``：**稳定**的事件标识。同一条事件重复派生时 id 不变 ——
+      前端据此去重，轮询不会把同一条事件插进列表好几次。
+    - ``type``：事件类型（空气质量 / 天气 / 路网负载）。
+    - ``level``：严重度（提示 / 预警 / 告警）。
+    - ``title`` / ``detail``：标题与说明。
+    - ``time``：事件发生/判定时刻（ISO8601）。
+    - ``location``：位置。
+    - ``metric_key``：指回它依据的那个指标（可追溯）。
+    - ``source``：事件依据的那个源的 ``SourceInfo``（不是新造一个），
+      于是「取数时刻 / 观测时刻 / 是否估算」与指标完全一致。
+    - ``estimated``：这是**模型估算**派生的吗（路网负载是）。
+    """
+
+    id: str
+    type: Literal["air_quality", "weather", "road_load"]
+    level: Literal["info", "warn", "alert"]
+    title: str
+    detail: str = ""
+    time: str
+    location: EventLocation
+    metric_key: str
+    source: SourceInfo
+    estimated: bool = False
+
+
+@dataclass
+class RoadAnchor:
+    """一条真实道路上的锚点（内部结构，不出现在响应里）。
+
+    规则 3（路网负载超阈）的事件位置必须落在**真实几何**上，
+    不许用城心假装是路段。这个锚点由本地 OSM 快照算出：
+    等级最高且最长的一条线段的中点。
+    """
+
+    lng: float
+    lat: float
+    label: str
+
 
 
 class CityOverview(BaseModel):
@@ -109,6 +171,8 @@ class CityOverview(BaseModel):
     - ``series``：时间序列。
     - ``facilities``：设施分类计数（本地 OSM 快照，实测）。
       取不到时是**空数组**，不许编一个数字顶上。
+    - ``events``：**派生**事件流（Plan S3）。每条都带 source + metric_key + time。
+      派生不出来就是**空数组** —— 空事件流是数据现实，不是故障。
     - ``degraded``：**取不到的源的名字**。前端据此显示「数据源暂不可用」。
     """
 
@@ -117,6 +181,7 @@ class CityOverview(BaseModel):
     metrics: List[Metric] = Field(default_factory=list)
     series: List[Series] = Field(default_factory=list)
     facilities: List[FacilityCategory] = Field(default_factory=list)
+    events: List[CityEvent] = Field(default_factory=list)
     degraded: List[str] = Field(default_factory=list)
 
 
@@ -130,6 +195,10 @@ class SourceResult:
     city: Optional[Dict[str, Any]] = None
     # 设施分类计数（目前只有本地 OSM 快照源能给）。取不到时是空列表。
     facilities: List[FacilityCategory] = field(default_factory=list)
+    # 场景里的「城市中心」（本地 OSM 快照的围中心）。取不到时是 None。
+    scene_center: Optional[EventLocation] = None
+    # 最长主干道的中点（规则 3 的事件位置）。取不到时是 None。
+    road_anchor: Optional[RoadAnchor] = None
 
 
 def unavailable_metrics(

@@ -8,10 +8,14 @@ import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
 import type {
   BuildingsResponse,
+  CityEvent,
+  CityOverview,
   CityViewState,
   RoadsResponse,
   TrafficStatus,
 } from '../../../types/city'
+import { DEFAULT_TAB_KEY, useDashboardState } from '@/composables/useDashboardState'
+import { BUILDING_GLOW_DIMMED, DARK_PALETTE, FLOW_HIGHLIGHT } from '@/theme/dark'
 
 // 记录 Cesium mock 的关键调用，供"行为断言"使用。
 // vi.hoisted 让这个对象在 vi.mock 工厂（会被提升到 import 之前）里可用。
@@ -90,7 +94,15 @@ vi.mock('cesium', () => {
       // 真实 Cesium 的 fromDegrees 会把高度放进返回值的 z。
       // mock 必须保留高度，相机高度断言才有意义（每个调用返回新对象，
       // 车辆动画的"位置变了"断言也仍然成立）。
-      { fromDegrees: vi.fn((lng: number, lat: number, height: number) => ({ x: lng, y: lat, z: height })) },
+      // clone() 也是真实 API 的一部分：批量描边要靠它闭合轮廓。
+      {
+        fromDegrees: vi.fn((lng: number, lat: number, height: number) => ({
+          x: lng,
+          y: lat,
+          z: height,
+          clone: () => ({ x: lng, y: lat, z: height, clone: () => ({ x: lng, y: lat, z: height }) }),
+        })),
+      }
     ),
     Color,
     // ion 探针：任何读写都被记录，测试据此断言"全程没碰 ion"。
@@ -260,6 +272,7 @@ interface MockPrimitive {
       type: string
       uniforms: {
         color: { name?: string; alpha?: number }
+        glowPower?: number
         dashLength?: number
       }
     }
@@ -303,6 +316,12 @@ interface SmartCityVm {
   roads: RoadsResponse | null
   /** 实时交通读数。 */
   trafficStatus: TrafficStatus | null
+  /** 城市运行指标。 */
+  cityOverview: CityOverview | null
+  /** 派生事件（已按 id 去重）。 */
+  events: CityEvent[]
+  /** 点击事件 → 相机飞过去。 */
+  flyToEvent: (event: CityEvent) => void
   createTrafficSystem: () => void
   loadGeoJSONBuildings: () => Promise<void>
   loadGeoJSONRoads: () => Promise<void>
@@ -1544,5 +1563,298 @@ describe('大屏骨架的 DOM 契约', () => {
     expect(wrapper.findAll('.dc-tab')).toHaveLength(5)
 
     wrapper.unmount()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Plan S3：派生事件流 + 场景联动
+//
+// 全部是**行为断言**：mount 组件 → 触发真实交互 → 看可观察效果。
+// ---------------------------------------------------------------------------
+describe('派生事件流与场景联动', () => {
+  const SOURCE = {
+    name: '中国环境监测总站',
+    url: 'https://air.cnemc.cn:18007/x',
+    observed_at: '2026-10-22T04:00:00Z',
+    fetched_at: '2026-10-22T04:30:00Z',
+    realtime: true,
+    estimated: false,
+  }
+
+  /** 一栋带 OSM id 的建筑（焦点集合按 id 匹配）。 */
+  const buildingFeature = (id: string) => ({
+    type: 'Feature',
+    id,
+    properties: { building: 'yes' },
+    geometry: {
+      type: 'Polygon',
+      coordinates: [
+        [
+          [116.4, 39.91],
+          [116.401, 39.91],
+          [116.401, 39.911],
+          [116.4, 39.911],
+          [116.4, 39.91],
+        ],
+      ],
+    },
+  })
+
+  /** 一条主干道（1~2 级道路会叠一层流动光效）。 */
+  const roadFeature = {
+    type: 'Feature',
+    id: 'way/1',
+    properties: { highway: 'primary' },
+    geometry: {
+      type: 'LineString',
+      coordinates: [
+        [116.39, 39.9],
+        [116.42, 39.9],
+      ],
+    },
+  }
+
+  const eventPayload: CityEvent = {
+    id: 'air_quality:level_change:2026-10-22T03:00:00Z',
+    type: 'air_quality',
+    level: 'info',
+    title: '空气质量由优转为良',
+    detail: '按 AQI 分级标准换算',
+    time: '2026-10-22T03:00:00Z',
+    location: { lng: 116.4, lat: 39.915, label: '城心（数据范围中心）' },
+    metric_key: 'aqi_24h',
+    source: SOURCE,
+    estimated: false,
+  }
+
+  const overviewStub = (events: CityEvent[]): CityOverview => ({
+    city: { code: 110000, name: '北京市', latitude: 40.05, longitude: 116.4 },
+    generated_at: '2026-10-22T04:00:00Z',
+    metrics: [
+      {
+        key: 'aqi',
+        label: '空气质量',
+        value: 58,
+        unit: 'AQI',
+        level: 2,
+        level_label: '良',
+        source: SOURCE,
+      },
+      {
+        key: 'road_load_index',
+        label: '路网负载（模型估算）',
+        value: 63.5,
+        unit: '指数',
+        source: SOURCE,
+      },
+      {
+        key: 'weather_temp',
+        label: '气温',
+        value: 18,
+        unit: '℃',
+        source: SOURCE,
+      },
+    ],
+    series: [],
+    facilities: [
+      {
+        key: 'heritage',
+        label: '历史建筑',
+        count: 1,
+        criteria: [],
+        members: ['relation/1'],
+        source: SOURCE,
+      },
+    ],
+    events,
+    degraded: [],
+  })
+
+  /** 后端四个端点的桩：建筑带 id（焦点集合要按 id 匹配）。 */
+  const stubApi = (events: CityEvent[]) =>
+    vi.fn<(url: string, options: RequestInit) => Promise<Response>>((url) => {
+      const target = String(url)
+      if (target.includes('city/overview')) {
+        return Promise.resolve(jsonResponse(overviewStub(events)))
+      }
+      if (target.includes('traffic-status')) {
+        return Promise.resolve(jsonResponse({ status: 'normal' }))
+      }
+      if (target.includes('buildings')) {
+        return Promise.resolve(
+          jsonResponse({
+            type: 'FeatureCollection',
+            features: [buildingFeature('relation/1')],
+          }),
+        )
+      }
+      if (target.includes('roads')) {
+        return Promise.resolve(
+          jsonResponse({ type: 'FeatureCollection', features: [roadFeature] }),
+        )
+      }
+      return Promise.resolve(jsonResponse({ type: 'FeatureCollection', features: [] }))
+    })
+
+  /** 从 primitives.add 的调用里挑出某个颜色的 Primitive。 */
+  const primitiveWithColor = (
+    wrapper: VueWrapper<SmartCityVm>,
+    hex: string,
+  ): MockPrimitive | undefined => {
+    const calls = mockViewerOf(wrapper).scene.primitives.add.mock.calls
+    return calls
+      .map(([primitive]) => primitive)
+      .find(primitive => primitive.appearance.material.uniforms.color.name === hex)
+  }
+
+  /**
+   * 找出「焦点描边」那条 Primitive。
+   *
+   * 它是辉光材质 + 数据流色；流动光效层也是数据流色，但用的是虚线材质
+   * （没有 glowPower），所以靠 glowPower 区分。
+   */
+  const focusPrimitiveOf = (
+    wrapper: VueWrapper<SmartCityVm>,
+  ): MockPrimitive | undefined =>
+    mockViewerOf(wrapper)
+      .scene.primitives.add.mock.calls.map(([primitive]) => primitive)
+      .find(
+        primitive =>
+          primitive.appearance.material.uniforms.color.name === DARK_PALETTE.flow &&
+          primitive.appearance.material.uniforms.glowPower !== undefined,
+      )
+
+  beforeEach(() => {
+    // 页签状态是模块级单例：每个用例先复位。
+    useDashboardState().setTab(DEFAULT_TAB_KEY)
+  })
+
+  it('shows an explanatory empty state and no invented entry when there is no event', async () => {
+    installFetch(stubApi([]))
+
+    const wrapper = mountSmartCity()
+    await vi.waitFor(() => {
+      expect(wrapper.find('.dc-event-empty').exists()).toBe(true)
+    })
+
+    // 空态要说明「检查了哪些条件、为什么没触发」
+    await vi.waitFor(() => {
+      expect(wrapper.find('.dc-event-empty').text()).toContain('当前无触发事件')
+    })
+    const empty = wrapper.find('.dc-event-empty').text()
+    expect(empty).toContain('路网负载 63.5 低于阈值 80')
+    // 一条编造的条目都不许有
+    expect(wrapper.findAll('.dc-event-item')).toHaveLength(0)
+
+    wrapper.unmount()
+  })
+
+  it('renders the derived events and flies the camera to the clicked one', async () => {
+    installFetch(stubApi([eventPayload]))
+
+    const wrapper = mountSmartCity()
+    await vi.waitFor(() => {
+      expect(wrapper.findAll('.dc-event-item').length).toBe(1)
+    })
+
+    const item = wrapper.find('.dc-event-item')
+    expect(item.text()).toContain('空气质量由优转为良')
+    expect(item.text()).toContain('城心（数据范围中心）')
+
+    const flyTo = mockViewerOf(wrapper).camera.flyTo
+    flyTo.mockClear()
+    await item.trigger('click')
+
+    // 相机确实飞过去了：目标高度 800 m、俯角 45°、朝北
+    expect(flyTo).toHaveBeenCalledTimes(1)
+    const call = flyTo.mock.calls[0][0] as unknown as {
+      destination: { x: number; y: number; z: number }
+      orientation: { heading: number; pitch: number }
+      duration: number
+    }
+    expect(call.destination.z).toBe(800)
+    expect(call.destination.x).toBe(116.4)
+    expect(call.orientation.pitch).toBeCloseTo(-Math.PI / 4)
+    expect(call.orientation.heading).toBe(0)
+    expect(call.duration).toBe(1.2)
+
+    wrapper.unmount()
+  })
+
+  it('highlights the focused buildings on a tab and restores everything when switching back', async () => {
+    installFetch(stubApi([]))
+
+    const wrapper = mountSmartCity()
+    await vi.waitFor(() => {
+      expect(primitiveWithColor(wrapper, DARK_PALETTE.accent)).toBeDefined()
+    })
+
+    // 常态：描边是强调蓝，没有焦点描边
+    expect(primitiveWithColor(wrapper, DARK_PALETTE.accent)).toBeDefined()
+    expect(focusPrimitiveOf(wrapper)).toBeUndefined()
+
+    // 切到「城市文旅」：其余建筑压暗 + 焦点建筑高亮
+    useDashboardState().setTab('heritage')
+    await nextTick()
+
+    expect(primitiveWithColor(wrapper, BUILDING_GLOW_DIMMED)).toBeDefined()
+    const focus = focusPrimitiveOf(wrapper)
+    expect(focus).toBeDefined()
+    // 焦点集合来自后端 members（relation/1）→ 一栋楼一条轮廓
+    expect(focus!.geometryInstances).toHaveLength(1)
+
+    // 切回「区域概览」：完全恢复（不留残留的高亮）
+    useDashboardState().setTab(DEFAULT_TAB_KEY)
+    await nextTick()
+
+    expect(primitiveWithColor(wrapper, DARK_PALETTE.accent)).toBeDefined()
+    expect(primitiveWithColor(wrapper, BUILDING_GLOW_DIMMED)).toBeUndefined()
+    // 焦点描边必须从场景里拆掉
+    const removed = mockViewerOf(wrapper).scene.primitives.remove.mock.calls
+    expect(removed.map(([primitive]) => primitive)).toContain(focus)
+
+    wrapper.unmount()
+  })
+
+  it('brightens the flow layer on the network tab without dimming the buildings', async () => {
+    installFetch(stubApi([]))
+
+    const wrapper = mountSmartCity()
+    await vi.waitFor(() => {
+      expect(primitiveWithColor(wrapper, DARK_PALETTE.accent)).toBeDefined()
+    })
+
+    useDashboardState().setTab('network')
+    await nextTick()
+
+    // 建筑没有被压暗
+    expect(primitiveWithColor(wrapper, BUILDING_GLOW_DIMMED)).toBeUndefined()
+    // 流动光效层被提亮
+    const flow = mockViewerOf(wrapper).scene.primitives.add.mock.calls
+      .map(([primitive]) => primitive)
+      .find(primitive => primitive.appearance.material.type === 'PolylineDash')
+    expect(flow!.appearance.material.uniforms.color.name).toBe(FLOW_HIGHLIGHT)
+
+    wrapper.unmount()
+  })
+
+  it('leaves no leftover entities after unmount', async () => {
+    installFetch(stubApi([eventPayload]))
+
+    const wrapper = mountSmartCity()
+    await vi.waitFor(() => {
+      expect(wrapper.findAll('.dc-event-item').length).toBe(1)
+    })
+
+    const entitiesRemove = mockViewerOf(wrapper).entities.remove
+    const primitivesRemove = mockViewerOf(wrapper).scene.primitives.remove
+    entitiesRemove.mockClear()
+    primitivesRemove.mockClear()
+
+    wrapper.unmount()
+
+    // 事件标记（光柱 / 圆柱 / 脉冲环）必须全部清掉：重新挂载不许叠加
+    expect(entitiesRemove.mock.calls.length).toBeGreaterThan(0)
+    expect(primitivesRemove.mock.calls.length).toBeGreaterThan(0)
   })
 })

@@ -269,6 +269,13 @@ export interface CityOverview {
    * 取不到时是**空数组** —— 界面显示空态，不许编一个数字顶上。
    */
   facilities?: FacilityCategory[]
+  /**
+   * **派生**事件流（Plan S3）。
+   *
+   * 每一条都是从真实指标派生出来的，派生不出来就是**空数组** ——
+   * 空事件流是数据现实，不是故障。
+   */
+  events?: CityEvent[]
   /** 取不到的源的名字。 */
   degraded: string[]
 }
@@ -289,6 +296,13 @@ export interface FacilityCategory {
   count: number
   /** 依据的 OSM 标签，例如 ['building=hospital']。 */
   criteria?: string[]
+  /**
+   * 该分类下建筑的 **OSM id**（形如 `relation/3464247`）。
+   *
+   * 场景联动（页签切换时高亮某类建筑）按 id 匹配 ——
+   * 前端**不重新实现分类规则**（规则只写在后端）。
+   */
+  members?: string[]
   /** 来源标注（每个分类都要带）。 */
   source: SourceInfo
 }
@@ -306,14 +320,34 @@ export interface DashboardTab {
 }
 
 /**
+ * 事件的位置。
+ *
+ * 坐标是 **WGS-84**（与场景里画的 OSM 原始坐标同坐标系，不需要任何转换）。
+ */
+export interface EventLocation {
+  lng: number
+  lat: number
+  /** 人话位置标签（「城心（数据范围中心）」/「主路段（OSM way/41662973）」）。 */
+  label: string
+}
+
+/**
  * 事件流里的一条事件。
  *
- * 本轮（S2）事件流只有**空态** —— 本项目没有告警系统，
- * 不许编造事件。S3 接真实数据源后才会有内容。
+ * **每一条都是「派生」出来的** —— 本项目没有告警系统、没有摄像头，
+ * 事件全部从真实指标推导（见 `backend-python/city_data/events.py`）。
+ * 派生不出来就是空数组，**不许编造**。
  */
 export interface CityEvent {
-  /** 事件标识。 */
+  /**
+   * 事件标识。
+   *
+   * **必须稳定**：同一条事件重复派生时 id 不变 —— 前端据此去重，
+   * 60 秒一次的轮询不会把同一条事件插进列表好几次。
+   */
   id: string
+  /** 事件类型。 */
+  type?: 'air_quality' | 'weather' | 'road_load'
   /** 级别：提示 / 预警 / 告警。 */
   level: 'info' | 'warn' | 'alert'
   /** 标题。 */
@@ -322,6 +356,14 @@ export interface CityEvent {
   detail?: string
   /** 发生时间（ISO8601）。 */
   time?: string
+  /** 位置。 */
+  location?: EventLocation
+  /** 指回它依据的那个指标（可追溯）。 */
+  metric_key?: string
+  /** 来源标注。 */
+  source?: SourceInfo
+  /** 这是**模型估算**派生的吗（路网负载是）。 */
+  estimated?: boolean
 }
 
 /** 指标卡的色调。ok=常态，warn=预警，alert=告警，accent=强调。 */
