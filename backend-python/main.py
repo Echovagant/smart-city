@@ -21,6 +21,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 from data_processor import DataProcessorError, get_data_processor
+from city_data import aggregator as city_aggregator
+from city_data import city_codes
+from city_data.models import CityOverview
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +33,11 @@ DATA_UNAVAILABLE_DETAIL = "城市数据暂时不可用，请稍后重试"
 
 # bbox 参数非法时的统一文案，追加具体原因后返回。
 BBOX_DETAIL = "bbox 必须是 4 个逗号分隔的数字：min_lon,min_lat,max_lon,max_lat"
+
+# cityCode 参数非法时的统一文案。
+CITY_CODE_DETAIL = (
+    "cityCode 必须是 cnemc 城市/省份代码表里的六位代码，例如 110000（北京）"
+)
 
 # 响应压缩参数。必须与 Starlette 的 GZipMiddleware 保持一致：
 # 「全量响应缓存」预压缩出来的字节要靠这组参数与中间件自己压的结果对齐。
@@ -663,6 +671,57 @@ async def get_traffic_status():
     不挂 require_api_key：前端不携带 key，这个端点必须始终可访问。
     """
     return _traffic_status_payload(_now())
+
+
+@app.get("/api/city/overview")
+async def get_city_overview(cityCode: str = "110000"):
+    """城市运行指标聚合：空气质量 / 天气 / 路网静态指标。
+
+    - ``cityCode`` 默认 110000（北京），只接受 cnemc 城市/省份代码表里的值，
+      否则 400（参数问题与数据是否可用无关，先校验再取数）。
+    - **端点永不 500**：任何一个上游源失败或超时都只是把它放进 ``degraded``，
+      其余指标照常返回；取不到的指标值是 null，不拿 0 或旧值冒充。
+    - 响应带 ``Cache-Control``（前端 30 秒缓存）与 ``X-Data-Generated-At``（排查用）。
+    """
+    try:
+        code = int(cityCode)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail=CITY_CODE_DETAIL)
+    if not city_codes.is_known_city_code(code):
+        raise HTTPException(status_code=400, detail=CITY_CODE_DETAIL)
+
+    try:
+        overview = await city_aggregator.build_city_overview(
+            code,
+            buildings_path=_buildings_path,
+            roads_path=_roads_path,
+        )
+    except Exception:
+        # 聚合器已经把「单个源失败」处理成降级了；走到这里说明是聚合器自身的
+        # 意外错误。大屏不能因此白屏，所以返回一份「全部降级」的 200，
+        # 细节只写日志。
+        logger.exception("城市指标聚合失败")
+        overview = CityOverview(
+            city={
+                "code": code,
+                "name": city_codes.city_name(code),
+                "latitude": None,
+                "longitude": None,
+            },
+            generated_at=city_aggregator.now_iso(),
+            metrics=[],
+            series=[],
+            degraded=city_aggregator.source_names(code),
+        )
+
+    return JSONResponse(
+        content=jsonable_encoder(overview),
+        headers={
+            "Cache-Control": "public, max-age=30",
+            "X-Data-Generated-At": overview.generated_at,
+        },
+    )
+
 
 def mount_frontend(app: FastAPI, dist_dir: Path) -> bool:
     """把前端构建产物挂到根路径。返回是否挂载成功。

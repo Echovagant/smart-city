@@ -1238,3 +1238,180 @@ describe('深色底座', () => {
     wrapper.unmount()
   })
 })
+
+// ---------------------------------------------------------------------------
+// 城市运行指标带：AQI / 天气 / 路网负载，带来源标注与时间戳
+//
+// 三条硬要求（都是行为断言，不读源码文本）：
+// - 每个指标都显示来源与观测时间；
+// - 模型估算的指标标「（模型估算）」；
+// - 取不到的源显示「数据源暂不可用」，**不显示 0 或旧值**。
+// ---------------------------------------------------------------------------
+describe('SmartCity city metrics strip', () => {
+  /** 指标带上的三个来源标注。 */
+  const SOURCE_AIR = {
+    name: '中国环境监测总站',
+    url: 'https://air.cnemc.cn:18007/CityData/GetAllCityRealTimeAQIModels',
+    observed_at: '2026-10-22T04:00:00Z',
+    fetched_at: '2026-10-22T04:30:00Z',
+    realtime: true,
+    estimated: false,
+  }
+  const SOURCE_WEATHER = {
+    name: '中国天气网',
+    url: 'http://www.weather.com.cn/data/sk/101010100.html',
+    observed_at: '2026-10-21T09:05:00Z',
+    fetched_at: '2026-10-22T04:30:00Z',
+    realtime: false,
+    estimated: false,
+  }
+  const SOURCE_ROADS = {
+    name: '本地 OSM 路网数据',
+    url: 'backend-python/geojson/roads.geojson',
+    observed_at: '2026-06-21T11:40:10Z',
+    fetched_at: '2026-10-22T04:30:00Z',
+    realtime: false,
+    estimated: false,
+  }
+
+  /** 造一份城市指标载荷。`degrade` 里的 key 对应的指标值置 null。 */
+  const overviewPayload = (degrade: string[] = []) => {
+    const nulled = (key: string) => (degrade.includes(key) ? null : undefined)
+    const aqiValue = degrade.includes('aqi') ? null : 51
+    const tempValue = degrade.includes('weather_temp') ? null : 18
+    const loadValue = degrade.includes('road_load_index') ? null : 63.5
+    return {
+      city: { code: 110000, name: '北京市', latitude: 40.05, longitude: 116.4 },
+      generated_at: '2026-10-22T04:00:00Z',
+      metrics: [
+        {
+          key: 'aqi',
+          label: '空气质量',
+          value: aqiValue,
+          unit: 'AQI',
+          level: 2,
+          level_label: '良',
+          extra: {},
+          source: { ...SOURCE_AIR },
+        },
+        {
+          key: 'weather_temp',
+          label: '气温',
+          value: tempValue,
+          unit: '℃',
+          extra: {},
+          source: { ...SOURCE_WEATHER },
+        },
+        {
+          key: 'road_load_index',
+          label: '路网负载（模型估算）',
+          value: loadValue,
+          unit: '指数',
+          extra: {},
+          source: { ...SOURCE_ROADS, estimated: true },
+        },
+        {
+          key: 'road_length_km',
+          label: '路网总长',
+          value: nulled('road_length_km') === null ? null : 202.173,
+          unit: 'km',
+          extra: {},
+          source: { ...SOURCE_ROADS },
+        },
+      ],
+      series: [],
+      degraded: degrade.map(key => (key === 'aqi' ? '中国环境监测总站' : key)),
+    }
+  }
+
+  /** API 桩：城市指标端点返回给定载荷，其余端点走通用桩。 */
+  const stubOverviewFetch = (payload: unknown) =>
+    vi.fn<(url: string, options: RequestInit) => Promise<Response>>((url) => {
+      const target = String(url)
+      if (target.includes('city/overview')) return Promise.resolve(jsonResponse(payload))
+      if (target.includes('traffic-status')) return Promise.resolve(jsonResponse({ status: 'normal' }))
+      return Promise.resolve(jsonResponse({ type: 'FeatureCollection', features: [] }))
+    })
+
+  it('shows AQI, weather and road load with their sources and timestamps', async () => {
+    installFetch(stubOverviewFetch(overviewPayload()))
+
+    const wrapper = mountSmartCity()
+    await vi.waitFor(() => {
+      expect(wrapper.find('.metric-strip').exists()).toBe(true)
+    })
+
+    const text = wrapper.find('.metric-strip').text()
+    // 三个指标的值
+    expect(text).toContain('51')
+    expect(text).toContain('18℃')
+    expect(text).toContain('63.5')
+    // 空气质量的等级徽标
+    expect(text).toContain('良')
+    // 来源标注：来源名 + 观测时间
+    expect(text).toContain('中国环境监测总站')
+    expect(text).toContain('中国天气网')
+    expect(text).toContain('本地 OSM 路网数据')
+    // 模型估算项必须标出来
+    expect(text).toContain('（模型估算）')
+    // 路网负载的副标题：路网总长
+    expect(text).toContain('路网总长')
+    expect(text).not.toContain('undefined')
+    expect(text).not.toContain('NaN')
+
+    wrapper.unmount()
+  })
+
+  it('shows 数据源暂不可用 instead of a fake value when a source is degraded', async () => {
+    installFetch(stubOverviewFetch(overviewPayload(['aqi'])))
+
+    const wrapper = mountSmartCity()
+    await vi.waitFor(() => {
+      expect(wrapper.find('.metric-strip').exists()).toBe(true)
+    })
+
+    const slots = wrapper.findAll('.metric-slot')
+    const aqiSlot = slots[0]
+    expect(aqiSlot.text()).toContain('数据源暂不可用')
+    // **不许**显示 0 冒充取不到的指标（只看数值那一块，来源行里有时间戳）
+    const aqiValue = aqiSlot.find('.metric-value').text()
+    expect(aqiValue).toBe('数据源暂不可用')
+    expect(aqiValue).not.toContain('0')
+    // 没取到数据就不知道分级，不显示上一档的「良」
+    expect(aqiSlot.find('.metric-badge').exists()).toBe(false)
+    // 其它源照常显示
+    expect(slots[1].text()).toContain('18℃')
+
+    wrapper.unmount()
+  })
+
+  it('marks a stale source as not realtime', async () => {
+    installFetch(stubOverviewFetch(overviewPayload()))
+
+    const wrapper = mountSmartCity()
+    await vi.waitFor(() => {
+      expect(wrapper.find('.metric-strip').exists()).toBe(true)
+    })
+
+    // 天气源的上游时间戳不新鲜 —— 界面必须如实说，不能装作实时
+    const slots = wrapper.findAll('.metric-slot')
+    expect(slots[1].text()).toContain('非实时')
+    expect(slots[0].text()).not.toContain('非实时')
+
+    wrapper.unmount()
+  })
+
+  it('renders no metric strip before the overview arrives', async () => {
+    installFetch(stubOverviewFetch(overviewPayload()))
+
+    const wrapper = mountSmartCity()
+    // 数据还没到时不显示任何数字（更不能显示 0）
+    expect(wrapper.find('.metric-strip').exists()).toBe(false)
+
+    await vi.waitFor(() => {
+      expect(wrapper.find('.metric-strip').exists()).toBe(true)
+    })
+
+    wrapper.unmount()
+  })
+})

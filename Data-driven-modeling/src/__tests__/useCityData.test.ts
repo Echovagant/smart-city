@@ -7,6 +7,33 @@ import { ApiError } from '@/api/client'
 
 const originalFetch = globalThis.fetch
 
+/** 城市指标端点的一份最小载荷。 */
+const overviewPayload = {
+  city: { code: 110000, name: '北京市', latitude: 40.05, longitude: 116.4 },
+  generated_at: '2026-10-22T04:00:00Z',
+  metrics: [
+    {
+      key: 'aqi',
+      label: '空气质量',
+      value: 51,
+      unit: 'AQI',
+      level: 2,
+      level_label: '良',
+      extra: {},
+      source: {
+        name: '中国环境监测总站',
+        url: 'https://air.cnemc.cn:18007/CityData/GetAllCityRealTimeAQIModels',
+        observed_at: '2026-10-22T04:00:00Z',
+        fetched_at: '2026-10-22T04:30:00Z',
+        realtime: true,
+        estimated: false,
+      },
+    },
+  ],
+  series: [],
+  degraded: [],
+}
+
 /** 本文件里的 fetch 桩。 */
 let fetchMock: Mock<typeof fetch>
 
@@ -133,5 +160,45 @@ describe('useCityData', () => {
     expect(roads.value).toBeNull()
     expect(trafficStatus.value).toBeNull()
     expect(error.value).toBeNull()
+  })
+
+  it('loadCityOverview stores the overview payload', async () => {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(overviewPayload), { status: 200 }))
+
+    const { cityOverview, cityOverviewError, loadCityOverview } = withSetup(useCityData)
+    await loadCityOverview()
+
+    expect(cityOverview.value?.metrics).toHaveLength(1)
+    expect(cityOverview.value?.metrics[0].source.name).toBe('中国环境监测总站')
+    expect(cityOverviewError.value).toBeNull()
+    const urls = fetchMock.mock.calls.map(call => call[0])
+    expect(urls).toContain('/api/city/overview')
+  })
+
+  it('loadCityOverview records its own error without failing the whole scene', async () => {
+    // 城市指标走外部上游，挂了只影响指标带 —— 3D 城市本身还是好的，
+    // 所以不能把它塞进全局 error 横幅。
+    fetchMock.mockRejectedValue(new TypeError('Failed to fetch'))
+
+    const { cityOverview, cityOverviewError, error, loadCityOverview } = withSetup(useCityData)
+    await loadCityOverview()
+
+    expect(cityOverview.value).toBeNull()
+    expect(cityOverviewError.value).toBeInstanceOf(ApiError)
+    expect(error.value).toBeNull()
+  })
+
+  it('refreshCityOverview keeps the previous reading when the request fails', async () => {
+    fetchMock
+      .mockResolvedValueOnce(new Response(JSON.stringify(overviewPayload), { status: 200 }))
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+
+    const { cityOverview, refreshCityOverview } = withSetup(useCityData)
+    await refreshCityOverview()
+    expect(cityOverview.value).not.toBeNull()
+
+    // 轮询失败时保留上一次的读数（拿旧值冒充新值是不行的，但也别清空）
+    await refreshCityOverview()
+    expect(cityOverview.value).not.toBeNull()
   })
 })

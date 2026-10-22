@@ -11,10 +11,16 @@
 backend-python/
 ├── main.py            # FastAPI 应用主入口（路由、bbox 校验、缓存、安全响应头）
 ├── data_processor.py  # GeoJSON 加载 / 空间过滤 / 建筑统计
+├── city_data/         # 城市运行指标数据层（公开数据源 + 聚合 + 降级）
+│   ├── models.py      #   Pydantic 契约（每个指标都必须带 source）
+│   ├── http.py        #   只用标准库的 JSON 取数封装
+│   ├── city_codes.py  #   cnemc 城市/省份代码表静态快照（参数校验用）
+│   ├── aggregator.py  #   并发取数 + 缓存 + 降级
+│   └── sources/       #   一个源一个模块（空气质量 / 天气 / 本地路网）
 ├── scripts/
 │   ├── fetch_osm_data.py  # 从 Overpass API 抓 OSM 数据转 GeoJSON
 │   └── README.md          # 抓取脚本的用法与注意事项
-├── tests/             # pytest 测试（12 个 `test_*.py` 用例文件 + `conftest.py`）
+├── tests/             # pytest 测试（14 个 `test_*.py` 用例文件 + `conftest.py`）
 ├── pyproject.toml     # pytest 配置
 ├── requirements.txt   # 运行时依赖
 ├── requirements-dev.txt # 测试依赖（pytest、httpx、pytest-cov）
@@ -26,7 +32,7 @@ backend-python/
 
 ## 功能特性
 
-- 提供建筑、道路、交通状态三个数据接口
+- 提供建筑、道路、交通状态三个数据接口，外加**城市运行指标聚合**接口
 - 支持按 `bbox` 空间过滤，参数非法一律返回 400 并附中文原因
 - **三级缓存**：解析后的原始 GeoJSON → 按 bbox 的过滤结果（容量上限 8 的 LRU）→ **不带 bbox 的全量响应序列化结果**（明文字节 + 预压缩的 gzip 字节），全部模块级、全部由 `main._clear_caches()` 清空
 - 全量 `/api/buildings` 的 **P95 从 342.9 ms 降到 17.1 ms**（gzip 客户端；identity 客户端 234.8 ms → 20.4 ms），线缆字节数前后完全一致
@@ -37,6 +43,9 @@ backend-python/
 - 响应开启 gzip 压缩（Starlette 自带的 `GZipMiddleware`，`minimum_size=1000`，零新增依赖）：`/api/buildings` 从 1341 KB 压到 219 KB，`/api/roads` 从 687 KB 压到 110 KB
 - 每个响应都带三个安全响应头（`X-Content-Type-Options`、`Referrer-Policy`、`X-Frame-Options`）；CSP **只做 report-only 观测，默认关闭**
 - `/api/traffic-status` 返回**随时间变化的真实读数**（不再是写死的占位值），前端每 5 秒轮询一次
+- `/api/city/overview` 接入**免凭据的公开数据源**（中国环境监测总站 / 中国天气网）与本地 OSM 数据，
+  **每个指标都带来源标注与时间戳**，模型估算项标 `estimated: true`，
+  取不到的源进 `degraded`（**端点永不 500**），零新增依赖
 
 ## 快速开始
 
@@ -108,7 +117,7 @@ CSP_REPORT_ONLY=
 ```
 
 > **数据目录不在这里配**：`DATA_DIR` 与 `GEOJSON_DIR` 是 `main.py` 里的硬编码模块常量
-> （`main.py:87-89`），指向 `backend-python/data` 与 `backend-python/geojson`，
+> （`main.py:95-97`），指向 `backend-python/data` 与 `backend-python/geojson`，
 > 在 `.env` 里写这两项**没有任何效果**。要迁移数据位置就改 `main.py` 里的常量。
 
 ### 3. 准备必需的数据文件
@@ -134,7 +143,7 @@ cd backend-python
 
 **文件缺失或损坏的后果**：`/api/buildings` 与 `/api/roads` 会返回 **503**
 （统一文案「城市数据暂时不可用，请稍后重试」），而不是空集合 —— 详见
-`main.py:543-546` 与 `main.py:558-560`。
+`main.py:551-554` 与 `main.py:566-568`。
 
 > **署名**：OSM 数据遵循 ODbL，任何展示这份数据的界面或文档都必须署名
 > "© OpenStreetMap contributors"（见 `scripts/README.md`）。
@@ -204,7 +213,7 @@ cd ../backend-python && ./.venv/Scripts/python.exe main.py
 
 ### 安全响应头（默认开启）
 
-每个响应都自动带上三个头（`main.SECURITY_HEADERS`，`main.py:48-52`）：
+每个响应都自动带上三个头（`main.SECURITY_HEADERS`，`main.py:56-60`）：
 
 | 响应头 | 值 | 作用 |
 |---|---|---|
@@ -212,9 +221,9 @@ cd ../backend-python && ./.venv/Scripts/python.exe main.py
 | `Referrer-Policy` | `strict-origin-when-cross-origin` | 页面里的高德瓦片请求会把 Referer 带给第三方，收紧它 |
 | `X-Frame-Options` | `SAMEORIGIN` | 阻止被 iframe 嵌套（点击劫持） |
 
-实现在 `main.SecurityHeadersMiddleware`（`main.py:176-202`）——**纯 ASGI 中间件**，
+实现在 `main.SecurityHeadersMiddleware`（`main.py:184-210`）——**纯 ASGI 中间件**，
 不是 `BaseHTTPMiddleware`（后者会把响应体包成流，改变字节层面的行为）。
-中间件注册在 `GZipMiddleware` 之后（`main.py:245`），所以它看到的是已经压缩完的
+中间件注册在 `GZipMiddleware` 之后（`main.py:253`），所以它看到的是已经压缩完的
 最终响应。实测 6 个端点 × gzip/identity：加头**不改变**响应体、content-type、
 content-length 与 gzip 行为（逐字节相同）。
 
@@ -224,7 +233,7 @@ content-length 与 gzip 行为（逐字节相同）。
 `Content-Security-Policy`。**
 
 设了 `CSP_REPORT_ONLY=<策略>` 之后，每个响应会多带一个
-`Content-Security-Policy-Report-Only` 头（`main.py:65`、`:163-173`）。
+`Content-Security-Policy-Report-Only` 头（`main.py:73`、`:171-181`）。
 report-only **不拦截**任何东西，只让浏览器把违规报出来 —— 这是先看清 Cesium
 实际需要什么、再决定要不要升级成强制策略的观测手段。
 
@@ -271,6 +280,7 @@ report-only **不拦截**任何东西，只让浏览器把违规报出来 ——
 - `GET /api/buildings` —— 获取建筑数据
 - `GET /api/roads` —— 获取道路数据
 - `GET /api/traffic-status` —— 获取交通状态（**值由时间确定性推导，随时间变化**，不再是写死的固定值）
+- `GET /api/city/overview?cityCode=110000` —— **城市运行指标聚合**（空气质量 / 天气 / 路网静态指标），每个指标都带来源标注与时间戳
 
 `/api/traffic-status` 不校验 API key（前端不携带 key，这个端点必须始终可访问）。
 响应体 5 个键，120 字节左右：
@@ -295,13 +305,92 @@ report-only **不拦截**任何东西，只让浏览器把违规报出来 ——
 }
 ```
 
-值由 `_traffic_status_payload(now)` 这个**纯函数**推导（`main.py:638-653`）：三个周期
+值由 `_traffic_status_payload(now)` 这个**纯函数**推导（`main.py:646-661`）：三个周期
 互不成整数倍的正弦分量（86400 s / 900 s / 20 s）叠加，权重和为 1，结果天然落在 0..1，
-**不使用随机量**。时间源是模块级的 `main._now()`（`main.py:592-599`），测试可以把它
+**不使用随机量**。时间源是模块级的 `main._now()`（`main.py:600-607`），测试可以把它
 换掉，因此「同一端点、两个不同时刻」可以被确定性地断言，不需要 `time.sleep`。
 
 > 它是**按时间推出来的合成读数**，不是真实采集的车流数据。要真正的实时流需要
 > WebSocket + 数据源，那是另一笔预算。
+
+### `GET /api/city/overview` —— 城市运行指标
+
+把**真实公开数据**聚合成一份带来源标注与时间戳的统一契约。实现在 `city_data/` 包里
+（`models.py` 契约 / `http.py` 取数 / `sources/*` 一个源一个模块 / `aggregator.py`
+并发 + 缓存 + 降级）。
+
+- `cityCode` 默认 `110000`（北京），**只接受 cnemc 城市/省份代码表里的值**，
+  否则 400（代码表是静态快照，校验**不依赖网络** —— 上游挂了也不会把端点变成 400）。
+- **端点永不 500**：任何一个上游失败或超时都只是把它放进 `degraded`，
+  其余指标照常返回；聚合器整体出意外也返回一份「全部降级」的 200。
+- 响应带 `Cache-Control: public, max-age=30` 与 `X-Data-Generated-At`。
+- 不校验 API key（前端不携带 key，这个端点必须始终可访问）。
+
+响应结构：
+
+| 键 | 类型 | 含义 |
+|---|---|---|
+| `city` | object | `{code, name, latitude, longitude}`（取不到经纬度时为 `null`） |
+| `generated_at` | str | 本次响应生成的时间，ISO8601 UTC |
+| `metrics` | array | 指标列表，**每个都带 `source`** |
+| `series` | array | 时间序列（如 24 小时 AQI） |
+| `degraded` | array | **取不到的源的名字**（前端据此显示「数据源暂不可用」） |
+
+每个指标：
+
+| 键 | 类型 | 含义 |
+|---|---|---|
+| `key` | str | 指标标识（`aqi` / `weather_temp` / `road_load_index` …） |
+| `label` | str | 中文标签 |
+| `value` | number \| str \| null | 指标值；**取不到时是 `null`**（不许拿 0 冒充） |
+| `unit` | str | 单位 |
+| `level` / `level_label` | number \| null / str \| null | 分级与分级标签（如 AQI 的 2 / 良） |
+| `extra` | object | 该指标特有的补充字段（质量等级、算法口径 …） |
+| `source` | object | **来源标注**（见下） |
+
+`source`：
+
+| 键 | 类型 | 含义 |
+|---|---|---|
+| `name` | str | 来源名（「中国环境监测总站」…） |
+| `url` | str | 真实取数地址（本地文件用仓库相对路径） |
+| `observed_at` | str \| null | 上游**数据自身**的时间戳；取不到时是 `null` |
+| `fetched_at` | str | 我们**取到**它的时间；缓存命中时仍是**首次**取数的时间 |
+| `realtime` | bool | 这份数据此刻还成立吗 |
+| `estimated` | bool | **模型估算**吗（模型估算必须是 `true`） |
+
+#### 数据源
+
+| 源 | 地址 | 凭据 | 实时性 | 降级 |
+|---|---|---|---|---|
+| 空气质量（AQI / 分级 / 首要污染物） | `https://air.cnemc.cn:18007/CityData/GetAllCityRealTimeAQIModels`（GET） | 免凭据，**必须带 `Referer: https://air.cnemc.cn:18007/`** | 实时（小时级） | 取不到 → 进 `degraded`，指标值 `null` |
+| 污染物浓度 + 24 小时序列 | `https://air.cnemc.cn:18007/HourChangesPublish/GetCityRealTimeAqiHistoryByCondition?citycode=<code>`（**POST，body 为 `{}`**） | 同上 | 实时 | 同上 |
+| 气温 / 湿度 | `http://www.weather.com.cn/data/sk/101010100.html` | 免凭据 | **不新鲜**（见下） | 同上 |
+| 建筑 / 道路数量、路网总长、覆盖面积、各等级道路条数 | 本地 `geojson/*.geojson` | 无 | 静态快照 | 文件读不到 → 进 `degraded` |
+| 路网负载指数 | 上面那份本地数据**自己算** | 无 | —— | **模型估算**（`estimated: true`） |
+
+三个必须记住的坑（都是实测踩出来的）：
+
+1. cnemc 的历史接口**必须 POST 且 body 为空对象**，用 GET 一律 404。
+2. cnemc 的 `TimePoint` 有两种格式：`"/Date(1792558800000)/"`（.NET 毫秒时间戳）
+   与 `"2026-10-22T11:00:00"`（不带时区的本地时间），两种都要能解析。
+3. **天气源只有北京 `101010100` 通**（上海 `101020100`、深圳 `101280601` 都返回
+   HTML 错误页），别的城市直接判为不可用 —— 不去瞎试别的 cityid。
+   而且它的时间戳**不可靠**：只给 `HH:MM`，没有日期，实测本地 12:00 时它报 17:05
+   （落在未来）。本项目的处理是补上今天的日期、落在未来就回退一天，
+   并用「观测时间与当前时间差 > 1 小时」把 `realtime` 标成 `false` ——
+   **不新鲜就说不新鲜**。
+
+#### 缓存与超时
+
+- 四个源**并发**取数（`asyncio.gather` + `asyncio.wait_for`），
+  **每个源独立 5 秒预算**：慢源只拖慢自己。
+- 缓存：空气质量 30 分钟、天气 10 分钟、静态路网指标进程内常驻。
+- **缓存命中时 `fetched_at` 仍是首次取数的时间** —— 那才是真实的数据年龄。
+- 取数失败**不写缓存**（否则坏数据会被缓存住 30 分钟）。
+
+实测（2026-10-22，本机）：冷缓存首次 1125 ms（两个外部源的真实往返 + 本地 GeoJSON
+统计），第二次起 0–16 ms（走缓存）。
 
 ### `bbox` 查询参数
 
@@ -325,7 +414,7 @@ GET /api/buildings?bbox=116.380,39.905,116.420,39.925
 | 纬度越界 | `?bbox=116.38,-95,116.42,39.93` |
 | min ≥ max（框倒置） | `?bbox=116.42,39.925,116.38,39.905` |
 
-校验逻辑在 `main.py:418-443`（BBox 模型的越界与顺序约束）和 `main.py:471-499`（`_parse_bbox` 的个数 / 类型 / 有限性校验），倒置的框会被显式拒绝（否则会静默返回全部要素）。
+校验逻辑在 `main.py:426-451`（BBox 模型的越界与顺序约束）和 `main.py:479-507`（`_parse_bbox` 的个数 / 类型 / 有限性校验），倒置的框会被显式拒绝（否则会静默返回全部要素）。
 
 ### 错误码约定
 
@@ -350,7 +439,7 @@ GET /api/buildings?bbox=116.380,39.905,116.420,39.925
 小于 1000 字节的响应（如 `/health`）不压缩 —— 压缩 20 字节只会变大。
 压缩只发生在传输层，解压后的 JSON 与未压缩时逐字节相同。
 
-**不带 `bbox` 的全量响应走自己的缓存路径**（`main._full_response()`，`main.py:394-415`）：
+**不带 `bbox` 的全量响应走自己的缓存路径**（`main._full_response()`，`main.py:402-423`）：
 序列化后的字节与预压缩好的 gzip 字节一起缓存起来，命中时直接返回。实测
 （真实 uvicorn + 真实 OSM 数据，每次新建连接，预热 2 次后采样 30 次，最近秩法取分位数）：
 
@@ -377,12 +466,17 @@ cd backend-python
 ./.venv/Scripts/python.exe -m pytest -q
 ```
 
-**当前 130 passed**（12 个 `test_*.py` 用例文件 + `conftest.py`）。
+**当前 175 passed**（14 个 `test_*.py` 用例文件 + `conftest.py`）。
 
 测试配置在 `pyproject.toml`（`testpaths = ["tests"]`），用例在 `tests/` 下。
 需要真实 OSM 数据的用例在没有数据文件时会自动跳过，不会伪装成通过。
 （`tests/test_gzip.py` 里 3 个数据接口用例同样带 `requires_osm_data` 标记；
 `/health` 那条不依赖数据，任何环境都跑。）
+
+**单元测试一律不打真实网络**：`city_data/` 的上游响应全部是写死的假数据
+（`city_data.http.request_json` 被替换掉）—— CI 上没有外网也能跑，
+而且真实网络会让测试变慢又 flaky。要手测真实上游，起服务后 curl
+`/api/city/overview`。
 
 CI 上由 `.github/workflows/verify.yml` 自动跑这一段（Windows 与 Ubuntu 两个 job）。
 GitHub Actions 的 runner 上没有现成的虚拟环境，所以工作流会先 `python -m venv .venv`
