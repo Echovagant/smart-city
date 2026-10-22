@@ -2,7 +2,7 @@
 
 这个文件是**契约**，不是随手写的数据结构：
 前端 `Data-driven-modeling/types/city.ts` 里的同名类型必须逐字段对上。
-两端没有共享 schema 文件（见 CLAUDE.md「没有共享包、schema 文件或生成的客户端」），
+两端没有共享 schema 文件（见 docs/ARCHITECTURE.md「没有共享包、schema 文件或生成的客户端」），
 所以改契约要同时改两边。
 
 四条不可让步的规则

@@ -7,10 +7,8 @@
 # 不排除的话，这一步会把宿主机那份（Windows 版，含 Windows 原生二进制的
 # esbuild / rollup）覆盖进镜像，容器里的 `npm run build` 就会用上 Windows 二进制而失败。
 
-# 版本控制与工作区元数据
-.git
-.worktrees
-.superpowers
+# 版本控制与工作区元数据：根目录下的点目录一律不进构建上下文
+/.??*
 
 # 依赖与虚拟环境（宿主的二进制在 Linux 镜像里不可用）
 **/node_modules
