@@ -66,7 +66,7 @@ CI（`.github/workflows/verify.yml`）在 Windows 与 Ubuntu 两个 job 上跑�
 | `models.py` | Pydantic 契约：`SourceInfo` / `Metric` / `Series` / `FacilityCategory` / `CityEvent` / `EventLocation` / `CityOverview` |
 | `aggregator.py` | 五个源**并发**取数（`asyncio.gather`），每个源独立 5 秒预算，按 TTL 缓存 |
 | `http.py` | 只用标准库的 JSON 取数封装，所有失败统一收敛成 `SourceUnavailable` |
-| `city_codes.py` | 城市代码表的静态快照（只用于参数校验，不联网） |
+| `city_codes.py` | 城市代码表的静态快照（**只有代码，没有名称**；只用于参数校验，不联网） |
 | `events.py` | **纯函数**模块：从真实指标派生事件流 |
 | `sources/air_quality.py` | 空气质量（AQI / 分级 / 首要污染物 / 24 小时逐小时序列） |
 | `sources/weather.py` | 气温与湿度 |

@@ -1817,7 +1817,7 @@ const flyToEvent = (event: CityEvent) => {
  * 页签切换 → 场景联动
  *
  * 「高亮 + 压暗」的实现顺序（按代价从低到高）：
- * 1. **改材质 uniform**（本轮采用）：焦点建筑单独一条批量描边 Primitive，
+ * 1. **改材质 uniform**（采用）：焦点建筑单独一条批量描边 Primitive，
  *    其余建筑把**全量描边**的 color uniform 调暗 —— 建筑本体保持可见，
  *    保留空间上下文。改 uniform 不重建几何，代价最低。
  * 2. 换整个 appearance（可能触发批处理重建）。

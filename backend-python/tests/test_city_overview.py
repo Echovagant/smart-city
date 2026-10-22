@@ -251,7 +251,7 @@ class TestCityOverviewEndpoint:
 
 
 class TestExistingEndpointsUntouched:
-    """既有端点的契约不许被这一轮改动。"""
+    """既有端点的契约不许被改动。"""
 
     def test_buildings_still_serves_a_feature_collection(self, client):
         payload = client.get("/api/buildings").json()

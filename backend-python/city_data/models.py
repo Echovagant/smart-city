@@ -179,7 +179,7 @@ class CityOverview(BaseModel):
     - ``series``：时间序列。
     - ``facilities``：设施分类计数（本地 OSM 快照，实测）。
       取不到时是**空数组**，不许编一个数字顶上。
-    - ``events``：**派生**事件流（Plan S3）。每条都带 source + metric_key + time。
+    - ``events``：**派生**事件流。每条都带 source + metric_key + time。
       派生不出来就是**空数组** —— 空事件流是数据现实，不是故障。
     - ``degraded``：**取不到的源的名字**。前端据此显示「数据源暂不可用」。
     """

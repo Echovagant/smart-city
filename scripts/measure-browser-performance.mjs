@@ -1188,7 +1188,7 @@ async function main() {
 
   const build = await ensureProductionBuild(options)
   process.stdout.write(
-    `生产产物：${build.indexPath}${build.built ? '（本轮新建）' : '（已存在，未重建）'}\n`
+    `生产产物：${build.indexPath}${build.built ? '（本次新建）' : '（已存在，未重建）'}\n`
   )
   process.stdout.write(`Chrome   ：${chromeBinary}（${options.headful ? 'headful' : 'headless=new'}）\n`)
   process.stdout.write(`轮次     ：${options.runs} 轮，每轮重启后端 + 新起 Chrome\n\n`)
@@ -1273,7 +1273,7 @@ async function main() {
 
   printReport(payload, options)
   process.stdout.write(`\n原始数据：${options.out}\n`)
-  process.stdout.write('退出码 0 —— 本轮是报告，不是门禁。\n')
+  process.stdout.write('退出码 0 —— 这一步是报告，不是门禁。\n')
   return 0
 }
 

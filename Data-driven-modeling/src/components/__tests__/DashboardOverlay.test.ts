@@ -94,7 +94,7 @@ describe('DashboardOverlay', () => {
   it('shows an honest empty state before the overview arrives', () => {
     const wrapper = mount(DashboardOverlay, { props: { overview: null } })
     expect(wrapper.findAll('.dc-metric-value')[0].text()).toBe('数据源暂不可用')
-    // 事件流本轮没有数据 → 空态，不编造事件
+    // 事件流没有数据 → 空态，不编造事件
     expect(wrapper.find('.dc-event-empty').text()).toBe('暂无事件数据')
   })
 

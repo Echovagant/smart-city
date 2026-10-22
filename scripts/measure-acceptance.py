@@ -33,7 +33,7 @@
 
 退出码
 ------
-永远是 0：本轮是「报告」不是「门禁」。未达标的项在输出里逐条列出，
+永远是 0：这一步是「报告」不是「门禁」。未达标的项在输出里逐条列出，
 要不要把它们变成红灯是维护者的决定。
 
 依赖
@@ -67,7 +67,7 @@ TARGET_BBOX_P95_MS = 200.0
 TARGET_BACKEND_COVERAGE = 90.0
 TARGET_FRONTEND_COVERAGE = 80.0
 TARGET_APP_BUNDLE_MB = 5.0
-# 浏览器端验收线（Plan E5）：首屏 < 3 s、3D 渲染帧率 >= 30 fps
+# 浏览器端验收线：首屏 < 3 s、3D 渲染帧率 >= 30 fps
 TARGET_FIRST_SCREEN_MS = 3000.0
 TARGET_FPS = 30.0
 
@@ -610,7 +610,7 @@ def main(argv=None) -> int:
             NOTE,
         ])
 
-    # --- 浏览器端指标（Plan E5）--------------------------------------------
+    # --- 浏览器端指标 ---------------------------------------------------
     # 产物由 scripts/measure-browser-performance.mjs 产出（生产构建 + 独立 headless Chrome）。
     # 产物缺失时显示「未提供」——不猜数字。
     browser = read_browser_metrics(args.browser_metrics)
@@ -731,7 +731,7 @@ def main(argv=None) -> int:
         print(render_table(
             ["端点", "请求数", "冷启动", "min", "P50", "P95", "max", "响应体"], detail_rows))
         print("「冷启动」是第一个请求（含 GeoJSON 解析），不计入 P95。")
-        print("「min」是本轮最快的一次：共享开发机上跑时，它比 P95 更能说明"
+        print("「min」是所有轮次里最快的一次：共享开发机上跑时，它比 P95 更能说明"
               "「应用本身有多快」，P95 里混着宿主机负载。")
         print()
 
@@ -823,7 +823,7 @@ def main(argv=None) -> int:
 
     # --- 结论 ---------------------------------------------------------------
     if unmet:
-        print("未达标项（本轮只报告，不阻塞）：")
+        print("未达标项（只报告，不阻塞）：")
         for item in unmet:
             print(f"  - {item}")
     else:
@@ -831,7 +831,7 @@ def main(argv=None) -> int:
     if server_note:
         print(f"备注：{server_note}")
     print()
-    print("退出码 0 —— 本轮是报告，不是门禁。")
+    print("退出码 0 —— 这一步是报告，不是门禁。")
     return 0
 
 

@@ -705,7 +705,7 @@ async function runVerification(options) {
   if (!chromeBinary) throw new Error('本机找不到 Chrome/Edge 可执行文件')
 
   const build = await ensureProductionBuild(options)
-  process.stdout.write(`生产产物：${build.indexPath}${build.built ? '（本轮新建）' : '（已存在）'}\n`)
+  process.stdout.write(`生产产物：${build.indexPath}${build.built ? '（本次新建）' : '（已存在）'}\n`)
 
   const logPath = path.join(options.artifacts, 'server-logs', `verify-backend-${options.port}.log`)
   const profileDir = path.join(tmpdir(), `smart-city-c1-chrome-${process.pid}`)

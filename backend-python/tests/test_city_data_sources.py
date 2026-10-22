@@ -453,3 +453,19 @@ class TestCityCodes:
 
     def test_weather_cityid_only_for_beijing(self):
         assert city_codes.WEATHER_CITY_IDS == {110000: "101010100"}
+
+    def test_codes_only_no_region_names(self):
+        """代码表里**只有代码**，没有行政区划名称。
+
+        这条是公开仓库的硬约束：仓库里不留行政区划名录。
+        校验能力靠纯数字白名单，名称由上游实时接口给出。
+        """
+        assert not hasattr(city_codes, "PROVINCE_NAMES")
+        assert not hasattr(city_codes, "city_name")
+        assert all(isinstance(code, int) for code in city_codes.KNOWN_CODES)
+        # 城市代码与省份代码有 4 个重合（北京/天津/上海/重庆），
+        # 所以并集不是两者之和 —— 断言集合相等，不���长度相加。
+        assert city_codes.KNOWN_CODES == (
+            city_codes.CITY_CODES | city_codes.PROVINCE_CODES
+        )
+        assert len(city_codes.KNOWN_CODES) == 368

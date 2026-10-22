@@ -704,7 +704,7 @@ async def get_city_overview(cityCode: str = "110000"):
         overview = CityOverview(
             city={
                 "code": code,
-                "name": city_codes.city_name(code),
+                "name": None,
                 "latitude": None,
                 "longitude": None,
             },

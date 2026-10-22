@@ -16,7 +16,7 @@ import type * as Cesium from 'cesium'
  *    FeatureCollection，`/api/traffic-status` 返回 5 个键的交通读数。
  * 4. **前端视图状态**（视角模式、图层显隐、交通开关）：它们目前锁在
  *    SmartCity.vue 的 reactive() 里，这里给它们一个名字，为将来拆分状态留好接口，
- *    但本轮不拆组件。
+ *    但不拆组件。
  *
  * 最后一节补的是 **Cesium 类型声明的缺口**——见「Cesium 运行时可写视图」一节。
  *
@@ -270,7 +270,7 @@ export interface CityOverview {
    */
   facilities?: FacilityCategory[]
   /**
-   * **派生**事件流（Plan S3）。
+   * **派生**事件流。
    *
    * 每一条都是从真实指标派生出来的，派生不出来就是**空数组** ——
    * 空事件流是数据现实，不是故障。

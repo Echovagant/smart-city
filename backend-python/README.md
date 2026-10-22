@@ -14,7 +14,7 @@ backend-python/
 ├── city_data/         # 城市运行指标数据层（公开数据源 + 聚合 + 降级）
 │   ├── models.py      #   Pydantic 契约（每个指标都必须带 source）
 │   ├── http.py        #   只用标准库的 JSON 取数封装
-│   ├── city_codes.py  #   cnemc 城市/省份代码表静态快照（参数校验用）
+│   ├── city_codes.py  #   cnemc 城市/省份代码表静态快照（只有代码，参数校验用）
 │   ├── aggregator.py  #   并发取数 + 缓存 + 降级
 │   └── sources/       #   一个源一个模块（空气质量 / 天气 / 本地路网）
 ├── scripts/

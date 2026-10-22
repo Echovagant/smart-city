@@ -276,7 +276,9 @@ async def build_city_overview(
     road_anchor: Optional[RoadAnchor] = None
     city_info: Dict[str, Any] = {
         "code": city_code,
-        "name": city_codes.city_name(city_code),
+        # 名称由上游实时接口给出（air_quality 的 city_info），
+        # 这里不另存一份行政区划名录 —— 仓库里只有代码白名单。
+        "name": None,
         "latitude": None,
         "longitude": None,
     }

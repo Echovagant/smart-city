@@ -2,7 +2,7 @@
 
 为什么不用 requests / httpx
 ---------------------------
-本轮不新增任何依赖（``requirements.txt`` 零改动是硬要求）。
+不新增任何依赖（``requirements.txt`` 零改动是硬要求）。
 上游只有三个 JSON 接口，标准库的 ``urllib.request`` 足够。
 
 设计要点

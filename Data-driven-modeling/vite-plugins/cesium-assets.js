@@ -13,7 +13,7 @@
 // build 阶段：closeBundle 后把同样的目录拷贝到 dist/Cesium/，
 //              再按入库的剪枝清单把「本应用永远用不到」的文件删掉。
 //
-// 剪枝（Plan C1）
+// 剪枝
 // --------------
 //   清单：Data-driven-modeling/cesium-runtime-manifest.json（入库，可 review、可 diff）
 //   逃生舱：环境变量 CESIUM_RUNTIME=full → 一个都不剪，dist/Cesium 保持完整的 380 个文件。
