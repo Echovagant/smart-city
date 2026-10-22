@@ -1,6 +1,12 @@
 import { ref, shallowRef, onUnmounted } from 'vue'
 import { apiGet, ApiError } from '@/api/client'
-import type { BBoxParam, BuildingsResponse, RoadsResponse, TrafficStatus } from '../../types/city'
+import type {
+  BBoxParam,
+  BuildingsResponse,
+  CityOverview,
+  RoadsResponse,
+  TrafficStatus,
+} from '../../types/city'
 
 // 默认不传 bbox：后端直接返回完整集合。
 // 之前默认带的 bbox（116.380,39.905,116.420,39.925）与 OSM 提取范围完全一致，
@@ -15,6 +21,11 @@ export function useCityData() {
   const roads = shallowRef<RoadsResponse | null>(null)
   // trafficStatus 是个小对象，普通 ref 即可。
   const trafficStatus = ref<TrafficStatus | null>(null)
+  // 城市运行指标（空气质量 / 天气 / 路网静态指标）。
+  // 载荷不大但结构固定，用 shallowRef 即可 —— 整体替换，不做深度响应式。
+  const cityOverview = shallowRef<CityOverview | null>(null)
+  const cityOverviewError = ref<ApiError | null>(null)
+  const cityOverviewLoading = ref(false)
   const loading = ref(false)
   const error = ref<ApiError | null>(null)
   const cancelled = ref(false)
@@ -54,9 +65,61 @@ export function useCityData() {
     }
   }
 
+  /**
+   * 取一次城市运行指标。
+   *
+   * 与 buildings / roads 分开取：它要走外部上游（可能慢到 5 秒），
+   * 绝不能拖慢首屏的场景装配。失败只记在 cityOverviewError 上，
+   * 不动全局的 error 横幅 —— 3D 城市本身还是好的。
+   */
+  const loadCityOverview = async () => {
+    cityOverviewLoading.value = true
+    cityOverviewError.value = null
+    try {
+      const overview = await apiGet<CityOverview>('/api/city/overview')
+      if (cancelled.value) return
+      cityOverview.value = overview
+    } catch (e) {
+      if (cancelled.value) return
+      cityOverviewError.value = e instanceof ApiError ? e : new ApiError(String(e))
+    } finally {
+      cityOverviewLoading.value = false
+    }
+  }
+
+  /**
+   * 轮询用：只刷新城市指标。
+   *
+   * 失败时保留上一次的读数（不把旧值说成新值）：
+   * 后端已经把「某个源取不到」表达成 value = null + degraded，
+   * 端点本身挂掉时宁可什么都不显示，也不要拿旧值冒充。
+   */
+  const refreshCityOverview = async () => {
+    try {
+      const overview = await apiGet<CityOverview>('/api/city/overview')
+      if (cancelled.value) return
+      cityOverview.value = overview
+    } catch {
+      // 轮询失败保持上一次的读数即可。
+    }
+  }
+
   onUnmounted(() => {
     cancelled.value = true
   })
 
-  return { buildings, roads, trafficStatus, refreshTrafficStatus, loading, error, loadAll }
+  return {
+    buildings,
+    roads,
+    trafficStatus,
+    refreshTrafficStatus,
+    cityOverview,
+    cityOverviewError,
+    cityOverviewLoading,
+    loadCityOverview,
+    refreshCityOverview,
+    loading,
+    error,
+    loadAll,
+  }
 }

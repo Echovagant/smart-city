@@ -43,7 +43,7 @@ npm run dev                             # http://localhost:5173/
 | `npm run lint:fix` | ESLint 修复版（会改文件，按需使用） |
 | `npm run typecheck` | `vue-tsc --noEmit` 类型检查（CI 里是**阻塞门禁**） |
 | `npm run format` | Prettier 格式化 `src/` |
-| `npm test -- --run` | 单次跑完测试（6 个文件 / **63 个用例**，全部是 `.ts`） |
+| `npm test -- --run` | 单次跑完测试（6 个文件 / **70 个用例**，全部是 `.ts`） |
 | `npm run test:run` | 同上，等价写法 |
 | `npm run test:coverage` | 跑测试并出覆盖率报告（v8 provider）；报告默认落在 `coverage/`（已 gitignore），要放到仓库外设 `COVERAGE_DIR` |
 | `npm test` | ⚠️ **watch 模式**，不会自己退出；脚本里不要用 |
@@ -71,19 +71,19 @@ vue-tsc ^3.3.13（实装 3.3.13）、typescript-eslint ^8.72.0（实装 8.72.0�
 
 > 覆盖率 `include` 写在 `vite.config.js` 里（`src/**/*.{js,ts,vue}`），**迁到 TypeScript
 > 之后要记得复查它** —— 原先只写了 `.{js,vue}`，源码全迁成 `.ts` 之后报告里就只剩 `.vue`
-> 了，看着漂亮、实际统计的是子集。当前全口径：语句 **94.19%**、函数 **93.84%**、分支 **80.21%**
+> 了，看着漂亮、实际统计的是子集。当前全口径：语句 **94.52%**、函数 **94.37%**、分支 **80.00%**
 > （含 Plan S0 新增的 `src/theme/dark.ts`，语句与函数都是 100%）。
 
 ## 关键文件
 
 | 文件 | 作用 |
 |---|---|
-| `src/components/SmartCity.vue` | 唯一的功能组件：Cesium 视图、GeoJSON 加载、交通模拟、实时交通读数、鸟瞰↔平视切换、**相机缓慢自转**（`<script setup lang="ts">`） |
+| `src/components/SmartCity.vue` | 唯一的功能组件：Cesium 视图、GeoJSON 加载、交通模拟、实时交通读数、**城市运行指标带**、鸟瞰↔平视切换、**相机缓慢自转**（`<script setup lang="ts">`） |
 | `src/theme/dark.ts` | **深色大屏的色板与材质工厂**（`DARK_PALETTE` / `ROAD_COLORS` / 辉光材质 / 流动虚线材质 / 拥堵分档色 / CSS 变量注入）——视觉的唯一事实来源 |
 | `src/api/client.ts` | 极简 fetch 封装：超时（默认 15 s）、`ApiError` 规范化；请求结束时会摘掉挂在调用方 signal 上的 abort 监听器 |
-| `src/composables/useCityData.ts` | 三个接口的调用方；`buildings`/`roads` 用 `shallowRef`（载荷是几 MB 的 GeoJSON，不能深度响应式）；另有只刷新交通状态一个端点的 `refreshTrafficStatus()` |
+| `src/composables/useCityData.ts` | 四个接口的调用方；`buildings`/`roads` 用 `shallowRef`（载荷是几 MB 的 GeoJSON，不能深度响应式）；另有只刷新交通状态一个端点的 `refreshTrafficStatus()` 与只刷新城市指标一个端点的 `loadCityOverview()` / `refreshCityOverview()` |
 | `src/main.ts` / `src/App.vue` | 引导入口；`App.vue` 只渲染 `<SmartCity />` |
-| `types/city.ts` | 城市类型系统（345 行）：GeoJSON 泛型子集、`OSMProperties`、三个端点的响应契约、视图状态，以及**补 Cesium 类型缺口**的 `Writable*` 与模块增强 |
+| `types/city.ts` | 城市类型系统（465 行）：GeoJSON 泛型子集、`OSMProperties`、四个端点的响应契约、视图状态，以及**补 Cesium 类型缺口**的 `Writable*` 与模块增强 |
 | `tsconfig.json` | TypeScript 严格模式配置（22 行）：`strict: true`、`noEmit: true`，`paths` 里的别名必须与 `vite.config.js` 一致 |
 | `src/env.d.ts` | `import.meta.env` 的类型（`/// <reference types="vite/client" />`） |
 | `vite.config.js` | dev 代理、`@`/`cesium` 别名、Cesium 独立 chunk、Vitest 配置；`build.sourcemap` 由 `SOURCEMAP` 环境变量控制、默认关 |
@@ -105,7 +105,7 @@ vue-tsc ^3.3.13（实装 3.3.13）、typescript-eslint ^8.72.0（实装 8.72.0�
 
 ## 控制面板的实时交通状态
 
-控制面板上有一行**实时交通读数**（`src/components/SmartCity.vue:16`）：
+控制面板上有一行**实时交通读数**（`src/components/SmartCity.vue:41`）：
 
 ```
 实时交通 · 流量 71% · 拥堵 · 更新于 13:08:10
@@ -122,6 +122,39 @@ vue-tsc ^3.3.13（实装 3.3.13）、typescript-eslint ^8.72.0（实装 8.72.0�
 
 > 这是「便宜的起步」：**没有 WebSocket**。后端给的是按时间推出来的合成读数，
 > 不是真实采集的车流数据；真正的实时流 + 模拟器是另一笔预算。
+
+## 控制面板的城市运行指标带
+
+指标带（`.metric-strip`）是面板上**唯一一组带来源标注的数字**：
+
+```
+空气质量 51 良      气温 18℃      路网负载 63.5（模型估算）
+中国环境监测总站·12:00:00  中国天气网·17:05  本地OSM路网数据·路网总长202.173km
+```
+
+三格分别来自三个数据源（后端 `GET /api/city/overview`，**不挂 API key**）：
+
+| 指标 | 来源 | 凭据 | 实时性 | 降级 |
+|---|---|---|---|---|
+| 空气质量（AQI + 分级 + 首要污染物） | 中国环境监测总站（cnemc） | 免凭据，但要带 `Referer` | 实时（小时级） | 取不到 → 「数据源暂不可用」 |
+| 气温 / 湿度 | 中国天气网 `sk` 接口 | 免凭据 | **不新鲜**（上游只给 `HH:MM`，实测时间戳会落在未来） | 取不到 → 「数据源暂不可用」 |
+| 路网负载（模型估算） | 本地 OSM GeoJSON 自己算 | 无 | 静态快照（抽取于 2026-06-21） | 读不到文件 → 「数据源暂不可用」 |
+
+- **每个指标都带来源标注**：来源名 + 观测时间（小字），悬停出完整信息
+  （取数地址、观测时间、取数时间）。
+- **模型估算项标「（模型估算）」**：路网负载是静态几何折算的**供给紧张度**
+  （建筑数 ÷ 路网总长，再除以参考阈值归一到 0–100），**不是**实测路况。
+- **取不到的源显示「数据源暂不可用」**，不显示 0、不显示上一次的旧值，
+  连分级徽标一起不显示（没取到数据就不知道分级）。
+- 首次取数走 `loadCityOverview()`，**不 await**（要走外部上游，最多 5 秒，
+  绝不能拖慢 3D 场景装配）；之后**每 60 秒轮询一次**
+  （`CITY_OVERVIEW_POLL_INTERVAL_MS`，空气质量是小时级数据）。
+- 轮询失败时保留上一次的读数；**它失败不会拉起「数据加载失败」横幅** ——
+  3D 城市本身还是好的，不该被一个外部源拖下水。
+
+> 契约在 `types/city.ts`（`SourceInfo` / `Metric` / `Series` / `CityOverview`），
+> 后端实现在 `backend-python/city_data/`。**每个 metric 都必须带 source** ——
+> 改契约要同时改两边（没有共享 schema 文件）。
 
 ## 生产构建与 sourcemap
 

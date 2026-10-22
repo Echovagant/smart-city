@@ -170,6 +170,116 @@ export interface TrafficStatus {
 export type BBoxParam = string
 
 /* -------------------------------------------------------------------------
+ * 城市运行指标契约（GET /api/city/overview）
+ * ---------------------------------------------------------------------- */
+
+/**
+ * 指标的数据来源。
+ *
+ * 四个字段的分工别搞混：
+ * - `observed_at`：上游**数据自身**的时间戳（取不到时是 null）。
+ * - `fetched_at`：我们**取到**它的时间（缓存命中时仍是首次取数的时间）。
+ * - `realtime`：这份数据此刻还成立吗（上游时间戳太旧就是 false）。
+ * - `estimated`：这是**模型估算**吗（模型估算必须是 true）。
+ */
+export interface SourceInfo {
+  /** 来源名（面板上直接显示，例如「中国环境监测总站」）。 */
+  name: string
+  /** 真实取数地址；本地文件用仓库相对路径。 */
+  url: string
+  /** 上游数据自身的时间戳（ISO8601）。取不到时是 null——不知道就是不知道。 */
+  observed_at?: string | null
+  /** 我们取到它的时间（ISO8601）。 */
+  fetched_at: string
+  /** 这份数据此刻还成立吗。 */
+  realtime?: boolean
+  /** 这是模型估算吗。 */
+  estimated?: boolean
+}
+
+/** 指标值：数字、文本，或 null（这个源没取到）。 */
+export type MetricValue = number | string | null
+
+/**
+ * 一个指标。
+ *
+ * **每个指标都必须带 `source`** —— 后端契约的硬要求。
+ * `value` 为 null 表示取不到，界面显示「数据源暂不可用」，
+ * 不会拿 0 或上一次的旧值冒充。
+ */
+export interface Metric {
+  /** 指标标识，例如 `aqi` / `weather_temp` / `road_load_index`。 */
+  key: string
+  /** 中文标签。 */
+  label: string
+  /** 指标值；null 表示取不到。 */
+  value?: MetricValue
+  /** 单位，例如 `AQI` / `℃` / `指数`。 */
+  unit?: string
+  /** 分级（空气质量 1 优 … 6 严重）。 */
+  level?: number | null
+  /** 分级的中文标签，例如「良」。 */
+  level_label?: string | null
+  /** 该指标特有的补充字段（质量等级、首要污染物、算法口径……）。 */
+  extra?: Record<string, unknown>
+  /** 来源标注。 */
+  source: SourceInfo
+}
+
+/** 时间序列上的一个点。 */
+export interface SeriesPoint {
+  /** ISO8601 时间戳。 */
+  t: string
+  /** 数值；null 表示那一刻没有值。 */
+  v?: number | null
+}
+
+/** 一条时间序列（例如 24 小时 AQI）。 */
+export interface Series {
+  key: string
+  label: string
+  unit?: string
+  points: SeriesPoint[]
+  source: SourceInfo
+}
+
+/**
+ * `GET /api/city/overview` 的响应。
+ *
+ * `degraded` 列出**取不到的源的名字**；
+ * 对应位置的指标 `value` 是 null，界面据此显示「数据源暂不可用」。
+ */
+export interface CityOverview {
+  /** 城市信息。取不到经纬度时是 null。 */
+  city: {
+    code?: number | string
+    name?: string | null
+    latitude?: number | null
+    longitude?: number | null
+  }
+  /** 本次响应生成的时间（ISO8601）。 */
+  generated_at: string
+  /** 指标列表，每个都带 source。 */
+  metrics: Metric[]
+  /** 时间序列。 */
+  series: Series[]
+  /** 取不到的源的名字。 */
+  degraded: string[]
+}
+
+/** 城市指标在前端的状态。 */
+export interface CityDataState {
+  /** 最近一次取到的指标；null 表示还没取到。 */
+  overview: CityOverview | null
+  /** 是否正在取数。 */
+  loading: boolean
+  /** 错误文案；null 表示没有错误。 */
+  error: string | null
+  /** 取不到的源的名字。 */
+  degraded: string[]
+}
+
+/* -------------------------------------------------------------------------
  * 解析出来的数值
  * ---------------------------------------------------------------------- */
 

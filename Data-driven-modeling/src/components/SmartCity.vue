@@ -13,6 +13,31 @@
         数据加载失败：{{ error.message }}<span v-if="error.status">（状态码 {{ error.status }}）</span>
       </div>
 
+      <!-- 城市运行指标带：空气质量 / 天气 / 路网负载。
+           每个数字都带来源标注与时间戳；模型估算项标「（模型估算）」；
+           取不到的源显示「数据源暂不可用」——绝不显示 0 或上一次的旧值。 -->
+      <div v-if="metricSlots.length" class="metric-strip">
+        <div v-for="slot in metricSlots" :key="slot.key" class="metric-slot">
+          <div class="metric-head">
+            <span class="metric-label">{{ slot.label }}</span>
+            <span v-if="slot.estimated" class="metric-estimate">（模型估算）</span>
+          </div>
+          <div class="metric-body">
+            <span
+              class="metric-value"
+              :class="{ 'metric-value-unavailable': slot.unavailable }"
+            >{{ slot.display }}</span>
+            <span
+              v-if="slot.badge"
+              class="metric-badge"
+              :class="`tone-${slot.tone}`"
+            >{{ slot.badge }}</span>
+          </div>
+          <div v-if="slot.sub" class="metric-sub">{{ slot.sub }}</div>
+          <div class="metric-source" :title="slot.sourceTitle">{{ slot.sourceText }}</div>
+        </div>
+      </div>
+
       <!-- 实时交通读数：后端按时间推导的交通状态。
            没有数据时不渲染这一行，绝不显示 undefined / NaN。 -->
       <div v-if="trafficReadout" class="traffic-status">
@@ -67,6 +92,7 @@ import type {
   CityViewState,
   HeightMeters,
   LngLat,
+  Metric,
   OSMTagReader,
   Position,
   RoadTier,
@@ -323,7 +349,20 @@ function resolveRoadWidth(tier: RenderedRoadTier, taggedWidth: unknown): number 
 // 城市数据来源（通过 useCityData composable 从后端 /api/* 拉取 GeoJSON）
 // error / loading 必须一起取出来，否则后端挂了界面上一片空白、毫无提示
 // trafficStatus 同样要取：它此前请求了却被丢弃，界面上看不到任何实时读数
-const { buildings, roads, trafficStatus, refreshTrafficStatus, loadAll, error, loading } = useCityData()
+// cityOverview 是城市运行指标（空气质量 / 天气 / 路网负载），
+// 每个数字都带来源标注与时间戳。
+const {
+  buildings,
+  roads,
+  trafficStatus,
+  refreshTrafficStatus,
+  loadAll,
+  cityOverview,
+  loadCityOverview,
+  refreshCityOverview,
+  error,
+  loading,
+} = useCityData()
 
 // 把任意取值转成有限数字；null / undefined / 空串 / 非数字一律返回 null。
 function toFiniteNumber(value: unknown): number | null {
@@ -406,6 +445,168 @@ const stopTrafficPolling = () => {
   if (trafficTimer === null) return
   clearInterval(trafficTimer)
   trafficTimer = null
+}
+
+/* ---------------------------------------------------------------------------
+ * 城市运行指标带
+ * ------------------------------------------------------------------------- */
+
+/**
+ * 指标带上的一个格子。
+ *
+ * 三条硬要求：
+ * - 取不到的源显示「数据源暂不可用」，**不显示 0 或上一次的旧值**；
+ * - 模型估算的指标标「（模型估算）」；
+ * - 每个格子都带来源标注（来源名 + 观测时间），悬停有完整信息。
+ */
+interface MetricSlot {
+  key: string
+  label: string
+  /** 显示出来的值；取不到时是「数据源暂不可用」。 */
+  display: string
+  /** 分级徽标（空气质量的「良」）。 */
+  badge: string | null
+  tone: TrafficTone
+  /** 这个指标是不是模型估算。 */
+  estimated: boolean
+  /** 这个源是不是没取到。 */
+  unavailable: boolean
+  /** 副标题（例如「路网总长 202.173 km」）。 */
+  sub: string | null
+  /** 来源小字。 */
+  sourceText: string
+  /** 悬停提示（完整来源信息）。 */
+  sourceTitle: string
+}
+
+/** 指标带上的格子定义。顺序即显示顺序。 */
+interface MetricSlotDef {
+  key: string
+  label: string
+  /** 值后面是否直接跟单位（AQI 与指数不跟，其余跟）。 */
+  showUnit?: boolean
+  /** 副标题对应的指标 key。 */
+  subKey?: string
+  /** 副标题前缀。 */
+  subLabel?: string
+}
+
+const METRIC_SLOT_DEFS: MetricSlotDef[] = [
+  { key: 'aqi', label: '空气质量' },
+  { key: 'weather_temp', label: '气温', showUnit: true },
+  {
+    key: 'road_load_index',
+    label: '路网负载',
+    subKey: 'road_length_km',
+    subLabel: '路网总长',
+  },
+]
+
+// 空气质量分级 → 色调：优/良是常态，污染开始是预警，严重是告警。
+function resolveAirTone(level: number | null | undefined): TrafficTone {
+  if (level === null || level === undefined) return 'ok'
+  if (level <= 2) return 'ok'
+  if (level === 3) return 'warn'
+  return 'alert'
+}
+
+// 指标值 → 文本。拿不到就返回 null（整段略过，不显示 undefined / NaN）。
+function formatMetricValue(metric: Metric | undefined): string | null {
+  if (!metric) return null
+  const value = metric.value
+  if (value === null || value === undefined || value === '') return null
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) return null
+    // 最多两位小数：63.5 → "63.5"，51 → "51"
+    return String(Math.round(value * 100) / 100)
+  }
+  return String(value)
+}
+
+// 指标带的格子。数据没到（cityOverview 为 null）时返回空数组 —— 什么都不显示，
+// 胜过显示一个假的 0。
+const metricSlots = computed<MetricSlot[]>(() => {
+  const overview = cityOverview.value
+  if (!overview || !Array.isArray(overview.metrics)) return []
+  const byKey = new Map<string, Metric>()
+  overview.metrics.forEach(metric => {
+    if (metric && typeof metric.key === 'string') byKey.set(metric.key, metric)
+  })
+
+  return METRIC_SLOT_DEFS.map(def => {
+    const metric = byKey.get(def.key)
+    const source = metric?.source
+    const unavailable = !metric || metric.value === null || metric.value === undefined
+    const estimated = source?.estimated === true
+    const rawValue = formatMetricValue(metric)
+    const display = unavailable
+      ? '数据源暂不可用'
+      : `${rawValue ?? ''}${def.showUnit && metric?.unit ? metric.unit : ''}`
+    const observedClock = formatClock(source?.observed_at)
+    const sourceText = source
+      ? `${source.name} · ${observedClock ?? '观测时间未知'}${
+          !unavailable && source.realtime === false ? '（非实时）' : ''
+        }`
+      : '数据源暂不可用'
+    const sourceTitle = source
+      ? [
+          source.name,
+          source.url,
+          `观测时间：${source.observed_at ?? '未知'}`,
+          `取数时间：${source.fetched_at}`,
+          estimated ? '注意：这是模型估算，不是实测' : '',
+        ]
+          .filter(Boolean)
+          .join('\n')
+      : '数据源暂不可用'
+
+    let sub: string | null = null
+    if (def.subKey) {
+      const subMetric = byKey.get(def.subKey)
+      const subValue = formatMetricValue(subMetric)
+      if (subValue && def.subLabel) {
+        const unit = subMetric?.unit && subMetric.unit !== '指数' ? ` ${subMetric.unit}` : ''
+        sub = `${def.subLabel} ${subValue}${unit}`
+      }
+    }
+
+    return {
+      key: def.key,
+      label: def.label,
+      display,
+      // 取不到时**不显示**分级徽标：没取到数据就不知道分级，
+      // 留着上一档的「良」是拿旧值冒充。
+      badge: unavailable ? null : (metric?.level_label ?? null),
+      tone: resolveAirTone(metric?.level),
+      estimated,
+      unavailable,
+      sub,
+      sourceText,
+      sourceTitle,
+    }
+  })
+})
+
+// 城市指标的轮询间隔（毫秒）。
+// 空气质量是小时级数据，天气源本身也不实时 —— 60 秒足够；
+// 再快只是反复打同一个上游。
+const CITY_OVERVIEW_POLL_INTERVAL_MS = 60000
+
+let cityOverviewTimer: ReturnType<typeof setInterval> | null = null
+
+// 挂上轮询：城市指标每 60 秒刷新一次。
+const startCityOverviewPolling = () => {
+  stopCityOverviewPolling()
+  cityOverviewTimer = setInterval(() => {
+    refreshCityOverview()
+  }, CITY_OVERVIEW_POLL_INTERVAL_MS)
+}
+
+// 停掉轮询：组件卸载后不再发请求。
+const stopCityOverviewPolling = () => {
+  if (cityOverviewTimer === null) return
+  clearInterval(cityOverviewTimer)
+  cityOverviewTimer = null
 }
 
 /* ---------------------------------------------------------------------------
@@ -1308,6 +1509,10 @@ onMounted(async () => {
   // 交通状态与 Cesium 无关：先把轮询挂上，
   // 即使 3D 初始化失败，控制面板上的实时读数也还在动。
   startTrafficPolling()
+  // 城市指标要走外部上游（慢的时候最多 5 秒）——**不 await**：
+  // 绝不能让它拖慢 3D 场景的装配。失败也只影响指标带，不影响城市本身。
+  loadCityOverview()
+  startCityOverviewPolling()
   try {
     await initCesium()
     if (!viewer.value) return
@@ -1345,6 +1550,7 @@ onUnmounted(() => {
   isMounted = false
   cancelAllAnimations()
   stopTrafficPolling()
+  stopCityOverviewPolling()
   if (interactionHandler) {
     interactionHandler.destroy()
     interactionHandler = null
@@ -1453,6 +1659,104 @@ onUnmounted(() => {
 
 .status-error {
   color: var(--dc-alert, #f43f5e);
+}
+
+/* 城市运行指标带：一格一个指标，带来源标注与时间戳 */
+.metric-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.metric-slot {
+  flex: 1 1 118px;
+  min-width: 118px;
+  padding: 8px 10px;
+  background: var(--dc-panel-surface, rgba(5, 10, 20, 0.55));
+  border: 1px solid rgba(22, 93, 255, 0.28);
+  border-radius: 2px;
+}
+
+.metric-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.metric-label {
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  color: rgba(226, 232, 240, 0.72);
+}
+
+/* 模型估算标记：橙色（预警色），与「实测」区分开 */
+.metric-estimate {
+  font-size: 10px;
+  white-space: nowrap;
+  color: var(--dc-warning, #f59e0b);
+}
+
+.metric-body {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.metric-value {
+  font-family: Consolas, 'SF Mono', 'Roboto Mono', ui-monospace, monospace;
+  font-size: 21px;
+  font-weight: 600;
+  line-height: 1.15;
+  color: var(--dc-flow, #22d3ee);
+  text-shadow: 0 0 12px rgba(34, 211, 238, 0.35);
+}
+
+/* 取不到的值：不冒充 0，也不冒充旧值 —— 直说「数据源暂不可用」 */
+.metric-value-unavailable {
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.4;
+  color: rgba(226, 232, 240, 0.45);
+  text-shadow: none;
+}
+
+.metric-badge {
+  padding: 1px 6px;
+  border: 1px solid currentColor;
+  border-radius: 2px;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+}
+
+.metric-badge.tone-ok {
+  color: var(--dc-flow, #22d3ee);
+}
+
+.metric-badge.tone-warn {
+  color: var(--dc-warning, #f59e0b);
+}
+
+.metric-badge.tone-alert {
+  color: var(--dc-alert, #f43f5e);
+}
+
+.metric-sub {
+  margin-top: 3px;
+  font-size: 11px;
+  color: rgba(226, 232, 240, 0.6);
+}
+
+/* 来源标注：来源名 + 观测时间。悬停出完整信息（地址、观测时间、取数时间） */
+.metric-source {
+  margin-top: 3px;
+  font-size: 10px;
+  line-height: 1.35;
+  color: rgba(226, 232, 240, 0.42);
+  cursor: help;
 }
 
 /* 实时交通读数：标签 + 大号等宽数字 + 拥堵徽标 + 时间 */
