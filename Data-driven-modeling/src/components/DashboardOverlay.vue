@@ -60,14 +60,17 @@ onMounted(() => {
 <template>
   <div class="dashboard-overlay">
     <div class="dashboard-grid">
-      <!-- 顶栏：居中标题 + 页签 -->
+      <!-- 顶栏：居中标题 + 页签；右侧是读数带插槽（S1 指标带 + 实时交通） -->
       <div class="dashboard-area-top">
-        <TopBar :title="title" :tabs="tabs" :active-key="activeTabKey" @select="onSelect" />
+        <TopBar :title="title" :tabs="tabs" :active-key="activeTabKey" @select="onSelect">
+          <template #extra>
+            <slot name="top-extra" />
+          </template>
+        </TopBar>
       </div>
 
-      <!-- 左列：核心指标 + 24 小时趋势（控制面板由 SmartCity.vue 通过插槽塞进来） -->
+      <!-- 左列：核心指标 + 24 小时趋势（风格板线框里的「左列两卡」） -->
       <div class="dashboard-area-left">
-        <slot name="left" />
         <PanelCard title="核心指标" :badge="view.tab.label" class="dashboard-metrics-panel">
           <div class="dashboard-metric-grid">
             <MetricCard
@@ -110,10 +113,22 @@ onMounted(() => {
         </PanelCard>
       </div>
 
-      <!-- 底栏：城市资源概览 -->
+      <!-- 底栏：**通栏**（风格板线框的 1280 全宽横条）。
+           左侧条形图，右侧控制按钮 + OSM 署名。 -->
       <div class="dashboard-area-bottom">
-        <PanelCard title="城市资源概览" :badge="view.barsSource?.name">
-          <BarChart :bars="view.bars" />
+        <PanelCard
+          title="城市资源概览"
+          :badge="view.barsSource?.name"
+          class="dashboard-resources-panel"
+        >
+          <div class="dashboard-bottom-row">
+            <div class="dashboard-bottom-chart">
+              <BarChart :bars="view.bars" />
+            </div>
+            <div class="dashboard-bottom-actions">
+              <slot name="bottom-right" />
+            </div>
+          </div>
         </PanelCard>
       </div>
     </div>
@@ -135,12 +150,12 @@ onMounted(() => {
   grid-template-areas:
     'top    top    top'
     'left   scene  right'
-    'left   bottom right';
+    'bottom bottom bottom';
   grid-template-columns:
     minmax(220px, var(--dc-column-width, 340px))
     1fr
     minmax(220px, var(--dc-column-width, 340px));
-  grid-template-rows: var(--dc-topbar-height, 96px) 1fr var(--dc-bottom-height, 150px);
+  grid-template-rows: var(--dc-topbar-height, 96px) 1fr var(--dc-bottom-height, 160px);
   gap: var(--dc-panel-gap, 12px);
   padding: var(--dc-panel-gap, 12px);
   width: 100%;
@@ -187,31 +202,64 @@ onMounted(() => {
   pointer-events: auto;
 }
 
+/* 底栏内部：左侧条形图，右侧控制按钮 + OSM 署名 */
+.dashboard-bottom-row {
+  display: flex;
+  align-items: stretch;
+  gap: var(--dc-panel-gap, 12px);
+  height: 100%;
+  min-height: 0;
+}
+
+.dashboard-bottom-chart {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.dashboard-bottom-actions {
+  flex: 0 0 320px;
+  min-width: 0;
+  overflow: hidden;
+}
+
 .dashboard-metric-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-auto-rows: minmax(52px, 1fr);
   gap: 6px;
+  height: 100%;
+  min-height: 0;
 }
 
 /* 面板在列里的伸缩规则：
-   核心指标 / 分类分布按内容高度（不压缩），趋势与事件流吃掉剩余空间，
+   核心指标 / 分类分布按内容高度起步，趋势与事件流吃掉剩余空间，
    但都有上限 —— 不许长成一根「空条」。
    屏幕不够高时由列的纵向滚动兜住（内容不许被裁掉）。 */
-.dashboard-metrics-panel,
+.dashboard-metrics-panel {
+  flex: 1 1 auto;
+  max-height: 340px;
+}
+
 .dashboard-distribution-panel {
   flex: 0 0 auto;
 }
 
 .dashboard-trend-panel {
   flex: 1 1 auto;
-  min-height: 150px;
-  max-height: 320px;
+  min-height: 200px;
+  max-height: 420px;
 }
 
 .dashboard-events-panel {
   flex: 1 1 auto;
   min-height: 90px;
   max-height: 340px;
+}
+
+/* 底栏卡片：内部一行（条形图 + 右侧操作区），不滚动 */
+.dashboard-resources-panel {
+  height: 100%;
 }
 
 /* 窄屏降级：两列收窄、间距缩小、指标卡改成一列。

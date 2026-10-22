@@ -143,11 +143,10 @@ describe('resolveTabView', () => {
       'road_count',
       'road_length_km',
       'coverage_area_km2',
-      'aqi',
-      'weather_temp',
+      'road_tier_total',
+      'facility_total',
     ])
     expect(cardOf(view, 'building_count')?.value).toBe(3854)
-    expect(cardOf(view, 'aqi')?.badge).toBe('良')
     // 环形图 = 道路等级分布
     expect(view.donut.slices.map(slice => slice.key)).toEqual([
       'road_count_main',
@@ -168,16 +167,29 @@ describe('resolveTabView', () => {
     expect(view.line.points).toHaveLength(3)
   })
 
+  it('never repeats the readout band metrics in the tab cards', () => {
+    // 顶栏读数带（S1 的 .metric-strip）已经显示空气质量 / 气温 / 路网负载。
+    // 同一个数字在大屏上出现两次就是信息噪音 —— 卡片里不许再出现这三个 key。
+    const overview = overviewPayload()
+    const bandOnly = new Set(['aqi', 'weather_temp', 'road_load_index'])
+    for (const key of ['overview', 'air', 'public_safety', 'heritage', 'network']) {
+      const view = resolveTabViewByKey(key, overview)
+      for (const card of view.metrics) {
+        expect(bandOnly.has(card.key)).toBe(false)
+      }
+    }
+  })
+
   it('changes the cards when the tab changes', () => {
     const overview = overviewPayload()
     const air = resolveTabViewByKey('air', overview)
     expect(air.metrics.map(card => card.key)).toEqual([
-      'aqi',
       'primary_pollutant',
       'pm25',
       'pm10',
       'o3',
       'no2',
+      'so2',
     ])
     // 首要污染物来自 aqi 指标的 extra
     expect(cardOf(air, 'primary_pollutant')?.value).toBe('颗粒物(PM10)')
@@ -198,13 +210,13 @@ describe('resolveTabView', () => {
     expect(network.metrics.map(card => card.key)).toEqual([
       'road_length_km',
       'coverage_area_km2',
-      'road_load_index',
+      'road_tier_total',
       'road_count_main',
       'road_count_local',
       'road_count',
     ])
-    // 路网负载是模型估算
-    expect(cardOf(network, 'road_load_index')?.estimated).toBe(true)
+    // 道路分级合计 = 五个分级之和（1955 条线要素，不是道路总数 2260）
+    expect(cardOf(network, 'road_tier_total')?.value).toBe(1955)
 
     const heritage = resolveTabViewByKey('heritage', overview)
     expect(cardOf(heritage, 'heritage')?.value).toBe(87)
@@ -218,11 +230,11 @@ describe('resolveTabView', () => {
 
   it('marks a missing metric as unavailable instead of 0', () => {
     const overview = overviewPayload()
-    const aqi = overview.metrics.find(metric => metric.key === 'aqi')
-    if (aqi) aqi.value = null
+    const building = overview.metrics.find(metric => metric.key === 'building_count')
+    if (building) building.value = null
 
     const view = resolveTabViewByKey('overview', overview)
-    const card = cardOf(view, 'aqi')
+    const card = cardOf(view, 'building_count')
     expect(card?.value).toBeNull()
     expect(card?.unavailable).toBe(true)
     // 没取到数据就不知道分级

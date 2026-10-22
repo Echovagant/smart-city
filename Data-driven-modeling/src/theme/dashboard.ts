@@ -23,8 +23,8 @@ export const DASHBOARD_TOKENS = {
   columnWidth: 340,
   /** 顶栏高度（px）。 */
   topBarHeight: 96,
-  /** 底栏高度（px）。 */
-  bottomBarHeight: 150,
+  /** 底栏高度（px）。底栏是**通栏**（顶栏 / 左列 / 右列 / 底栏四块）。 */
+  bottomBarHeight: 160,
   /** 间距刻度（px）：面板之间、卡片之间的间距都用它。 */
   gap: 12,
   /** 字号阶梯（px）。 */
@@ -51,28 +51,25 @@ export const DASHBOARD_TOKENS = {
     /** 环形图环宽。 */
     donutStroke: 16,
     /** 条形图单条高度。 */
-    barHeight: 14,
+    barHeight: 12,
     /** 条形图行距。 */
-    barGap: 8,
+    barGap: 5,
   },
 } as const
 
 /**
- * 图表色序 —— **只从 `DARK_PALETTE` 里取**。
- *
- * 蓝 → 青 → 蓝灰 → 预警 → 告警，环形的每一段按这个顺序取色。
+ * 图表色序 —— **只从 `DARK_PALETTE.chartSeries` 里取**（蓝青系 6 档）。
  *
  * 这条色序背后的约定（与 `dark.ts` 一致）：
  * **蓝色只做强调与辉光，橙色只做预警，红色只做告警。**
- * 所以色序里没有第四种「装饰色」—— 段位不够时循环取用，而不是另造颜色。
+ *
+ * 所以分类图表（环形图 / 条形图）**一档橙红都不能有** ——
+ * 「历史建筑」「人行道」这类普通分类画成橙色，看图的人会读成一条告警。
+ * 橙与红只留给 severity：拥堵徽标、事件流的严重度、S3 的告警脉冲环。
+ *
+ * 6 段正好够用（空气质量页的环形图有 6 项污染物），不需要循环复用。
  */
-export const CHART_COLORS: readonly string[] = [
-  DARK_PALETTE.accent, // 蓝：强调
-  DARK_PALETTE.flow, // 青：数据流
-  DARK_PALETTE.secondary, // 蓝灰：次级
-  DARK_PALETTE.warning, // 橙：预警
-  DARK_PALETTE.alert, // 红：告警
-]
+export const CHART_COLORS: readonly string[] = DARK_PALETTE.chartSeries
 
 /** 取第 n 段的颜色（按色序循环）。 */
 export const chartColor = (index: number): string =>

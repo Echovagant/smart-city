@@ -41,6 +41,21 @@ describe('深色大屏色板', () => {
     expect(DARK_PALETTE.text).toBe('#e2e8f0')
   })
 
+  it('图表序列色是蓝青系，且一档橙红都没有', () => {
+    // 普通分类（人行道 / 历史建筑 / 商业与办公）不是告警 ——
+    // 把它们画成橙色，看图的人会读成一条告警。橙/红只留给 severity。
+    expect(DARK_PALETTE.chartSeries).toHaveLength(6)
+    expect(DARK_PALETTE.chartSeries).not.toContain(DARK_PALETTE.warning)
+    expect(DARK_PALETTE.chartSeries).not.toContain(DARK_PALETTE.alert)
+    for (const color of DARK_PALETTE.chartSeries) {
+      expect(color).toMatch(/^#/)
+      // 蓝青系：蓝色分量必须高于红色分量
+      const r = parseInt(color.slice(1, 3), 16)
+      const b = parseInt(color.slice(5, 7), 16)
+      expect(b).toBeGreaterThan(r)
+    }
+  })
+
   it('道路四级配色是深色系（主干道最亮，人行道最暗）', () => {
     expect(ROAD_COLORS.main).toBe('#3b82f6')
     expect(ROAD_COLORS.secondary).toBe('#2f6bb0')

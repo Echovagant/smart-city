@@ -8,6 +8,8 @@ import LineChart from '../LineChart.vue'
 import MetricCard from '../MetricCard.vue'
 import PanelCard from '../PanelCard.vue'
 import TopBar from '../TopBar.vue'
+import { CHART_COLORS } from '@/theme/dashboard'
+import { DARK_PALETTE } from '@/theme/dark'
 import type { SourceInfo } from '../../../../types/city'
 
 /**
@@ -169,6 +171,24 @@ describe('DonutChart', () => {
     expect(wrapper.find('svg').exists()).toBe(false)
     expect(wrapper.text()).toContain('暂无分类数据')
   })
+
+  it('只用蓝青序列色：一档橙红都不许出现', () => {
+    // 普通分类不是告警：橙色/红色只留给 severity（拥堵徽标、事件严重度）。
+    const wrapper = mount(DonutChart, {
+      props: { slices, centerLabel: '道路分级合计', centerValue: 178 },
+    })
+    // 只看有弧长的段（背景轨道圆环不算）
+    const strokes = wrapper
+      .findAll('circle')
+      .filter(circle => Boolean(circle.attributes('stroke-dasharray')))
+      .map(circle => circle.attributes('stroke') ?? '')
+    expect(strokes.length).toBe(slices.length)
+    for (const stroke of strokes) {
+      expect(CHART_COLORS).toContain(stroke)
+      expect(stroke).not.toBe(DARK_PALETTE.warning)
+      expect(stroke).not.toBe(DARK_PALETTE.alert)
+    }
+  })
 })
 
 describe('BarChart', () => {
@@ -206,6 +226,26 @@ describe('BarChart', () => {
     const wrapper = mount(BarChart, { props: { bars: [] } })
     expect(wrapper.findAll('.dc-bar-row')).toHaveLength(0)
     expect(wrapper.text()).toContain('暂无数据')
+  })
+
+  it('只用蓝青序列色：一档橙红都不许出现', () => {
+    const wrapper = mount(BarChart, {
+      props: {
+        bars: [
+          { key: 'heritage', label: '历史建筑', value: 87, unit: '处' },
+          { key: 'commerce', label: '商业与办公', value: 55, unit: '处' },
+        ],
+      },
+    })
+    const fills = wrapper
+      .findAll('.dc-bar-fill')
+      .map(fill => fill.attributes('style') ?? '')
+      .filter(style => style.includes('background'))
+    expect(fills.length).toBeGreaterThan(0)
+    for (const fill of fills) {
+      expect(fill).not.toContain(DARK_PALETTE.warning)
+      expect(fill).not.toContain(DARK_PALETTE.alert)
+    }
   })
 })
 

@@ -76,24 +76,19 @@ describe('DashboardOverlay', () => {
 
   it('shows 数据源暂不可用 instead of 0 when the source is degraded', () => {
     const overview = overviewPayload()
-    const aqi = overview.metrics.find(metric => metric.key === 'aqi')
-    if (aqi) aqi.value = null
+    const building = overview.metrics.find(metric => metric.key === 'building_count')
+    if (building) building.value = null
 
     const wrapper = mount(DashboardOverlay, { props: { overview } })
-    const airCard = wrapper
-      .findAll('.dc-metric-card')
-      .find(card => card.find('.dc-metric-label').text() === '空气质量')
-    expect(airCard).toBeDefined()
-    const value = airCard!.find('.dc-metric-value')
-    expect(value.text()).toBe('数据源暂不可用')
-    expect(value.text()).not.toContain('0')
-    // 没取到数据就不知道分级 —— 不显示上一档的「良」
-    expect(airCard!.find('.dc-metric-badge').exists()).toBe(false)
-    // 其它源照常显示
     const buildingCard = wrapper
       .findAll('.dc-metric-card')
       .find(card => card.find('.dc-metric-label').text() === '建筑总数')
-    expect(buildingCard!.find('.dc-metric-value').text()).toBe('3854')
+    expect(buildingCard).toBeDefined()
+    const value = buildingCard!.find('.dc-metric-value')
+    expect(value.text()).toBe('数据源暂不可用')
+    expect(value.text()).not.toContain('0')
+    // 没取到数据就不知道分级 —— 不显示上一档的「良」
+    expect(buildingCard!.find('.dc-metric-badge').exists()).toBe(false)
   })
 
   it('shows an honest empty state before the overview arrives', () => {
@@ -103,11 +98,23 @@ describe('DashboardOverlay', () => {
     expect(wrapper.find('.dc-event-empty').text()).toBe('暂无事件数据')
   })
 
-  it('renders the slot content of the left column', () => {
+  it('places the readout band in the top bar and the controls in the bottom bar', () => {
     const wrapper = mount(DashboardOverlay, {
       props: { overview: overviewPayload() },
-      slots: { left: '<div class="fake-control-panel">控制面板</div>' },
+      slots: {
+        'top-extra': '<div class="fake-readout-band">读数带</div>',
+        'bottom-right': '<div class="fake-control-panel">控制面板</div>',
+      },
     })
-    expect(wrapper.find('.fake-control-panel').exists()).toBe(true)
+
+    // 读数带在顶栏里
+    const top = wrapper.find('.dashboard-area-top')
+    expect(top.find('.fake-readout-band').exists()).toBe(true)
+    // 控制面板在通栏底栏里
+    const bottom = wrapper.find('.dashboard-area-bottom')
+    expect(bottom.find('.fake-control-panel').exists()).toBe(true)
+    // 左列只剩「核心指标」+「24 小时趋势」两块
+    const left = wrapper.find('.dashboard-area-left')
+    expect(left.findAll('.dc-panel')).toHaveLength(2)
   })
 })

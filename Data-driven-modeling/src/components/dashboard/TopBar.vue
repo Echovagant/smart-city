@@ -39,11 +39,16 @@ const emit = defineEmits<{
         {{ tab.label }}
       </button>
     </nav>
+    <!-- 右侧读数带插槽：S1 的指标带与实时交通读数都挂在这里 -->
+    <div class="dc-topbar-extra">
+      <slot name="extra" />
+    </div>
   </header>
 </template>
 
 <style scoped>
 .dc-topbar {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -62,10 +67,10 @@ const emit = defineEmits<{
 
 .dc-topbar-title {
   margin: 0;
-  font-size: var(--dc-title-size, 22px);
+  font-size: var(--dc-title-size, 20px);
   font-weight: 600;
-  letter-spacing: 0.32em;
-  text-indent: 0.32em;
+  letter-spacing: 0.24em;
+  text-indent: 0.24em;
   color: var(--dc-text, #e2e8f0);
   text-shadow: 0 0 18px rgba(34, 211, 238, 0.45);
   white-space: nowrap;
@@ -101,5 +106,27 @@ const emit = defineEmits<{
   border-color: var(--dc-flow, #22d3ee);
   color: var(--dc-flow, #22d3ee);
   box-shadow: 0 0 14px rgba(34, 211, 238, 0.28);
+}
+
+/* 右侧读数带：S1 的指标带 + 实时交通读数。
+   绝对定位在右上角，标题与页签仍然居中。
+   宽度要克制 —— 读数带一旦压到标题上，大屏就废了。 */
+.dc-topbar-extra {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 44%;
+}
+
+/* 窄屏：读数带压缩 —— 来源小字收窄（完整内容在 title 属性里），
+   但**不隐藏数值**：隐藏 = 大屏上少了一组读数。 */
+@media (max-width: 1500px) {
+  .dc-topbar-extra {
+    max-width: 40%;
+  }
 }
 </style>

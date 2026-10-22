@@ -185,6 +185,26 @@ function primaryPollutantCard(ctx: ResolveContext): DashboardMetricCard {
   return cardFromValue('primary_pollutant', '首要污染物', value, metric?.source ?? null)
 }
 
+/**
+ * 道路分级合计（五个分级之和）。
+ *
+ * 分级只统计**线要素**（1955 条），与「道路总数」（2260 条，含广场地面）
+ * 不是同一个数 —— 卡片标题写清楚，别让人对不上账。
+ * 任一分级取不到时整张卡片不可用（不许拿部分和冒充总数）。
+ */
+function roadTierTotalCard(ctx: ResolveContext): DashboardMetricCard {
+  const values = ROAD_TIER_METRICS.map(tier => numericValue(ctx.metrics.get(tier.key)))
+  const missing = values.some(value => value === null)
+  const total = missing ? null : (values as number[]).reduce((sum, value) => sum + value, 0)
+  return cardFromValue(
+    'road_tier_total',
+    '道路分级合计',
+    total,
+    ctx.metrics.get('road_count_main')?.source ?? null,
+    { unit: '条' },
+  )
+}
+
 /** 一组「取得到就进环、取不到就丢掉」的段。 */
 function buildSlices(
   items: Array<{ key: string; label: string; value: number | null }>,
@@ -310,7 +330,13 @@ function facilityBars(ctx: ResolveContext): DashboardBar[] {
   }))
 }
 
-/** 区域概览。 */
+/**
+ * 区域概览。
+ *
+ * **顶栏读数带已经显示 `aqi` / `weather_temp` / `road_load_index`**
+ * （S1 的 `.metric-strip` 移到顶栏右侧），所以这里的 6 张卡片
+ * **不许再出现这三个数字** —— 同一个数字在大屏上出现两次就是信息噪音。
+ */
 function overviewView(tab: DashboardTab, ctx: ResolveContext): TabView {
   return {
     tab,
@@ -319,8 +345,8 @@ function overviewView(tab: DashboardTab, ctx: ResolveContext): TabView {
       cardFromMetric('road_count', '道路总数', ctx.metrics.get('road_count')),
       cardFromMetric('road_length_km', '路网总长', ctx.metrics.get('road_length_km')),
       cardFromMetric('coverage_area_km2', '覆盖面积', ctx.metrics.get('coverage_area_km2')),
-      cardFromMetric('aqi', '空气质量', ctx.metrics.get('aqi')),
-      cardFromMetric('weather_temp', '气温', ctx.metrics.get('weather_temp')),
+      roadTierTotalCard(ctx),
+      cardFromMetric('facility_total', '设施分类总数', ctx.metrics.get('facility_total')),
     ],
     donut: roadTierDonut(ctx),
     line: aqiLine(ctx),
@@ -329,17 +355,21 @@ function overviewView(tab: DashboardTab, ctx: ResolveContext): TabView {
   }
 }
 
-/** 空气质量。 */
+/**
+ * 空气质量。
+ *
+ * AQI 本身在顶栏读数带上，卡片里放污染物浓度（首要污染物 + 5 项浓度）。
+ */
 function airView(tab: DashboardTab, ctx: ResolveContext): TabView {
   return {
     tab,
     metrics: [
-      cardFromMetric('aqi', 'AQI', ctx.metrics.get('aqi')),
       primaryPollutantCard(ctx),
       cardFromMetric('pm25', 'PM2.5', ctx.metrics.get('pm25')),
       cardFromMetric('pm10', 'PM10', ctx.metrics.get('pm10')),
       cardFromMetric('o3', 'O3', ctx.metrics.get('o3')),
       cardFromMetric('no2', 'NO2', ctx.metrics.get('no2')),
+      cardFromMetric('so2', 'SO2', ctx.metrics.get('so2')),
     ],
     donut: pollutantDonut(ctx),
     line: aqiLine(ctx),
@@ -348,7 +378,11 @@ function airView(tab: DashboardTab, ctx: ResolveContext): TabView {
   }
 }
 
-/** 公共安全。 */
+/**
+ * 公共安全。
+ *
+ * 设施分类计数全部来自后端 `facilities`（分类互斥，合计 = 设施总数）。
+ */
 function publicSafetyView(tab: DashboardTab, ctx: ResolveContext): TabView {
   return {
     tab,
@@ -356,9 +390,9 @@ function publicSafetyView(tab: DashboardTab, ctx: ResolveContext): TabView {
       facilityCard(ctx, 'medical'),
       facilityCard(ctx, 'public_safety'),
       facilityCard(ctx, 'education'),
-      cardFromMetric('building_count', '建筑总数', ctx.metrics.get('building_count')),
-      cardFromMetric('aqi', '空气质量', ctx.metrics.get('aqi')),
-      cardFromMetric('weather_temp', '气温', ctx.metrics.get('weather_temp')),
+      facilityCard(ctx, 'heritage'),
+      facilityCard(ctx, 'commerce'),
+      cardFromMetric('facility_total', '设施分类总数', ctx.metrics.get('facility_total')),
     ],
     donut: facilityDonut(ctx),
     line: aqiLine(ctx),
@@ -375,9 +409,9 @@ function heritageView(tab: DashboardTab, ctx: ResolveContext): TabView {
       facilityCard(ctx, 'heritage'),
       cardFromMetric('facility_total', '设施分类总数', ctx.metrics.get('facility_total')),
       cardFromMetric('building_count', '建筑总数', ctx.metrics.get('building_count')),
+      cardFromMetric('road_count', '道路总数', ctx.metrics.get('road_count')),
       cardFromMetric('road_length_km', '路网总长', ctx.metrics.get('road_length_km')),
-      cardFromMetric('aqi', '空气质量', ctx.metrics.get('aqi')),
-      cardFromMetric('weather_temp', '气温', ctx.metrics.get('weather_temp')),
+      cardFromMetric('coverage_area_km2', '覆盖面积', ctx.metrics.get('coverage_area_km2')),
     ],
     donut: facilityDonut(ctx),
     line: aqiLine(ctx),
@@ -386,15 +420,19 @@ function heritageView(tab: DashboardTab, ctx: ResolveContext): TabView {
   }
 }
 
-/** 路网运行。 */
+/**
+ * 路网运行。
+ *
+ * 路网负载（`road_load_index`）是**模型估算**，它在顶栏读数带上并标着
+ * 「（模型估算）」，所以这里不再重复它。
+ */
 function networkView(tab: DashboardTab, ctx: ResolveContext): TabView {
   return {
     tab,
     metrics: [
       cardFromMetric('road_length_km', '路网总长', ctx.metrics.get('road_length_km')),
       cardFromMetric('coverage_area_km2', '覆盖面积', ctx.metrics.get('coverage_area_km2')),
-      // road_load_index 是**模型估算** → 卡片会标「（模型估算）」。
-      cardFromMetric('road_load_index', '路网负载', ctx.metrics.get('road_load_index')),
+      roadTierTotalCard(ctx),
       cardFromMetric('road_count_main', '主干道', ctx.metrics.get('road_count_main')),
       cardFromMetric('road_count_local', '支路', ctx.metrics.get('road_count_local')),
       cardFromMetric('road_count', '道路总数', ctx.metrics.get('road_count')),

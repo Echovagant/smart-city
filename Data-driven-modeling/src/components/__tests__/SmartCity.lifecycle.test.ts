@@ -1475,7 +1475,7 @@ describe('大屏骨架的 DOM 契约', () => {
       expect(wrapper.find('.metric-strip').exists()).toBe(true)
     })
 
-    // 1) 控制面板 + 4 个按钮（位置搬进了大屏左列，类名与行为不变）
+    // 1) 控制面板 + 4 个按钮（位置搬进了通栏底栏，类名与行为不变）
     const panel = wrapper.find('.control-panel')
     expect(panel.exists()).toBe(true)
     const buttons = panel.findAll('button')
@@ -1495,6 +1495,36 @@ describe('大屏骨架的 DOM 契约', () => {
 
     // 4) OSM 署名（ODbL：展示这份数据必须署名）
     expect(wrapper.text()).toContain('数据 © OpenStreetMap contributors')
+
+    wrapper.unmount()
+  })
+
+  it('puts the readout band in the top bar and the control panel in the bottom bar', async () => {
+    installFetch(stubWithOverview())
+
+    const wrapper = mountSmartCity()
+    await vi.waitFor(() => {
+      expect(wrapper.find('.metric-strip').exists()).toBe(true)
+    })
+
+    // 读数带（指标带 + 实时交通）在顶栏右侧
+    const top = wrapper.find('.dashboard-area-top')
+    expect(top.find('.metric-strip').exists()).toBe(true)
+    expect(top.find('.traffic-status').exists()).toBe(true)
+
+    // 控制面板（4 个按钮 + OSM 署名）在通栏底栏右侧
+    const bottom = wrapper.find('.dashboard-area-bottom')
+    expect(bottom.find('.control-panel').exists()).toBe(true)
+    expect(bottom.findAll('.control-panel button')).toHaveLength(4)
+    expect(bottom.text()).toContain('OpenStreetMap contributors')
+
+    // 左列只剩「核心指标」+「24 小时趋势」两块（风格板线框的「左列两卡」）
+    const left = wrapper.find('.dashboard-area-left')
+    expect(left.findAll('.dc-panel')).toHaveLength(2)
+    // 同一个数字不在大屏上出现两次：读数带的三个指标不出现在左列卡片里
+    const leftText = left.text()
+    expect(leftText).not.toContain('空气质量')
+    expect(leftText).not.toContain('气温')
 
     wrapper.unmount()
   })
