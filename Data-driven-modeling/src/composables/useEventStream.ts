@@ -1,4 +1,4 @@
-import type { CityEvent, CityOverview, Metric, Series } from '../../types/city'
+import type { CityEvent, CityOverview, EventLocation, LngLat, Metric, Series } from '../../types/city'
 
 /**
  * 事件流的前端辅助（**纯函数**，不碰 Vue 响应式，好测）。
@@ -107,6 +107,37 @@ export const formatEventTime = (value?: string | null): string | null => {
   const pad = (n: number) => String(n).padStart(2, '0')
   return `${pad(parsed.getHours())}:${pad(parsed.getMinutes())}`
 }
+
+/**
+ * 事件位置 → 实际落点。
+ *
+ * 两类事件，**全项目只有一个城心**（天安门 = `cityConfig.center`，也是相机的绕行中心）：
+ *
+ * - **全市级**（`location_kind === 'city'`：空气质量、天气）——
+ *   全市指标**没有空间位置**，落在城心是准确的；
+ *   而且城心就是相机盯着的那一点，所以默认鸟瞰视角下标记**永远在屏幕中心**。
+ * - **几何锚定**（`location_kind === 'geometry'`：路网负载）——
+ *   位置是**真实几何**上的点（最长主干道的弧长中点），原样使用，不拿城心替换。
+ *
+ * 缺省（没有 `location_kind`）按 `'geometry'` 处理 —— 沿用 `location` 原坐标。
+ */
+export const resolveEventLocation = (
+  event: CityEvent,
+  cityCenter: LngLat,
+): EventLocation | undefined => {
+  const kind = event.location_kind ?? 'geometry'
+  if (kind === 'city') {
+    return {
+      lng: cityCenter.lng,
+      lat: cityCenter.lat,
+      label: CITY_EVENT_LOCATION_LABEL,
+    }
+  }
+  return event.location
+}
+
+/** 全市级事件的位置标签（城心 = 天安门）。 */
+export const CITY_EVENT_LOCATION_LABEL = '城心（全市指标）'
 
 /**
  * 空态解释：说清楚「检查了哪些条件、为什么没触发」。

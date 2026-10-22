@@ -356,7 +356,23 @@ export interface CityEvent {
   detail?: string
   /** 发生时间（ISO8601）。 */
   time?: string
-  /** 位置。 */
+  /**
+   * 这个事件**有没有具体空间位置**。
+   *
+   * - `'city'`：**全市级**事件（空气质量、天气）—— 全市指标没有空间位置，
+   *   前端把它落在**城心**（天安门，也是相机的绕行中心），因此默认视角下永远在屏幕中心。
+   * - `'geometry'`：**几何锚定**事件（路网负载）—— `location` 是真实几何上的点。
+   *
+   * 缺省按 `'geometry'` 处理（沿用 `location` 原坐标）。
+   */
+  location_kind?: 'city' | 'geometry'
+  /**
+   * 位置。
+   *
+   * `location_kind === 'geometry'` 时是事件的真实坐标；
+   * `'city'` 时是后端自己的参考点（**数据范围中心**），前端会改用城心 ——
+   * 两种 kind 靠 `location_kind` 区分，不靠猜。
+   */
   location?: EventLocation
   /** 指回它依据的那个指标（可追溯）。 */
   metric_key?: string

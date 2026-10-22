@@ -5,6 +5,8 @@ import {
   dedupeEvents,
   explainEmptyEvents,
   formatEventTime,
+  resolveEventLocation,
+  CITY_EVENT_LOCATION_LABEL,
 } from '../useEventStream'
 import type { CityEvent, CityOverview, SourceInfo } from '../../../types/city'
 
@@ -111,6 +113,52 @@ describe('formatEventTime', () => {
     expect(formatEventTime(undefined)).toBeNull()
     expect(formatEventTime('')).toBeNull()
     expect(formatEventTime('not a date')).toBeNull()
+  })
+})
+
+describe('resolveEventLocation', () => {
+  const CITY_CENTER = { lng: 116.3976, lat: 39.9055 }
+
+  it('puts a city-level event on the city centre', () => {
+    // 全市级事件没有空间位置 → 落在城心（天安门 = 相机的绕行中心）
+    const location = resolveEventLocation(
+      event({
+        location_kind: 'city',
+        location: { lng: 116.4020155, lat: 39.9153679, label: '数据范围中心' },
+      }),
+      CITY_CENTER,
+    )
+    expect(location).toEqual({
+      lng: CITY_CENTER.lng,
+      lat: CITY_CENTER.lat,
+      label: CITY_EVENT_LOCATION_LABEL,
+    })
+    // 标签不再出现「城心（数据范围中心）」—— 应用里只有一个城心
+    expect(CITY_EVENT_LOCATION_LABEL).toContain('城心')
+    expect(CITY_EVENT_LOCATION_LABEL).not.toContain('数据范围中心')
+  })
+
+  it('keeps the real geometry of an anchored event', () => {
+    const anchored = {
+      lng: 116.41,
+      lat: 39.92,
+      label: '主路段（OSM way/12345）',
+    }
+    const location = resolveEventLocation(
+      event({ location_kind: 'geometry', location: anchored }),
+      CITY_CENTER,
+    )
+    expect(location).toEqual(anchored)
+  })
+
+  it('treats a missing kind as geometry', () => {
+    const anchored = { lng: 116.41, lat: 39.92, label: '主路段（OSM way/12345）' }
+    const location = resolveEventLocation(event({ location: anchored }), CITY_CENTER)
+    expect(location).toEqual(anchored)
+  })
+
+  it('returns undefined when there is no location at all', () => {
+    expect(resolveEventLocation(event({ location: undefined }), CITY_CENTER)).toBeUndefined()
   })
 })
 

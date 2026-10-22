@@ -128,7 +128,14 @@ class CityEvent(BaseModel):
     - ``level``：严重度（提示 / 预警 / 告警）。
     - ``title`` / ``detail``：标题与说明。
     - ``time``：事件发生/判定时刻（ISO8601）。
-    - ``location``：位置。
+    - ``location_kind``：**这个事件有没有具体空间位置**。
+        - ``"city"``：**全市级**事件（空气质量、天气）—— 没有空间位置，
+          前端把它落在**城心**（应用里唯一定义的城心：天安门）。
+        - ``"geometry"``：**几何锚定**事件（路网负载）——
+          ``location`` 是**真实几何**上的点（最长主干道的弧长中点）。
+    - ``location``：位置。``location_kind="geometry"`` 时是事件的真实坐标；
+      ``location_kind="city"`` 时是**数据范围中心**（后端自己的参考点），
+      前端会改用城心 —— 两种 kind 靠 ``location_kind`` 区分，不靠猜。
     - ``metric_key``：指回它依据的那个指标（可追溯）。
     - ``source``：事件依据的那个源的 ``SourceInfo``（不是新造一个），
       于是「取数时刻 / 观测时刻 / 是否估算」与指标完全一致。
@@ -141,6 +148,7 @@ class CityEvent(BaseModel):
     title: str
     detail: str = ""
     time: str
+    location_kind: Literal["city", "geometry"]
     location: EventLocation
     metric_key: str
     source: SourceInfo

@@ -16,14 +16,19 @@
 
 派生规则（全部有真实依据）
 --------------------------
-====  ==================================================================  ==========  ==========  ================
-#     规则                                                                level       estimated  位置
-====  ==================================================================  ==========  ==========  ================
-1     ``aqi_24h`` 序列相邻两点的分级不同 → 「空气质量由{旧}转为{新}」   按新等级     false       城市中心
-2     当前 ``aqi.level >= 3`` → 「当前空气质量{等级}」                    按等级       false       城市中心
-3     ``road_load_index >= 80`` → 「路网负载指数 {v} 超过参考阈值 80」      alert        **true**    **最长主干道中点**
-4     ``weather_temp <= 0``（低温）/ ``>= 35``（高温）→ 极端天气提示        warn         false       城市中心
-====  ==================================================================  ==========  ==========  ================
+====  ==================================================================  ==========  ==========  ================  ===============
+#     规则                                                                level       estimated  位置             ``location_kind``
+====  ==================================================================  ==========  ==========  ================  ===============
+1     ``aqi_24h`` 序列相邻两点的分级不同 → 「空气质量由{旧}转为{新}」   按新等级     false       城心（全市）     ``"city"``
+2     当前 ``aqi.level >= 3`` → 「当前空气质量{等级}」                    按等级       false       城心（全市）     ``"city"``
+3     ``road_load_index >= 80`` → 「路网负载指数 {v} 超过参考阈值 80」      alert        **true**    **最长主干道中点**  ``"geometry"``
+4     ``weather_temp <= 0``（低温）/ ``>= 35``（高温）→ 极端天气提示        warn         false       城心（全市）     ``"city"``
+====  ==================================================================  ==========  ==========  ================  ===============
+
+**「城心」只有一个**：应用里唯一定义的城心是天安门（前端 ``cityConfig.center``，
+也是相机的绕行中心）。规则 1/2/4 是**全市级**事件 —— 全市指标本来就没有空间位置，
+落在城心是准确的，而且这样它在默认鸟瞰视角下**永远在屏幕中心**。
+规则 3 是**几何锚定**事件 —— 位置是真实道路上的点，不许用城心假装路段。
 
 AQI 分级换算
 ------------
@@ -77,9 +82,19 @@ WEATHER_HIGH_TEMP_C = 35.0
 # 事件流的长度上限：前端只渲染前若干条，列表里全给。
 MAX_EVENTS = 20
 
-# 本地 OSM 快照不可用时的兜底场景中心（与前端 cityConfig.center 一致）。
+# 全市级事件的 ``location_kind``：没有空间位置，前端落在**城心**。
+LOCATION_KIND_CITY = "city"
+
+# 几何锚定事件的 ``location_kind``：位置是真实几何上的点。
+LOCATION_KIND_GEOMETRY = "geometry"
+
+# 本地 OSM 快照不可用时的兜底参考点。
+#
+# 注意：这是**数据范围中心**（OSM 抽取范围的围中心），**不是城心** ——
+# 全项目只有一个城心：天安门（前端 ``cityConfig.center``，也是相机的绕行中心）。
+# 全市级事件的坐标由前端按 ``location_kind`` 解析到城心，这里只是后端自己的参考点。
 SCENE_CENTER_FALLBACK = EventLocation(
-    lng=116.3976, lat=39.9055, label="城市中心（天安门一带）"
+    lng=116.4020155, lat=39.9153679, label="数据范围中心（默认位置）"
 )
 
 
@@ -176,6 +191,7 @@ def _rule_aqi_level_change(
                             % (point.t, point.v, new_label, previous[1])
                         ),
                         time=point.t,
+                        location_kind=LOCATION_KIND_CITY,
                         location=center,
                         metric_key=item.key,
                         source=item.source,
@@ -213,6 +229,7 @@ def _rule_current_aqi(metrics: Sequence[Metric], center: EventLocation) -> List[
                 % (value, grade, AQI_ALERT_LEVEL)
             ),
             time=_event_time(metric.source),
+            location_kind=LOCATION_KIND_CITY,
             location=center,
             metric_key=metric.key,
             source=metric.source,
@@ -229,7 +246,8 @@ def _rule_road_load(
     """规则 3：路网负载指数超过参考阈值。
 
     位置必须落在**真实道路几何**上：本地 OSM 快照里等级最高且最长的那条线段的中点。
-    拿不到锚点时退回城市中心（不编造位置）。
+    拿不到锚点时退回参考点（不编造位置），但 kind 仍然是 ``geometry`` ——
+    这条事件本来就是**几何锚定**的。
     """
     metric = _find_metric(metrics, "road_load_index")
     value = _metric_value(metric)
@@ -254,6 +272,7 @@ def _rule_road_load(
                 "不含任何实时车流或路况观测，不能当作实时路况读数。"
             ),
             time=_event_time(metric.source),
+            location_kind=LOCATION_KIND_GEOMETRY,
             location=location,
             metric_key=metric.key,
             source=metric.source,
@@ -291,6 +310,7 @@ def _rule_weather(metrics: Sequence[Metric], center: EventLocation) -> List[City
             title=title,
             detail=detail,
             time=_event_time(metric.source),
+            location_kind=LOCATION_KIND_CITY,
             location=center,
             metric_key=metric.key,
             source=metric.source,
@@ -309,8 +329,10 @@ def derive_events(
     """从真实指标派生事件流。
 
     - ``metrics`` / ``series``：聚合器拿到的全部指标与序列（**含降级占位**）。
-    - ``center``：场景里的「城市中心」。默认用天安门一带的兜底坐标。
-    - ``road_anchor``：最长主干道的中点（规则 3 的位置）。
+    - ``center``：**数据范围中心**（本地 OSM 快照的围中心）——
+      全市级事件（``location_kind="city"``）的后端参考点。
+      前端会按 kind 把它们改放到**城心**（天安门），所以这里的坐标只是载荷里的参考值。
+    - ``road_anchor``：最长主干道的中点（规则 3 的**真实几何**位置）。
 
     **每条规则各自兜住自己的异常**：任何一条规则出错只是跳过那条规则，
     其余照常产出 —— 端点因此永不 500。
