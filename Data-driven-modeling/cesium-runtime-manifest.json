@@ -235,7 +235,7 @@
         },
         "G4": {
           "name": "NaturalEarthII TMS 底图",
-          "rule": "TMS 底图瓦片；本应用底图是高德 UrlTemplateImageryProvider",
+          "rule": "TMS 底图瓦片；本应用底座自绘，不接任何影像瓦片服务",
           "enabled": true,
           "files": [
             "Assets/Textures/NaturalEarthII/0/0/0.jpg",

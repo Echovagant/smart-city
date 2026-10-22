@@ -693,19 +693,19 @@ def main(argv=None) -> int:
         decoded_bytes = browser_median("decodedBytes")
         tile_count = browser_median("externalTileCount")
         tile_ms = browser_median("externalTileDurationMs")
-        rows.append(["首屏传输量（线上字节，不含高德瓦片）", "参考",
+        rows.append(["首屏传输量（线上字节，不含外部请求）", "参考",
                      _mb(transfer_bytes) if transfer_bytes is not None else "未提供", NOTE])
-        rows.append(["首屏解码后体积（不含高德瓦片）", "参考",
+        rows.append(["首屏解码后体积（不含外部请求）", "参考",
                      _mb(decoded_bytes) if decoded_bytes is not None else "未提供", NOTE])
         if tile_count is not None and tile_ms is not None:
             rows.append([
-                "高德瓦片（外部网络）",
+                "外部请求（第三方）",
                 "参考（外部依赖，不是前端成本）",
                 f"{tile_count:.0f} 个 / {tile_ms:.0f} ms",
                 NOTE,
             ])
         else:
-            rows.append(["高德瓦片（外部网络）", "参考（外部依赖，不是前端成本）",
+            rows.append(["外部请求（第三方）", "参考（外部依赖，不是前端成本）",
                          "未提供", NOTE])
 
     print(render_table(["指标", "计划书验收线", "实测", "判定"], rows))
@@ -781,7 +781,7 @@ def main(argv=None) -> int:
         print("        LCP 量到的是页面文字块；「3D 城市画出来」对应的口径是「应用就绪」那一行。")
         print("        首屏量的是**浏览器已就绪之后**的页面加载；全新 Chrome 的冷启动首字节延迟")
         print("        单独记在「冷启动」那一行（那是浏览器开销，不是产品成本）。")
-        print("外部网：高德瓦片来自 webrd0{1..4}.is.autonavi.com，等待时间是外部网络成本，")
+        print("外部网：第三方请求的等待时间是外部网络成本，")
         print("        传输量已把它拆开单列——读首屏数字时别把它算到前端头上。")
         print()
 

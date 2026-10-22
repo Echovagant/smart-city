@@ -33,7 +33,7 @@
  *      返回 JSON 说明 dist/ 没被后端找到，量的就不是生产形态。
  *   2. **不连别人开着的 Chrome**。每轮都新起一个独立 `--user-data-dir` +
  *      独立调试端口的 Chrome，只连自己起的那个。
- *   3. **底图来自高德 CDN（外部网络）**。首屏时间含外部网络等待，
+ *   3. **底座自绘，但外部请求仍会进首屏时间**。首屏时间含外部网络等待，
  *      本脚本把外部请求**单独拆出来计数与计时**，报告里必须把两者分开讲。
  *
  * 另外：
@@ -593,7 +593,7 @@ const PAGE_SCRIPT = `
   };
   window.__perf = perf;
   // 资源计时缓冲区默认只留 250 条。本应用首屏会打 200+ 个 Cesium 运行时文件
-  // （其中一大半是 Web Worker 自己的脚本），缓冲区一满，最早的记录（含高德瓦片）
+  // （其中一大半是 Web Worker 自己的脚本），缓冲区一满，最早的记录（含外部请求）
   // 会被挤掉——外部瓦片的传输量就会变成 0。这里把上限调大。
   try {
     performance.setResourceTimingBufferSize(3000);
@@ -1061,11 +1061,22 @@ function paintTime(paintEntries, name) {
   return hit ? hit.startTime : null
 }
 
-function isGaodeTile(url) {
-  return /(^|\.)is\.autonavi\.com/i.test(url) || /autonavi\.com/i.test(url)
+/**
+ * 判断一个请求是不是「外部」—— 即不是本应用自己的源。
+ *
+ * 底座自绘，应用不联系任何影像瓦片服务，所以这个数正常是 0；
+ * 将来若引入任何第三方资源，它会立刻被算出来（而不是靠一个写死的域名白名单）。
+ */
+function isExternalRequest(url) {
+  try {
+    const parsed = new URL(url)
+    return !['127.0.0.1', 'localhost', '::1', '[::1]'].includes(parsed.hostname)
+  } catch {
+    return false
+  }
 }
 
-/** 把请求按「应用产物 / Cesium 运行时 / 后端 API / 外部（高德瓦片）」分四类。 */
+/** 把请求按「应用产物 / Cesium 运行时 / 后端 API / 外部」分四类。 */
 function categorize(resources, network) {
   const buckets = {
     app: newBucket(),
@@ -1096,7 +1107,7 @@ function categorize(resources, network) {
   let allDurationMs = 0
   for (const [, entry] of network.requests) {
     if (typeof entry.durationMs === 'number') allDurationMs += entry.durationMs
-    if (!isGaodeTile(entry.url)) continue
+    if (!isExternalRequest(entry.url)) continue
     tileCount += 1
     tileDurationMs += entry.durationMs || 0
     tileBytes += entry.encodedDataLength || 0
@@ -1154,7 +1165,7 @@ function networkSummary(network) {
 function countTileRequests(network) {
   let count = 0
   for (const [, entry] of network.requests) {
-    if (isGaodeTile(entry.url)) count += 1
+    if (isExternalRequest(entry.url)) count += 1
   }
   return count
 }
@@ -1344,7 +1355,7 @@ function printReport(payload, options) {
       ? `${run.systemCpuBusyPercent.toFixed(0)}%`
       : UNKNOWN,
   ])
-  process.stdout.write('逐轮明细（冷启动 = 全新浏览器首个导航的首字节；外部 = 高德瓦片；CPU = 测量期间整机非空闲时间占比）\n')
+  process.stdout.write('逐轮明细（冷启动 = 全新浏览器首个导航的首字节；外部 = 第三方请求；CPU = 测量期间整机非空闲时间占比）\n')
   process.stdout.write(
     renderTable(
       ['轮', '冷启动', 'LCP', 'load', '应用就绪', '静止 fps', '运动 fps', '瓦片数', '瓦片耗时', 'CPU'],
@@ -1371,7 +1382,7 @@ function printReport(payload, options) {
     const transferred = summarize(runs.map((run) => run.transfer[key].transferBytes))
     const decoded = summarize(runs.map((run) => run.transfer[key].decodedBytes))
     transferRows.push([
-      { app: '应用产物（HTML/JS/CSS）', cesium: 'Cesium 运行时（/Cesium/）', api: '后端 API（/api/*）', external: '外部（高德瓦片）' }[key],
+      { app: '应用产物（HTML/JS/CSS）', cesium: 'Cesium 运行时（/Cesium/）', api: '后端 API（/api/*）', external: '外部（第三方）' }[key],
       String(counts.median ?? 0),
       formatBytes(transferred.median),
       formatBytes(decoded.median),
@@ -1382,13 +1393,12 @@ function printReport(payload, options) {
   if (first) {
     const tileShare = first.transfer.external.tileTimeShare
     process.stdout.write(
-      `外部网络：高德瓦片 ${first.transfer.external.tileCount} 个，` +
+      `外部网络：第三方请求 ${first.transfer.external.tileCount} 个，` +
         `累计等待 ${first.transfer.external.tileDurationMs} ms，` +
         `占首屏全部请求耗时 ${tileShare !== null ? (tileShare * 100).toFixed(1) + '%' : '未知'}（第 1 轮）。\n`
     )
     process.stdout.write(
-      '          瓦片来自 webrd0{1..4}.is.autonavi.com（外部网络），' +
-        '这部分耗时**不是**前端代码的成本，解读首屏数字时必须单独摘出来。\n'
+      '          这部分耗时**不是**前端代码的成本，解读首屏数字时必须单独摘出来。\n'
     )
     const lcpTag = first.lcpElement
     if (lcpTag) {

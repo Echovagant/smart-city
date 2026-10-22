@@ -219,7 +219,7 @@ cd ../backend-python && ./.venv/Scripts/python.exe main.py
 | 响应头 | 值 | 作用 |
 |---|---|---|
 | `X-Content-Type-Options` | `nosniff` | 不要猜响应的 MIME 类型（本服务把 GeoJSON 以 `application/json` 返回） |
-| `Referrer-Policy` | `strict-origin-when-cross-origin` | 页面里的高德瓦片请求会把 Referer 带给第三方，收紧它 |
+| `Referrer-Policy` | `strict-origin-when-cross-origin` | 页面里的跨源请求会把 Referer 带给第三方，收紧它 |
 | `X-Frame-Options` | `SAMEORIGIN` | 阻止被 iframe 嵌套（点击劫持） |
 
 实现在 `main.SecurityHeadersMiddleware`（`main.py:184-210`）——**纯 ASGI 中间件**，
@@ -238,36 +238,26 @@ content-length 与 gzip 行为（逐字节相同）。
 report-only **不拦截**任何东西，只让浏览器把违规报出来 —— 这是先看清 Cesium
 实际需要什么、再决定要不要升级成强制策略的观测手段。
 
-实测（真实 Chrome，2026-10-21）：
+**底座是自绘的**：应用不请求任何瓦片服务，首屏外部请求是 **0 个**，
+所以策略里不需要给任何第三方主机开口子。Cesium 自己需要的是：
 
-- 严格探针 `default-src 'self'`（`default-src` 会作为所有未显式设置的指令的回退）
-  触发 **101 条违规 / 4 类**：
-  - `connect-src`（经 `default-src` 回退）发起高德瓦片连接 **77** 条
-  - `script-src`（经 `default-src` 回退）`eval` / `new Function` **16** 条
-  - `script-src`（经 `default-src` 回退）WebAssembly 编译/实例化 **4** 条
-  - `style-src`（经 `default-src` 回退）内联样式 **4** 条
-- 按上述结果收紧后的候选策略实测 **0 条违规**（netlog 证明 80 次瓦片请求确实发出去了，
-  不是「没跑到那段代码」而是真的干净）：
+```
+default-src 'self';
+script-src 'self' 'unsafe-eval' 'unsafe-inline' blob:;
+worker-src 'self' blob:;
+img-src 'self' data: blob:;
+connect-src 'self';
+style-src 'self' 'unsafe-inline';
+font-src 'self' data:
+```
 
-  ```
-  default-src 'self';
-  script-src 'self' 'unsafe-eval' 'unsafe-inline' blob:;
-  worker-src 'self' blob:;
-  img-src 'self' data: blob: https://*.is.autonavi.com;
-  connect-src 'self' https://*.is.autonavi.com;
-  style-src 'self' 'unsafe-inline';
-  font-src 'self' data:
-  ```
+- `script-src` 的 `'unsafe-eval'` 是**实测结论**：Cesium 需要求值（`eval` / `new Function`）
+  与编译 WebAssembly。**不要为了「策略好看」去掉它 —— 去掉就是白屏。**
+- `style-src` 的 `'unsafe-inline'` 同理：Cesium 的 widget 会注入内联样式。
+- `worker-src ... blob:` 建议保留：构建产物里确实存在 `new Blob` + `createObjectURL`
+  的代码路径，观测没走到那条路径，但去掉 `blob:` 等于「赌它永远不被触发」。
 
-  - 瓦片主机是 `webrd0{1,2,3,4}.is.autonavi.com`（`Data-driven-modeling/src/components/SmartCity.vue:329-330`），
-    **不是** `*.amap.com`。
-  - `script-src` 的 `'unsafe-eval'`、`style-src` 的 `'unsafe-inline'` 是**实测结论**：
-    Cesium 需要求值（`eval` / `new Function`）与编译 WebAssembly，Cesium 的 widget
-    也要注入内联样式。**不要为了「策略好看」去掉这两条 —— 去掉就是白屏。**
-  - `worker-src ... blob:` 建议保留：构建产物里确实存在 `new Blob` + `createObjectURL`
-    的代码路径，本轮观测没走到那条路径，但去掉 `blob:` 等于「赌它永远不被触发」。
-
-**是否升级成强制头由维护者决定**；本轮**没有**强制启用。
+**是否升级成强制头由维护者决定**；目前**没有**强制启用。
 
 ## 主要 API 接口
 
@@ -545,24 +535,23 @@ node scripts\measure-browser-performance.mjs
   第一个请求单独标成「冷启动」不计入 P95，并额外给一列 `min` —— 共享开发机上跑时，
   `min` 比 `P95` 更能说明「应用本身有多快」。
 
-**本轮实测基线**（2026-10-21，16 核 i7-13620H，测量期整机 CPU 非空闲 69%–73%）：
+**实测基线**（2026-10-22，16 核 i7-13620H；延迟用真实 uvicorn 进程 + `urllib` 打 30 次取 P95，
+覆盖率是 `--cov=main --cov=data_processor --cov=city_data` 的结果）：
 
 | 指标 | 验收线 | 实测 | 判定 |
 |---|---|---|---|
-| 后端覆盖率（`main.py` + `data_processor.py`） | > 90% | **93.76%**（449 条语句 / 28 条未覆盖；`main.py` 95.99%、`data_processor.py` 89.33%） | 达标 |
-| 前端覆盖率（`src/**` 全口径） | > 80% | **94.19%** 语句（含 Plan S0 新增的 `src/theme/dark.ts`）、93.84% 函数（50/65）、80.21% 分支（168/216） | 达标 |
-| `/api/buildings`（全量）P95 | < 200 ms | **27.0 ms**（gzip 29.1 ms） | 达标 |
-| `/api/roads`（全量）P95 | < 200 ms | **15.8 ms** | 达标 |
-| 带 bbox 的路径 P95 | < 200 ms | **89.2 ms** | 达标 |
-| Vite 产物体积（不含 Cesium 运行时） | < 5 MB | **3.92 MB**（5 个文件） | 达标 |
-| `dist/` 总体积 | 计划书写的是 < 5 MB，但含 6.6 MB 自托管 Cesium 运行时 | 10.49 MB（385 个文件） | **口径差异**（不判达标/不达标） |
-| 首屏 LCP | < 3 s | **0.78 s** | 达标 |
-| 页面 load 事件 | < 3 s | **0.91 s** | 达标 |
-| 帧率（静止 / 相机运动） | ≥ 30 fps | **89.0 / 163.1 fps** | 达标 |
+| 后端覆盖率（`main.py` + `data_processor.py` + `city_data/`） | > 90% | **94%**（1247 条语句 / 75 条未覆盖；`main.py` 97%、`data_processor.py` 89%） | 达标 |
+| 前端覆盖率（`src/**` 全口径） | > 80% | **96.53%** 语句、94.77% 函数、83.98% 分支 | 达标 |
+| `/api/buildings`（全量）P95 | < 200 ms | **25.4 ms**（gzip 24.6 ms；中位数 4.3 ms） | 达标 |
+| `/api/roads`（全量）P95 | < 200 ms | **27.8 ms**（gzip 21.2 ms；中位数 3.4 ms） | 达标 |
+| 带 bbox 的路径 P95 | < 200 ms | **132.1 ms**（gzip 162.7 ms） | 达标 |
+| `/api/city/overview`（缓存命中）P95 | 参考 | **17.5 ms** | 参考 |
+| Vite 产物体积（不含 Cesium 运行时） | < 5 MB | **3.97 MB**（5 个文件） | 达标 |
+| `dist/` 总体积 | < 5 MB（含 3.75 MB 自托管 Cesium 运行时） | **7.72 MB**（104 个文件） | **口径差异**（不判达标/不达标） |
+| 首屏外部请求 | 0 | **0 个** | 达标 |
 
-> 上一轮唯一的未达标项是 `/api/buildings` 全量 P95（337.3 ms），**已被全量响应缓存修掉**
-> （同一条度量现在 27.0 ms）。但这条验收线**只有在口径固定时才可比** —— 压缩与否、
-> 走什么网络、并发度、宿主机负载都会改数。
+> 延迟这条验收线**只有在口径固定时才可比** —— 压缩与否、走什么网络、并发度、
+> 宿主机负载都会改数。共享开发机上跑时，`min` 比 `P95` 更能说明「应用本身有多快」。
 
 ## 开发说明
 
@@ -600,7 +589,7 @@ stats = processor.calculate_building_statistics(data)
 
 ## 注意事项
 
-1. Python 版本 >= 3.9（开发环境是 3.12.4）—— Plan B3 起 `main.py` 用了 `tuple[...]` 形式的类型注解（PEP 585，3.9 才有）
+1. Python 版本 >= 3.9（开发环境是 3.12.4）—— `main.py` 用了 `tuple[...]` 形式的类型注解（PEP 585，3.9 才有）
 2. 生产环境中请设置 `DEBUG=False`
 3. 实际部署时请收紧 CORS 白名单：`*` 会被拒绝，`allow_credentials=True` 与通配符不兼容
 4. 数据目录是 `main.py` 里的硬编码常量，不走 `.env`
@@ -608,7 +597,7 @@ stats = processor.calculate_building_statistics(data)
    numpy 虽然没有被业务代码直接 import，但它是 shapely 的传递依赖；放开成 numpy 2.x
    会让 shapely 2.0.4 报 `TypeError: ufunc 'create_collection' not supported for the
    input types`，`tests/test_bbox_filter.py` 的 4 个用例会失败。
-   （`geopandas` / `pandas` 已在 Plan A1 移除。）
+   （`geopandas` / `pandas` 早就不在依赖里了。）
 6. `fastapi dev` 这条 CLI **不可用**：requirements 写的是 `fastapi==0.153.0` 而不是
    `fastapi[standard]`，`fastapi-cli` / `typer` / `rich` 都没装。项目用
    `.\.venv\Scripts\python.exe main.py` 启动，不受影响。

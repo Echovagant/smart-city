@@ -49,7 +49,7 @@ GZIP_COMPRESSLEVEL = 9
 #
 # X-Content-Type-Options: nosniff —— 告诉浏览器不要猜响应的 MIME 类型。
 #   本服务把 GeoJSON 以 application/json 返回，若被诱导按别的类型解释会有 MIME 混淆风险。
-# Referrer-Policy —— 页面里的高德瓦片请求会把 Referer 带给第三方，收紧它。
+# Referrer-Policy —— 页面里的跨源请求会把 Referer 带给第三方，收紧它。
 # X-Frame-Options —— 阻止被 iframe 嵌套（点击劫持）。
 #
 # 这三个头都没有副作用：不改变响应体、content-type 与 content-length。

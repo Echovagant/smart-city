@@ -21,6 +21,12 @@ coverage.json
 /.worktrees/
 /.superpowers/
 
+# 内部过程材料：计划书、评审台账、Agent 工作日志。
+# 这类文件记录的是「怎么做的」，不是产品本身，不进公开仓库。
+# 仓库里只留成品：代码、面向人的文档（README / docs/ARCHITECTURE.md）。
+/local/
+/CLAUDE.md
+
 # 仓库根的产品文档（本地交付物，不纳入版本管理）
 /智慧城市3D可视化计划书.docx
 /智慧城市 3D 可视化.png

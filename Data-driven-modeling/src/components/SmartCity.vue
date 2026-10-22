@@ -987,7 +987,7 @@ const initCesium = async () => {
   // **底座不再来自任何瓦片服务**：地面是我们自己画的（纯色 + 发光网格），
   // 建筑与道路也都画在 OSM 的原始 WGS-84 坐标上 —— 天然同坐标系，
   // GCJ-02 偏移（东 533 m / 北 156 m）因此自动消失。
-  // 将来若有人把高德瓦片加回来，偏移会**立刻回来**，详见 CLAUDE.md。
+  // 将来若有人把 GCJ-02 坐标系的瓦片加回来，偏移会**立刻回来**，详见 docs/ARCHITECTURE.md。
   //
   // errorHandler 不在 Cesium 1.134 的 Viewer.ConstructorOptions 里（运行时支持），
   // 所以用补过的 ViewerConstructorOptions——见 types/city.ts。
@@ -1019,7 +1019,7 @@ const initCesium = async () => {
   installCameraInteractionWatcher(viewer.value)
   viewer.value.scene.preRender.addEventListener(onScenePreRender)
 
-  // 底座自绘：影像图层数是 0（既没有高德瓦片，也没有 ion 底图）。
+  // 底座自绘：影像图层数是 0（不接任何影像瓦片服务）。
   // 这行日志是回归脚本的探针 —— 它按 "Viewer created" 判定 Viewer 起来了。
   console.log(
     '[SmartCity] Viewer created. imagery layers:',

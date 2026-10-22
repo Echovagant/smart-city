@@ -701,7 +701,7 @@ describe('SmartCity behaviour', () => {
     expect(cesiumMock.ionAccesses).toEqual([])
     expect(cesiumMock.ionImageryProviderCalls).toBe(0)
 
-    // 底座自绘：一次影像图层都不加（既没有高德瓦片，也没有 ion 底图）。
+    // 底座自绘：一次影像图层都不加（不接任何影像瓦片服务）。
     // 地面是纯色底 + 自绘网格，建筑与道路都画在 OSM 的原始 WGS-84 坐标上。
     expect(mockViewerOf(wrapper).imageryLayers.add).not.toHaveBeenCalled()
 

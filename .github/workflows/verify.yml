@@ -44,11 +44,11 @@ jobs:
         run: |
           python -m venv .venv
           .\.venv\Scripts\python.exe -m pip install --upgrade pip
-          .\.venv\Scripts\python.exe -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple -r requirements.txt -r requirements-dev.txt
+          .\.venv\Scripts\python.exe -m pip install -r requirements.txt -r requirements-dev.txt
 
       - name: 安装前端依赖
         working-directory: Data-driven-modeling
-        run: npm ci --registry=https://registry.npmmirror.com
+        run: npm ci
 
       - name: 跑两套测试（verify.ps1）
         shell: pwsh
@@ -124,11 +124,11 @@ jobs:
         run: |
           python -m venv .venv
           .venv/bin/python -m pip install --upgrade pip
-          .venv/bin/python -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple -r requirements.txt -r requirements-dev.txt
+          .venv/bin/python -m pip install -r requirements.txt -r requirements-dev.txt
 
       - name: 安装前端依赖
         working-directory: Data-driven-modeling
-        run: npm ci --registry=https://registry.npmmirror.com
+        run: npm ci
 
       - name: 跑两套测试（verify.sh）
         run: sh verify.sh
