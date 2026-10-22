@@ -68,7 +68,7 @@ onMounted(() => {
       <!-- 左列：核心指标 + 24 小时趋势（控制面板由 SmartCity.vue 通过插槽塞进来） -->
       <div class="dashboard-area-left">
         <slot name="left" />
-        <PanelCard title="核心指标" :badge="view.tab.label">
+        <PanelCard title="核心指标" :badge="view.tab.label" class="dashboard-metrics-panel">
           <div class="dashboard-metric-grid">
             <MetricCard
               v-for="card in view.metrics"
@@ -84,7 +84,7 @@ onMounted(() => {
             />
           </div>
         </PanelCard>
-        <PanelCard title="24 小时趋势" :badge="view.line.source?.name">
+        <PanelCard title="24 小时趋势" :badge="view.line.source?.name" class="dashboard-trend-panel">
           <LineChart :points="view.line.points" :unit="view.line.unit" :empty-text="view.line.emptyText" />
         </PanelCard>
       </div>
@@ -94,14 +94,18 @@ onMounted(() => {
 
       <!-- 右列：分类分布 + 实时事件流 -->
       <div class="dashboard-area-right">
-        <PanelCard title="分类分布" :badge="view.donut.source?.name">
+        <PanelCard
+          title="分类分布"
+          :badge="view.donut.source?.name"
+          class="dashboard-distribution-panel"
+        >
           <DonutChart
             :slices="view.donut.slices"
             :center-label="view.donut.centerLabel"
             :center-value="view.donut.centerValue"
           />
         </PanelCard>
-        <PanelCard title="实时事件流" badge="待接入">
+        <PanelCard title="实时事件流" badge="待接入" class="dashboard-events-panel">
           <EventStream :events="events" />
         </PanelCard>
       </div>
@@ -155,6 +159,9 @@ onMounted(() => {
   gap: var(--dc-panel-gap, 12px);
   min-height: 0;
   pointer-events: auto;
+  /* 屏幕不够高时纵向滚动：内容不许被裁掉（横向永远不滚动） */
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .dashboard-area-scene {
@@ -170,6 +177,8 @@ onMounted(() => {
   gap: var(--dc-panel-gap, 12px);
   min-height: 0;
   pointer-events: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .dashboard-area-bottom {
@@ -182,6 +191,27 @@ onMounted(() => {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px;
+}
+
+/* 面板在列里的伸缩规则：
+   核心指标 / 分类分布按内容高度（不压缩），趋势与事件流吃掉剩余空间，
+   但都有上限 —— 不许长成一根「空条」。
+   屏幕不够高时由列的纵向滚动兜住（内容不许被裁掉）。 */
+.dashboard-metrics-panel,
+.dashboard-distribution-panel {
+  flex: 0 0 auto;
+}
+
+.dashboard-trend-panel {
+  flex: 1 1 auto;
+  min-height: 150px;
+  max-height: 320px;
+}
+
+.dashboard-events-panel {
+  flex: 1 1 auto;
+  min-height: 90px;
+  max-height: 340px;
 }
 
 /* 窄屏降级：两列收窄、间距缩小、指标卡改成一列。

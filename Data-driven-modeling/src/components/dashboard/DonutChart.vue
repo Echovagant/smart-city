@@ -120,6 +120,8 @@ const legend = computed(() =>
   display: flex;
   align-items: center;
   gap: 10px;
+  /* 窄容器里图例换到环形下面（窄屏降级：列宽只有 260 px 时图例放不下） */
+  flex-wrap: wrap;
   width: 100%;
   height: 100%;
 }
@@ -144,7 +146,7 @@ const legend = computed(() =>
 }
 
 .dc-donut-legend {
-  flex: 1;
+  flex: 1 1 120px;
   min-width: 0;
   margin: 0;
   padding: 0;
@@ -176,6 +178,7 @@ const legend = computed(() =>
 }
 
 .dc-legend-value {
+  flex: 0 0 auto;
   font-family: Consolas, 'SF Mono', 'Roboto Mono', ui-monospace, monospace;
   color: var(--dc-flow, #22d3ee);
 }

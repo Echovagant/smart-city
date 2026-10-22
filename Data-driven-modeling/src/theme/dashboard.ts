@@ -47,7 +47,7 @@ export const DASHBOARD_TOKENS = {
     /** 折线图画布宽。 */
     lineWidth: 300,
     /** 环形图画布边长。 */
-    donutSize: 150,
+    donutSize: 120,
     /** 环形图环宽。 */
     donutStroke: 16,
     /** 条形图单条高度。 */

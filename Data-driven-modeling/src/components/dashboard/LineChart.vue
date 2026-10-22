@@ -151,6 +151,7 @@ const annotations = computed(() => {
         stroke-width="1.6"
         stroke-linejoin="round"
         stroke-linecap="round"
+        vector-effect="non-scaling-stroke"
       />
       <circle
         v-for="(dot, index) in dots"
@@ -159,6 +160,7 @@ const annotations = computed(() => {
         :cy="dot.y"
         r="2"
         :fill="DARK_PALETTE.flow"
+        vector-effect="non-scaling-stroke"
       />
       <text
         v-for="(note, index) in annotations"
