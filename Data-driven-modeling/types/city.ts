@@ -263,8 +263,156 @@ export interface CityOverview {
   metrics: Metric[]
   /** 时间序列。 */
   series: Series[]
+  /**
+   * 设施分类计数（本地 OSM 快照，实测）。
+   *
+   * 取不到时是**空数组** —— 界面显示空态，不许编一个数字顶上。
+   */
+  facilities?: FacilityCategory[]
   /** 取不到的源的名字。 */
   degraded: string[]
+}
+
+/**
+ * 一个设施分类的计数。
+ *
+ * **分类规则只写在后端**（`backend-python/city_data/sources/facilities.py`）：
+ * 后端返回分类定义 + 计数，前端只渲染。
+ * 一个建筑只归一类，所以各分类计数之和 = 设施总数（环形图能对上账）。
+ */
+export interface FacilityCategory {
+  /** 分类标识：medical / public_safety / education / heritage / commerce。 */
+  key: string
+  /** 中文名。 */
+  label: string
+  /** 命中该分类的建筑数。 */
+  count: number
+  /** 依据的 OSM 标签，例如 ['building=hospital']。 */
+  criteria?: string[]
+  /** 来源标注（每个分类都要带）。 */
+  source: SourceInfo
+}
+
+/* -------------------------------------------------------------------------
+ * 大屏（16:9 骨架）的类型
+ * ---------------------------------------------------------------------- */
+
+/** 大屏页签。 */
+export interface DashboardTab {
+  /** 页签标识，例如 'overview' / 'air'。 */
+  key: string
+  /** 页签中文名。 */
+  label: string
+}
+
+/**
+ * 事件流里的一条事件。
+ *
+ * 本轮（S2）事件流只有**空态** —— 本项目没有告警系统，
+ * 不许编造事件。S3 接真实数据源后才会有内容。
+ */
+export interface CityEvent {
+  /** 事件标识。 */
+  id: string
+  /** 级别：提示 / 预警 / 告警。 */
+  level: 'info' | 'warn' | 'alert'
+  /** 标题。 */
+  title: string
+  /** 详情（可选）。 */
+  detail?: string
+  /** 发生时间（ISO8601）。 */
+  time?: string
+}
+
+/** 指标卡的色调。ok=常态，warn=预警，alert=告警，accent=强调。 */
+export type DashboardTone = 'ok' | 'warn' | 'alert' | 'accent'
+
+/**
+ * 大屏上的一张指标卡。
+ *
+ * `value` 为 null 表示**这个源没取到** → 界面显示「数据源暂不可用」，
+ * 不会拿 0 或上一次的旧值冒充。
+ */
+export interface DashboardMetricCard {
+  /** 卡片标识（指标 key 或设施分类 key）。 */
+  key: string
+  /** 卡片标题。 */
+  label: string
+  /** 数值；null 表示取不到。 */
+  value: number | string | null
+  /** 单位。 */
+  unit?: string
+  /** 分级徽标（空气质量的「良」）。取不到时是 null —— 不知道分级就别显示。 */
+  badge?: string | null
+  /** 色调。 */
+  tone: DashboardTone
+  /** 来源标注。 */
+  source?: SourceInfo | null
+  /** 这是模型估算吗（模型估算必须标「（模型估算）」）。 */
+  estimated: boolean
+  /** 这个源没取到吗。 */
+  unavailable: boolean
+}
+
+/** 环形图的一段。 */
+export interface DashboardSlice {
+  /** 段标识。 */
+  key: string
+  /** 段名。 */
+  label: string
+  /** 段的数值（环形图里只放**取到了**的段）。 */
+  value: number
+}
+
+/** 底栏条形的一段。value 为 null 表示取不到。 */
+export interface DashboardBar {
+  /** 段标识。 */
+  key: string
+  /** 段名。 */
+  label: string
+  /** 数值；null 表示取不到。 */
+  value: number | null
+  /** 单位。 */
+  unit?: string
+}
+
+/** 折线图的一段。 */
+export interface DashboardLine {
+  /** 数据点（v 为 null 的点断线，不补 0）。 */
+  points: SeriesPoint[]
+  /** 单位。 */
+  unit?: string
+  /** 来源标注。 */
+  source?: SourceInfo | null
+  /** 空态文案。 */
+  emptyText?: string
+}
+
+/**
+ * 一个页签对应的视图数据。
+ *
+ * 这是**纯数据**：由 `resolveTabView()` 从 `CityOverview` 算出来，
+ * 不碰 Vue 响应式（好测）。
+ */
+export interface TabView {
+  /** 这个视图对应的页签。 */
+  tab: DashboardTab
+  /** 6 张指标卡。 */
+  metrics: DashboardMetricCard[]
+  /** 环形图数据。 */
+  donut: {
+    slices: DashboardSlice[]
+    centerLabel: string
+    centerValue: number
+    /** 这一组分布的数据来源。 */
+    source?: SourceInfo | null
+  }
+  /** 折线图数据。 */
+  line: DashboardLine
+  /** 底栏条形数据。 */
+  bars: DashboardBar[]
+  /** 底栏条形的数据来源。 */
+  barsSource?: SourceInfo | null
 }
 
 /** 城市指标在前端的状态。 */

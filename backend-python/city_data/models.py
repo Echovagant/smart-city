@@ -79,6 +79,27 @@ class Series(BaseModel):
     source: SourceInfo
 
 
+class FacilityCategory(BaseModel):
+    """一个设施分类的计数。
+
+    分类规则**只写在后端**（``city_data/sources/facilities.py``）：后端返回
+    分类定义 + 计数，前端只渲染。将来要「哪些建筑属于某分类」时，
+    在同一处追加成员 id 列表即可，前端按 id 匹配。
+
+    - ``key``：分类标识（``medical`` / ``public_safety`` / …）。
+    - ``label``：中文名。
+    - ``count``：命中该分类的建筑数。
+    - ``criteria``：依据的 OSM 标签（例如 ``["building=hospital"]``）。
+    - ``source``：**每个分类都要带来源** —— 没有来源的计数不许出现在响应里。
+    """
+
+    key: str
+    label: str
+    count: int
+    criteria: List[str] = Field(default_factory=list)
+    source: SourceInfo
+
+
 class CityOverview(BaseModel):
     """`GET /api/city/overview` 的响应。
 
@@ -86,6 +107,8 @@ class CityOverview(BaseModel):
     - ``generated_at``：本次响应生成的时间（ISO8601，UTC）。
     - ``metrics``：每个指标都带自己的 source。
     - ``series``：时间序列。
+    - ``facilities``：设施分类计数（本地 OSM 快照，实测）。
+      取不到时是**空数组**，不许编一个数字顶上。
     - ``degraded``：**取不到的源的名字**。前端据此显示「数据源暂不可用」。
     """
 
@@ -93,6 +116,7 @@ class CityOverview(BaseModel):
     generated_at: str
     metrics: List[Metric] = Field(default_factory=list)
     series: List[Series] = Field(default_factory=list)
+    facilities: List[FacilityCategory] = Field(default_factory=list)
     degraded: List[str] = Field(default_factory=list)
 
 
@@ -104,6 +128,8 @@ class SourceResult:
     series: List[Series] = field(default_factory=list)
     # 只有部分源能给出城市信息（目前是空气质量源）；取不到时是 None。
     city: Optional[Dict[str, Any]] = None
+    # 设施分类计数（目前只有本地 OSM 快照源能给）。取不到时是空列表。
+    facilities: List[FacilityCategory] = field(default_factory=list)
 
 
 def unavailable_metrics(

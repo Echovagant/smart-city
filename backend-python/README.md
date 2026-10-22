@@ -45,7 +45,8 @@ backend-python/
 - `/api/traffic-status` 返回**随时间变化的真实读数**（不再是写死的占位值），前端每 5 秒轮询一次
 - `/api/city/overview` 接入**免凭据的公开数据源**（中国环境监测总站 / 中国天气网）与本地 OSM 数据，
   **每个指标都带来源标注与时间戳**，模型估算项标 `estimated: true`，
-  取不到的源进 `degraded`（**端点永不 500**），零新增依赖
+  取不到的源进 `degraded`（**端点永不 500**），零新增依赖；
+  另有一段 `facilities`（设施分类计数，同样带来源标注），既有字段零改动
 
 ## 快速开始
 
@@ -280,7 +281,7 @@ report-only **不拦截**任何东西，只让浏览器把违规报出来 ——
 - `GET /api/buildings` —— 获取建筑数据
 - `GET /api/roads` —— 获取道路数据
 - `GET /api/traffic-status` —— 获取交通状态（**值由时间确定性推导，随时间变化**，不再是写死的固定值）
-- `GET /api/city/overview?cityCode=110000` —— **城市运行指标聚合**（空气质量 / 天气 / 路网静态指标），每个指标都带来源标注与时间戳
+- `GET /api/city/overview?cityCode=110000` —— **城市运行指标聚合**（空气质量 / 天气 / 路网静态指标 / 设施分类），每个指标都带来源标注与时间戳
 
 `/api/traffic-status` 不校验 API key（前端不携带 key，这个端点必须始终可访问）。
 响应体 5 个键，120 字节左右：
@@ -334,6 +335,7 @@ report-only **不拦截**任何东西，只让浏览器把违规报出来 ——
 | `generated_at` | str | 本次响应生成的时间，ISO8601 UTC |
 | `metrics` | array | 指标列表，**每个都带 `source`** |
 | `series` | array | 时间序列（如 24 小时 AQI） |
+| `facilities` | array | **设施分类计数**（本地 OSM 快照；取不到时是**空数组**，不编数字） |
 | `degraded` | array | **取不到的源的名字**（前端据此显示「数据源暂不可用」） |
 
 每个指标：
@@ -368,6 +370,18 @@ report-only **不拦截**任何东西，只让浏览器把违规报出来 ——
 | 气温 / 湿度 | `http://www.weather.com.cn/data/sk/101010100.html` | 免凭据 | **不新鲜**（见下） | 同上 |
 | 建筑 / 道路数量、路网总长、覆盖面积、各等级道路条数 | 本地 `geojson/*.geojson` | 无 | 静态快照 | 文件读不到 → 进 `degraded` |
 | 路网负载指数 | 上面那份本地数据**自己算** | 无 | —— | **模型估算**（`estimated: true`） |
+| 设施分类（医疗 / 公共安全 / 教育 / 历史建筑 / 商业办公） | 本地 `geojson/buildings.geojson` **按 OSM 标签统计** | 无 | 静态快照 | 文件读不到 → 进 `degraded`，`facilities` 是**空数组** |
+
+设施分类的规则**只写在 `city_data/sources/facilities.py`**（前端只渲染）：
+医疗 `building=hospital`；公共安全 `amenity=police` / `amenity=fire_station` /
+`building=guardhouse` / `amenity=shelter`；教育 `building=school` /
+`building=university` / `building=kindergarten` / `amenity=college`；
+历史建筑 `historic=city_gate|palace|temple|building|yes|monastery`；
+商业与办公 `building=commercial|retail|office|hotel` / `shop=mall` / `office=government`。
+
+**一个建筑只归一类**（按上面顺序取第一个命中）—— 环形图要能对上账，所以不许重复计数。
+2026-10-22 实测（3854 栋建筑，**去重后**）：医疗 **24**、公共安全 **18**、教育 **19**、
+历史建筑 **87**、商业与办公 **55**，合计 **203** 处。`estimated = false`（实测计数，不是模型估算）。
 
 三个必须记住的坑（都是实测踩出来的）：
 
@@ -466,7 +480,7 @@ cd backend-python
 ./.venv/Scripts/python.exe -m pytest -q
 ```
 
-**当前 175 passed**（14 个 `test_*.py` 用例文件 + `conftest.py`）。
+**当前 186 passed**（15 个 `test_*.py` 用例文件 + `conftest.py`）。
 
 测试配置在 `pyproject.toml`（`testpaths = ["tests"]`），用例在 `tests/` 下。
 需要真实 OSM 数据的用例在没有数据文件时会自动跳过，不会伪装成通过。

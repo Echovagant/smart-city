@@ -27,8 +27,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from . import city_codes
 from .http import SourceUnavailable
-from .models import CityOverview, Metric, Series, SourceResult, unavailable_metrics
-from .sources import air_quality, road_network, weather
+from .models import CityOverview, FacilityCategory, Metric, Series, SourceResult, unavailable_metrics
+from .sources import air_quality, facilities, road_network, weather
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +62,7 @@ METRIC_ORDER: Tuple[str, ...] = (
     "road_count_footway",
     "road_count_other",
     "road_load_index",
+    "facility_total",
 )
 
 
@@ -163,7 +164,7 @@ def _build_specs(
     buildings_path: Optional[Path],
     roads_path: Optional[Path],
 ) -> List[SourceSpec]:
-    """列出本城市要取的四个源。"""
+    """列出本城市要取的五个源。"""
     history_url = air_quality.HISTORY_URL + "?citycode=%s" % city_code
     weather_cityid = city_codes.WEATHER_CITY_IDS.get(city_code)
     weather_url = (
@@ -173,6 +174,9 @@ def _build_specs(
     )
     roads_key = "roads:%s:%s" % (buildings_path or road_network.DEFAULT_BUILDINGS_PATH,
                                  roads_path or road_network.DEFAULT_ROADS_PATH)
+    facilities_key = "facilities:%s" % (
+        buildings_path or facilities.DEFAULT_BUILDINGS_PATH
+    )
 
     return [
         SourceSpec(
@@ -208,6 +212,14 @@ def _build_specs(
             fetch=lambda: road_network.fetch(buildings_path, roads_path),
             estimated=True,
         ),
+        SourceSpec(
+            name=facilities.SOURCE_NAME,
+            url=facilities.BUILDINGS_REF,
+            slots=facilities.SLOTS,
+            ttl=STATIC_TTL_SECONDS,
+            cache_key=facilities_key,
+            fetch=lambda: facilities.fetch(buildings_path),
+        ),
     ]
 
 
@@ -236,7 +248,7 @@ async def build_city_overview(
 ) -> CityOverview:
     """聚合一个城市的运行指标。
 
-    四个源**并发**取数（``asyncio.gather``），每个源独立超时。
+    五个源**并发**取数（``asyncio.gather``），每个源独立超时。
     取不到的源进 ``degraded``，并在它的槽位上留下 ``value = null`` 的占位指标
     （前端据此显示「数据源暂不可用」，不会拿 0 或旧值冒充）。
     """
@@ -248,6 +260,7 @@ async def build_city_overview(
 
     metrics: List[Metric] = []
     series: List[Series] = []
+    facility_categories: List[FacilityCategory] = []
     degraded: List[str] = []
     city_info: Dict[str, Any] = {
         "code": city_code,
@@ -273,6 +286,7 @@ async def build_city_overview(
             continue
         metrics.extend(outcome.metrics)
         series.extend(outcome.series)
+        facility_categories.extend(outcome.facilities)
         if outcome.city:
             city_info = outcome.city
 
@@ -281,5 +295,6 @@ async def build_city_overview(
         generated_at=now_iso(),
         metrics=_order_metrics(metrics),
         series=series,
+        facilities=facility_categories,
         degraded=degraded,
     )

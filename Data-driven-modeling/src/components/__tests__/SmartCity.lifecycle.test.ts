@@ -1415,3 +1415,104 @@ describe('SmartCity city metrics strip', () => {
     wrapper.unmount()
   })
 })
+
+// ---------------------------------------------------------------------------
+// DOM 契约回归：大屏骨架（Plan S2）改的是**模板外层结构**，
+// 下面这些类名与行为一个字都不许变。
+//
+// - `.control-panel` 里仍有 4 个按钮（隐藏建筑 / 隐藏道路 / 停止交通 / 切换视角）
+// - `.traffic-status`（实时交通读数）
+// - `.metric-strip`（S1 的指标带）
+// - OSM 署名「数据 © OpenStreetMap contributors」（ODbL 硬性要求）
+// ---------------------------------------------------------------------------
+describe('大屏骨架的 DOM 契约', () => {
+  const overviewStub = {
+    city: { code: 110000, name: '北京市', latitude: 40.05, longitude: 116.4 },
+    generated_at: '2026-10-22T04:00:00Z',
+    metrics: [
+      {
+        key: 'aqi',
+        label: '空气质量',
+        value: 51,
+        unit: 'AQI',
+        level: 2,
+        level_label: '良',
+        extra: {},
+        source: {
+          name: '中国环境监测总站',
+          url: 'https://air.cnemc.cn:18007/x',
+          observed_at: '2026-10-22T04:00:00Z',
+          fetched_at: '2026-10-22T04:30:00Z',
+          realtime: true,
+          estimated: false,
+        },
+      },
+    ],
+    series: [],
+    facilities: [],
+    degraded: [],
+  }
+
+  const stubWithOverview = () =>
+    vi.fn<(url: string, options: RequestInit) => Promise<Response>>((url) => {
+      const target = String(url)
+      if (target.includes('city/overview')) {
+        return Promise.resolve(jsonResponse(overviewStub))
+      }
+      if (target.includes('traffic-status')) {
+        return Promise.resolve(
+          jsonResponse({ status: 'normal', flow: 0.63, congestion: '畅通', update_time: '2026-10-21T04:52:31.123Z' }),
+        )
+      }
+      return Promise.resolve(jsonResponse({ type: 'FeatureCollection', features: [] }))
+    })
+
+  it('keeps the control panel, its four buttons, the traffic row and the attribution', async () => {
+    installFetch(stubWithOverview())
+
+    const wrapper = mountSmartCity()
+    await vi.waitFor(() => {
+      expect(wrapper.find('.metric-strip').exists()).toBe(true)
+    })
+
+    // 1) 控制面板 + 4 个按钮（位置搬进了大屏左列，类名与行为不变）
+    const panel = wrapper.find('.control-panel')
+    expect(panel.exists()).toBe(true)
+    const buttons = panel.findAll('button')
+    expect(buttons).toHaveLength(4)
+    expect(buttons.map(button => button.text())).toEqual([
+      '隐藏建筑',
+      '隐藏道路',
+      '停止交通',
+      '切换平视',
+    ])
+
+    // 2) 实时交通读数
+    expect(wrapper.find('.traffic-status').exists()).toBe(true)
+
+    // 3) S1 的指标带
+    expect(wrapper.find('.metric-strip').exists()).toBe(true)
+
+    // 4) OSM 署名（ODbL：展示这份数据必须署名）
+    expect(wrapper.text()).toContain('数据 © OpenStreetMap contributors')
+
+    wrapper.unmount()
+  })
+
+  it('mounts the 16:9 dashboard skeleton around the Cesium container', async () => {
+    installFetch(stubWithOverview())
+
+    const wrapper = mountSmartCity()
+    await flushPromises()
+
+    // overlay 是浮在场景之上的：Cesium 容器保持全屏，面板浮在上面
+    expect(wrapper.find('.cesium-container').exists()).toBe(true)
+    expect(wrapper.find('.dashboard-overlay').exists()).toBe(true)
+    expect(wrapper.find('.dashboard-grid').exists()).toBe(true)
+    // 顶栏 + 5 个页签
+    expect(wrapper.find('.dc-topbar').exists()).toBe(true)
+    expect(wrapper.findAll('.dc-tab')).toHaveLength(5)
+
+    wrapper.unmount()
+  })
+})

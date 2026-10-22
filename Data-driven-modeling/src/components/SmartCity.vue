@@ -1,72 +1,82 @@
 <template>
   <div class="smart-city-container">
-    <!-- Cesium容器 -->
+    <!-- Cesium容器：保持全屏。
+         大屏面板以 overlay 的形式浮在它上面（计划书 §1.2），
+         中心留空让 3D 场景透出来 —— 所以一行 Cesium 逻辑都不用改。 -->
     <div ref="cesiumContainer" class="cesium-container"></div>
 
-    <!-- 控制面板 -->
-    <div class="control-panel">
-      <!-- 数据加载状态 / 后端错误提示：后端挂了必须看得见，不能只剩一个空地球。
-           横幅要等「数据到位 **且** 建筑/道路都挂进场景」才消失 ——
-           这一刻才是城市真的画出来了（不只是 API 回来了）。 -->
-      <div v-if="loading || !sceneAssembled" class="status-hint">正在加载城市数据…</div>
-      <div v-if="error" class="status-error">
-        数据加载失败：{{ error.message }}<span v-if="error.status">（状态码 {{ error.status }}）</span>
-      </div>
+    <!-- 16:9 大屏骨架：顶栏（标题 + 页签）/ 左列 / 中心场景 / 右列 / 底栏 -->
+    <DashboardOverlay :overview="cityOverview">
+      <template #left>
+        <!-- 控制面板：类名与行为都不变（4 个按钮 / 实时读数 / 指标带 / OSM 署名），
+             只是位置搬进了大屏的左列。 -->
+        <div class="control-panel">
+          <!-- 数据加载状态 / 后端错误提示：后端挂了必须看得见，不能只剩一个空地球。
+               横幅要等「数据到位 **且** 建筑/道路都挂进场景」才消失 ——
+               这一刻才是城市真的画出来了（不只是 API 回来了）。 -->
+          <div v-if="loading || !sceneAssembled" class="status-hint">正在加载城市数据…</div>
+          <div v-if="error" class="status-error">
+            数据加载失败：{{ error.message }}<span v-if="error.status">（状态码 {{ error.status }}）</span>
+          </div>
 
-      <!-- 城市运行指标带：空气质量 / 天气 / 路网负载。
-           每个数字都带来源标注与时间戳；模型估算项标「（模型估算）」；
-           取不到的源显示「数据源暂不可用」——绝不显示 0 或上一次的旧值。 -->
-      <div v-if="metricSlots.length" class="metric-strip">
-        <div v-for="slot in metricSlots" :key="slot.key" class="metric-slot">
-          <div class="metric-head">
-            <span class="metric-label">{{ slot.label }}</span>
-            <span v-if="slot.estimated" class="metric-estimate">（模型估算）</span>
+          <!-- 城市运行指标带：空气质量 / 天气 / 路网负载。
+               每个数字都带来源标注与时间戳；模型估算项标「（模型估算）」；
+               取不到的源显示「数据源暂不可用」——绝不显示 0 或上一次的旧值。 -->
+          <div v-if="metricSlots.length" class="metric-strip">
+            <div v-for="slot in metricSlots" :key="slot.key" class="metric-slot">
+              <div class="metric-head">
+                <span class="metric-label">{{ slot.label }}</span>
+                <span v-if="slot.estimated" class="metric-estimate">（模型估算）</span>
+              </div>
+              <div class="metric-body">
+                <span
+                  class="metric-value"
+                  :class="{ 'metric-value-unavailable': slot.unavailable }"
+                >{{ slot.display }}</span>
+                <span
+                  v-if="slot.badge"
+                  class="metric-badge"
+                  :class="`tone-${slot.tone}`"
+                >{{ slot.badge }}</span>
+              </div>
+              <div v-if="slot.sub" class="metric-sub">{{ slot.sub }}</div>
+              <div class="metric-source" :title="slot.sourceTitle">{{ slot.sourceText }}</div>
+            </div>
           </div>
-          <div class="metric-body">
+
+          <!-- 实时交通读数：后端按时间推导的交通状态。
+               没有数据时不渲染这一行，绝不显示 undefined / NaN。 -->
+          <div v-if="trafficReadout" class="traffic-status">
+            <span class="traffic-label">实时交通</span>
+            <span v-if="trafficReadout.flow" class="traffic-value">{{ trafficReadout.flow }}</span>
             <span
-              class="metric-value"
-              :class="{ 'metric-value-unavailable': slot.unavailable }"
-            >{{ slot.display }}</span>
-            <span
-              v-if="slot.badge"
-              class="metric-badge"
-              :class="`tone-${slot.tone}`"
-            >{{ slot.badge }}</span>
+              v-if="trafficReadout.congestion"
+              class="traffic-badge"
+              :class="`tone-${trafficReadout.tone}`"
+            >{{ trafficReadout.congestion }}</span>
+            <span v-if="trafficReadout.clock" class="traffic-clock">更新于 {{ trafficReadout.clock }}</span>
           </div>
-          <div v-if="slot.sub" class="metric-sub">{{ slot.sub }}</div>
-          <div class="metric-source" :title="slot.sourceTitle">{{ slot.sourceText }}</div>
+
+          <!-- OSM 数据遵循 ODbL：展示这份数据必须署名。删掉这一行等于违反许可证。 -->
+          <div class="attribution">数据 © OpenStreetMap contributors</div>
+
+          <div class="control-panel-actions">
+            <button @click="toggleBuildings">
+              {{ state.buildingVisible ? '隐藏建筑' : '显示建筑' }}
+            </button>
+            <button @click="toggleRoads">
+              {{ state.roadVisible ? '隐藏道路' : '显示道路' }}
+            </button>
+            <button @click="toggleTraffic">
+              {{ state.trafficVisible ? '停止交通' : '启动交通' }}
+            </button>
+            <button @click="toggleView">
+              {{ state.viewMode === 'overhead' ? '切换平视' : '切换鸟瞰' }}
+            </button>
+          </div>
         </div>
-      </div>
-
-      <!-- 实时交通读数：后端按时间推导的交通状态。
-           没有数据时不渲染这一行，绝不显示 undefined / NaN。 -->
-      <div v-if="trafficReadout" class="traffic-status">
-        <span class="traffic-label">实时交通</span>
-        <span v-if="trafficReadout.flow" class="traffic-value">{{ trafficReadout.flow }}</span>
-        <span
-          v-if="trafficReadout.congestion"
-          class="traffic-badge"
-          :class="`tone-${trafficReadout.tone}`"
-        >{{ trafficReadout.congestion }}</span>
-        <span v-if="trafficReadout.clock" class="traffic-clock">更新于 {{ trafficReadout.clock }}</span>
-      </div>
-
-      <!-- OSM 数据遵循 ODbL：展示这份数据必须署名。删掉这一行等于违反许可证。 -->
-      <div class="attribution">数据 © OpenStreetMap contributors</div>
-
-      <button @click="toggleBuildings">
-        {{ state.buildingVisible ? '隐藏建筑' : '显示建筑' }}
-      </button>
-      <button @click="toggleRoads">
-        {{ state.roadVisible ? '隐藏道路' : '显示道路' }}
-      </button>
-      <button @click="toggleTraffic">
-        {{ state.trafficVisible ? '停止交通' : '启动交通' }}
-      </button>
-      <button @click="toggleView">
-        {{ state.viewMode === 'overhead' ? '切换平视' : '切换鸟瞰' }}
-      </button>
-    </div>
+      </template>
+    </DashboardOverlay>
   </div>
 </template>
 
@@ -75,6 +85,7 @@ import { ref, computed, onMounted, onUnmounted, reactive, markRaw, nextTick } fr
 import * as Cesium from 'cesium'
 import 'cesium/Build/Cesium/Widgets/widgets.css'
 import { useCityData } from '@/composables/useCityData'
+import DashboardOverlay from './DashboardOverlay.vue'
 import {
   DARK_PALETTE,
   GRID_COLOR,
@@ -1568,6 +1579,8 @@ onUnmounted(() => {
   position: relative;
   width: 100vw;
   height: 100vh;
+  /* 大屏 overlay 是 inset: 0 + overflow: hidden：窄屏也不许出现横向滚动条 */
+  overflow: hidden;
   background: var(--dc-screen, #050a14);
 }
 
@@ -1576,14 +1589,13 @@ onUnmounted(() => {
   height: 100%;
 }
 
-/* 控制面板：深色半透明 + 1px 蓝色描边 */
+/* 控制面板：深色半透明 + 1px 蓝色描边。
+   它现在是大屏左列里的一块（位置由大屏网格决定），不再是浮在左上角的绝对定位块。 */
 .control-panel {
-  position: absolute;
-  top: 20px;
-  left: 20px;
-  z-index: 100;
-  min-width: 268px;
-  padding: 16px 18px 14px;
+  position: relative;
+  flex: 0 0 auto;
+  width: 100%;
+  padding: 10px 12px;
   background: var(--dc-panel-bg, rgba(13, 26, 46, 0.82));
   border: 1px solid rgba(22, 93, 255, 0.55);
   border-radius: 2px;
@@ -1591,6 +1603,14 @@ onUnmounted(() => {
   box-shadow: 0 0 28px rgba(22, 93, 255, 0.18);
   /* 不用 backdrop-filter：软件渲染（headless SwiftShader）下它会在
      WebGL 画布上采出彩色噪点。半透明底 + 描边已经够「科技风」了。 */
+}
+
+/* 四个控制按钮：2×2 排布，省纵向空间（类名与行为不变） */
+.control-panel-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 8px;
 }
 
 /* 四角 L 形切角装饰 */
@@ -1621,14 +1641,14 @@ onUnmounted(() => {
 .control-panel button {
   display: block;
   width: 100%;
-  margin: 8px 0 0;
-  padding: 8px 14px;
+  margin: 0;
+  padding: 6px 10px;
   background: rgba(5, 10, 20, 0.72);
   color: var(--dc-text, #e2e8f0);
   border: 1px solid rgba(59, 130, 246, 0.5);
   border-radius: 2px;
   font-family: inherit;
-  font-size: 13px;
+  font-size: 12px;
   letter-spacing: 0.06em;
   text-align: left;
   cursor: pointer;
@@ -1670,9 +1690,9 @@ onUnmounted(() => {
 }
 
 .metric-slot {
-  flex: 1 1 118px;
-  min-width: 118px;
-  padding: 8px 10px;
+  flex: 1 1 92px;
+  min-width: 92px;
+  padding: 6px 8px;
   background: var(--dc-panel-surface, rgba(5, 10, 20, 0.55));
   border: 1px solid rgba(22, 93, 255, 0.28);
   border-radius: 2px;
@@ -1707,7 +1727,7 @@ onUnmounted(() => {
 
 .metric-value {
   font-family: Consolas, 'SF Mono', 'Roboto Mono', ui-monospace, monospace;
-  font-size: 21px;
+  font-size: 18px;
   font-weight: 600;
   line-height: 1.15;
   color: var(--dc-flow, #22d3ee);

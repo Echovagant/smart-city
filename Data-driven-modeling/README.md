@@ -4,7 +4,9 @@
 建筑/道路 GeoJSON 渲染成可拉伸的三维建筑与分级道路，并附带一个可开关的交通模拟。
 
 界面是**深色 3D 数据可视化大屏**：纯色深底 + 发光网格 + 深色发光建筑 + 分级辉光路网 + 流动光效 +
-缓慢环绕的相机。**底座完全自绘，不接任何瓦片服务，也不需要任何地图 key。**
+缓慢环绕的相机，外加一套 **16:9 大屏骨架**（顶栏 + 左列 + 中心场景 + 右列 + 底栏）。
+**底座完全自绘，不接任何瓦片服务，也不需要任何地图 key。**
+**图表全部是手写 SVG，不引任何图表库**（`package.json` 至今零改动）。
 
 ## 前置条件
 
@@ -37,13 +39,13 @@ npm run dev                             # http://localhost:5173/
 | 命令 | 说明 |
 |---|---|
 | `npm run dev` | 开发服务器，http://localhost:5173/ |
-| `npm run build` | 生产构建，产物在 `dist/`（Cesium 静态资源在 `dist/Cesium/`，剪枝后实测 **98 个文件**；`dist/` 共 104 个文件、7.67 MB）；**默认不产 sourcemap**，要排障用 `SOURCEMAP=true npm run build` |
+| `npm run build` | 生产构建，产物在 `dist/`（Cesium 静态资源在 `dist/Cesium/`，剪枝后实测 **98 个文件**；`dist/` 共 104 个文件、7.71 MB）；**默认不产 sourcemap**，要排障用 `SOURCEMAP=true npm run build` |
 | `npm run preview` | 预览构建产物 |
 | `npm run lint` | ESLint **只检查不修改**（`eslint . --no-fix`） |
 | `npm run lint:fix` | ESLint 修复版（会改文件，按需使用） |
 | `npm run typecheck` | `vue-tsc --noEmit` 类型检查（CI 里是**阻塞门禁**） |
 | `npm run format` | Prettier 格式化 `src/` |
-| `npm test -- --run` | 单次跑完测试（6 个文件 / **70 个用例**，全部是 `.ts`） |
+| `npm test -- --run` | 单次跑完测试（9 个文件 / **108 个用例**，全部是 `.ts`） |
 | `npm run test:run` | 同上，等价写法 |
 | `npm run test:coverage` | 跑测试并出覆盖率报告（v8 provider）；报告默认落在 `coverage/`（已 gitignore），要放到仓库外设 `COVERAGE_DIR` |
 | `npm test` | ⚠️ **watch 模式**，不会自己退出；脚本里不要用 |
@@ -71,19 +73,24 @@ vue-tsc ^3.3.13（实装 3.3.13）、typescript-eslint ^8.72.0（实装 8.72.0�
 
 > 覆盖率 `include` 写在 `vite.config.js` 里（`src/**/*.{js,ts,vue}`），**迁到 TypeScript
 > 之后要记得复查它** —— 原先只写了 `.{js,vue}`，源码全迁成 `.ts` 之后报告里就只剩 `.vue`
-> 了，看着漂亮、实际统计的是子集。当前全口径：语句 **94.52%**、函数 **94.37%**、分支 **80.00%**
-> （含 Plan S0 新增的 `src/theme/dark.ts`，语句与函数都是 100%）。
+> 了，看着漂亮、实际统计的是子集。当前全口径：语句 **96.66%**、函数 **96.22%**、分支 **82.00%**
+> （含 `src/theme/dark.ts` 与 `src/theme/dashboard.ts`，语句与函数都是 100%）。
 
 ## 关键文件
 
 | 文件 | 作用 |
 |---|---|
-| `src/components/SmartCity.vue` | 唯一的功能组件：Cesium 视图、GeoJSON 加载、交通模拟、实时交通读数、**城市运行指标带**、鸟瞰↔平视切换、**相机缓慢自转**（`<script setup lang="ts">`） |
+| `src/components/SmartCity.vue` | 唯一的功能组件：Cesium 视图、GeoJSON 加载、交通模拟、实时交通读数、**城市运行指标带**、鸟瞰↔平视切换、**相机缓慢自转**（`<script setup lang="ts">`）；大屏这一轮只改了它的**模板外层结构与样式**，Cesium 逻辑一行没动 |
+| `src/components/DashboardOverlay.vue` | **16:9 大屏骨架**：CSS Grid（顶栏 / 左列 / 中心场景 / 右列 / 底栏），面板浮在场景之上；overlay 容器 `pointer-events: none`，只有面板 `auto` |
+| `src/components/dashboard/` | 大屏面板与图表（**纯 SVG，无图表库**）：`TopBar.vue` / `PanelCard.vue` / `MetricCard.vue` / `LineChart.vue` / `DonutChart.vue` / `BarChart.vue` / `EventStream.vue` |
+| `src/composables/useDashboardData.ts` | 页签 → 图表数据的**纯函数** `resolveTabView(tab, overview)`：不碰 Vue 响应式，好测；取不到的指标输出 `value: null` + `unavailable` |
+| `src/composables/useDashboardState.ts` | 页签状态（**模块级单例**）：`activeTabKey` / `setTab`，大屏与场景共用同一份 |
+| `src/theme/dashboard.ts` | 大屏**设计 token**（尺寸与排版：圆角 / 描边 / 内边距 / 列宽 / 行高 / 字号阶梯 / 间距）+ 图表色序 `CHART_COLORS`（只从 `DARK_PALETTE` 取）；颜色本身仍在 `dark.ts` |
 | `src/theme/dark.ts` | **深色大屏的色板与材质工厂**（`DARK_PALETTE` / `ROAD_COLORS` / 辉光材质 / 流动虚线材质 / 拥堵分档色 / CSS 变量注入）——视觉的唯一事实来源 |
 | `src/api/client.ts` | 极简 fetch 封装：超时（默认 15 s）、`ApiError` 规范化；请求结束时会摘掉挂在调用方 signal 上的 abort 监听器 |
 | `src/composables/useCityData.ts` | 四个接口的调用方；`buildings`/`roads` 用 `shallowRef`（载荷是几 MB 的 GeoJSON，不能深度响应式）；另有只刷新交通状态一个端点的 `refreshTrafficStatus()` 与只刷新城市指标一个端点的 `loadCityOverview()` / `refreshCityOverview()` |
 | `src/main.ts` / `src/App.vue` | 引导入口；`App.vue` 只渲染 `<SmartCity />` |
-| `types/city.ts` | 城市类型系统（465 行）：GeoJSON 泛型子集、`OSMProperties`、四个端点的响应契约、视图状态，以及**补 Cesium 类型缺口**的 `Writable*` 与模块增强 |
+| `types/city.ts` | 城市类型系统（600 行）：GeoJSON 泛型子集、`OSMProperties`、四个端点的响应契约、**设施分类**、**大屏页签与图表数据**、视图状态，以及**补 Cesium 类型缺口**的 `Writable*` 与模块增强 |
 | `tsconfig.json` | TypeScript 严格模式配置（22 行）：`strict: true`、`noEmit: true`，`paths` 里的别名必须与 `vite.config.js` 一致 |
 | `src/env.d.ts` | `import.meta.env` 的类型（`/// <reference types="vite/client" />`） |
 | `vite.config.js` | dev 代理、`@`/`cesium` 别名、Cesium 独立 chunk、Vitest 配置；`build.sourcemap` 由 `SOURCEMAP` 环境变量控制、默认关 |
@@ -125,7 +132,8 @@ vue-tsc ^3.3.13（实装 3.3.13）、typescript-eslint ^8.72.0（实装 8.72.0�
 
 ## 控制面板的城市运行指标带
 
-指标带（`.metric-strip`）是面板上**唯一一组带来源标注的数字**：
+指标带（`.metric-strip`）是大屏左列里那条**常驻的实时读数带**
+（大屏的 6 张指标卡也带来源标注，见「16:9 大屏骨架」一节）：
 
 ```
 空气质量 51 良      气温 18℃      路网负载 63.5（模型估算）
@@ -156,6 +164,66 @@ vue-tsc ^3.3.13（实装 3.3.13）、typescript-eslint ^8.72.0（实装 8.72.0�
 > 后端实现在 `backend-python/city_data/`。**每个 metric 都必须带 source** ——
 > 改契约要同时改两边（没有共享 schema 文件）。
 
+## 16:9 大屏骨架
+
+`DashboardOverlay.vue` 把面板摆成 **16:9** 的一屏：
+
+```
+┌────────────────────── 顶栏：标题 + 5 个页签 ──────────────────────┐
+│ 左列：核心指标(6)   │                                     │ 右列：分类分布 │
+│        24 小时趋势  │        中心 3D 场景（透出来）        │        实时事件流 │
+├──────────────────── 底栏：城市资源概览（横向条形）────────────────┤
+```
+
+- **面板浮在场景之上**，Cesium 容器保持全屏，中心那一格留空，3D 城市从面板后面
+  透出来 —— 所以 Cesium 逻辑一行都不用改。
+- **`pointer-events` 分两层**：overlay 容器 `none`、面板 `auto`。
+  不这样的话中心的 Cesium 交互（拖拽 / 滚轮）会被 overlay 整块吃掉。
+- **网格**（`.dashboard-grid`）：
+  `"top top top" / "left scene right" / "left bottom right"`，
+  列宽 340 px、顶栏 96 px、底栏 150 px —— 数字在 `src/theme/dashboard.ts` 里，
+  由 `applyDashboardVariables()` 写进 CSS 自定义属性，样式表只写 `var(--dc-*)`。
+- **窄屏（< 1280 px）降级**：两列收窄、间距缩小、指标卡改成一列；
+  overlay 是 `inset: 0` + `overflow: hidden`，**不出现横向滚动条**。
+- **DOM 契约不许破**：`.control-panel`（4 个按钮）、`.traffic-status`、
+  `.metric-strip`、OSM 署名行都还在，位置搬进了左列。
+
+### 5 个页签：换的是「看哪一组指标」，不是换图表类型
+
+| 页签 | 核心指标卡（6 个） | 分类分布（环形） | 趋势（折线） | 底栏条形 |
+|---|---|---|---|---|
+| 区域概览 | 建筑总数 / 道路总数 / 路网总长 / 覆盖面积 / AQI / 气温 | 道路等级分布 | AQI 24h | 设施分类计数 |
+| 空气质量 | AQI / 首要污染物 / PM2.5 / PM10 / O3 / NO2 | 污染物浓度 | AQI 24h | 6 项污染物浓度 |
+| 公共安全 | 医疗 / 公共安全 / 教育设施 / 建筑总数 / AQI / 气温 | 设施分类 | AQI 24h | 设施分类计数 |
+| 城市文旅 | 历史建筑 / 设施分类总数 / 建筑总数 / 路网总长 / AQI / 气温 | 设施分类 | AQI 24h | 设施分类计数 |
+| 路网运行 | 路网总长 / 覆盖面积 / 路网负载 / 主干道 / 支路 / 道路总数 | 道路等级分布 | AQI 24h | 道路分级条数 |
+
+- 每个数字都来自 `GET /api/city/overview` 的**真实字段**（按 `key` 取，不按 label 匹配）。
+- **页签状态是模块级单例**（`useDashboardState.ts`）：大屏与 3D 场景共用同一份
+  `activeTabKey`，阶段 3 的「页签联动场景」就靠它。
+- **数据模型层是纯函数**（`useDashboardData.ts` 的 `resolveTabView(tab, overview)`）：
+  输入输出都是普通数据，不碰 Vue 响应式 —— 所以「切页签 → 卡片内容跟着变」
+  这类断言不需要 mount 组件。
+- **取不到的数据不许填 0**：`value: null` + `unavailable: true`，
+  组件显示「数据源暂不可用」；`source.estimated === true` 显示「（模型估算）」；
+  `source.realtime === false` 显示「（非实时）」。
+- **环形图要能对上账**：分类互斥（一个建筑只归一类），圆心是**各段之和**。
+  道路分级环形只统计线要素（1955 条），与「道路总数」（2260，含广场地面）不是同一个数，
+  所以圆心标题写「道路分级合计」而不是「道路总数」。
+
+### 图表全是手写 SVG
+
+| 组件 | 画什么 | 关键约定 |
+|---|---|---|
+| `MetricCard.vue` | 标签 / 数值 / 分级徽标 / 来源小字 | `value` 为 null → 「数据源暂不可用」；来源小字带 `title`（完整来源信息） |
+| `LineChart.vue` | 折线 | `v` 为 null 的点**断线**（不补 0）；空数据 → 诚实的空态 |
+| `DonutChart.vue` | 环形（`stroke-dasharray`）+ 图例 | 圆心是**各段之和**；配色取自 `CHART_COLORS`（蓝→青→蓝灰→预警→告警） |
+| `BarChart.vue` | 横向条形 | `value` 为 null → 画成空槽并标「暂无」 |
+| `EventStream.vue` | 事件流 | 本轮 `events` 恒为空 → 诚实的空态「暂无事件数据」 |
+
+**没有图表库**：`package.json` 与 `package-lock.json` 零改动，
+`dist/` 相对上一版只多了 **29.6 KB**（8,057,583 → 8,087,229 字节）。
+
 ## 生产构建与 sourcemap
 
 `npm run build` **默认不产出 sourcemap**（`vite.config.js` 里 `build.sourcemap`
@@ -179,13 +247,13 @@ SOURCEMAP=true npm run build
 
 ### `dist/` 的体积口径
 
-实测（`dist/` 共 104 个文件 / **7.67 MB**，Plan C1 剪枝后重测）：
+实测（`dist/` 共 104 个文件 / **7.71 MB**，Plan S2 大屏骨架后重测）：
 
 | 口径 | 体积 | 文件数 | 说明 |
 |---|---|---|---|
-| **Vite 产物（应用自身）** | **3.92 MB** | 5 | `index.html`、`favicon.ico`、`assets/cesium-*.js`、`assets/index-*.js`、`assets/index-*.css`；**已达计划书的 < 5 MB** |
-| **自托管 Cesium 运行时** | 3.75 MB | 99 | `dist/Cesium/`：98 个运行时文件 + 1 个 `pruned-manifest.json` 排查报告；厂商运行时，不是应用产物；由 `vite-plugins/cesium-assets.js` 拷贝后**按剪枝清单裁剪** |
-| `dist/` 合计 | **7.67 MB** | 104 | 计划书写的是 < 5 MB —— **按「整个 `dist/`」口径不达标，按「应用自身产物」口径达标** |
+| **Vite 产物（应用自身）** | **3.96 MB** | 5 | `index.html`、`favicon.ico`、`assets/cesium-*.js`、`assets/index-*.js`、`assets/index-*.css`；**已达计划书的 < 5 MB** |
+| **自托管 Cesium 运行时** | 3.73 MB | 99 | `dist/Cesium/`：98 个运行时文件 + 1 个 `pruned-manifest.json` 排查报告；厂商运行时，不是应用产物；由 `vite-plugins/cesium-assets.js` 拷贝后**按剪枝清单裁剪** |
+| `dist/` 合计 | **7.71 MB** | 104 | 计划书写的是 < 5 MB —— **按「整个 `dist/`」口径不达标，按「应用自身产物」口径达标** |
 
 剪枝前是 10.49 MB / 385 个文件（Cesium 运行时 6.57 MB / 380 个文件）；
 **剪掉 282 个文件、2,979,559 字节**。
@@ -297,18 +365,21 @@ node scripts\measure-browser-performance.mjs --no-build --port 8045 --cdp-port 9
 `server-logs/`（后端与 Chrome 的日志）。退出码：测出数据 → 0；测不出数据（找不到
 Chrome / 构建失败 / 后端起不来）→ 1，**不产出假数字**。
 
-**本轮实测**（3 轮取中位数，16 核 i7-13620H，测量期整机 CPU 非空闲 **61%–68%**；
-同机改造前那轮是 79%–98%）：
+**本轮实测**（2026-10-22，3 轮取中位数，16 核 i7-13620H，测量期整机 CPU 非空闲 **71%–84%**）：
 
 | 指标 | 验收线 | 实测 | 判定 |
 |---|---|---|---|
-| 首屏（LargestContentfulPaint） | < 3 s | **0.86 s**（三轮 0.78 / 0.86 / 0.87） | 达标 |
-| 页面 load 事件 | < 3 s | **0.94 s** | 达标 |
-| 应用就绪（数据到位 → 城市入场景） | 参考 | **1.31 s** | 参考 |
-| 帧率（静止 / 慢速环绕） | ≥ 30 fps | **107.5 fps** | 达标 |
-| 帧率（相机运动） | ≥ 30 fps | **162.1 fps** | 达标 |
-| 首屏传输量（线上，不含外部） | 参考 | 2.63 MB | 参考 |
-| **首屏外部请求（高德瓦片）** | 0 | **0 个**（改造前是 77 个） | 达标 |
+| 首屏（LargestContentfulPaint） | < 3 s | **1.19 s**（三轮 1.02 / 1.19 / 1.25） | 达标 |
+| 页面 load 事件 | < 3 s | **1.49 s** | 达标 |
+| 应用就绪（数据到位 → 城市入场景） | 参考 | **1.96 s** | 参考 |
+| 帧率（静止 / 慢速环绕） | ≥ 30 fps | **76.5 fps** | 达标 |
+| 帧率（相机运动） | ≥ 30 fps | **160.5 fps** | 达标 |
+| 首屏传输量（线上，不含外部） | 参考 | 2.53 MB | 参考 |
+| **首屏外部请求（高德瓦片）** | 0 | **0 个** | 达标 |
+
+> 上一版（深色底座那一轮）同机测得：LCP 0.86 s、静止 107.5 fps、运动 162.1 fps。
+> 这一轮机器更忙（CPU 71%–84%，上一轮 61%–68%），**首屏与静止帧率被机器负载拉低**，
+> 运动帧率与瓦片数基本持平。**别把机器忙当成产品慢** —— 权威数字要看本机空载时复跑的那一轮。
 
 **改造前 → 改造后**（同一台机器、同一套脚本）：
 
@@ -365,6 +436,8 @@ Chrome / 构建失败 / 后端起不来）→ 1，**不产出假数字**。
 | 页面只有一个空地球 | 后端没启动，或 `backend-python/geojson/*.geojson` 缺失（后端会返回 503） |
 | 面板上出现红色错误条 | 后端返回了错误；`error.message` 与 `error.status` 会显示在条上 |
 | 面板上没有「实时交通」那一行 | 后端还没起来，或交通状态请求失败（轮询失败会保留上一次读数；完全没读数时这一行不渲染） |
+| 中心的 3D 场景拖不动 / 滚轮没反应 | overlay 容器被写成了 `pointer-events: auto` —— 容器必须是 `none`，只有面板是 `auto` |
+| 大屏上某几格写着「数据源暂不可用」 | 那个源没取到（上游挂了 / 本地 geojson 读不到）。**这是设计**：不拿 0 或旧值冒充 |
 | 控制台报 `Failed to load module script: text/html` | `window.CESIUM_BASE_URL` 或 Cesium 静态资源插件被改掉了 |
 | 页面报 "An error occurred while rendering" | 用了**非贴地的实体 polyline** → Cesium 要 `Workers/createPolylineGeometry.js`，那个文件被剪枝清单剪掉了 → 404。用 `Primitive`（`asynchronous: false`）代替 |
 | `npm test` 一直不退出 | 那是 watch 模式，用 `npm test -- --run` |
