@@ -45,7 +45,7 @@ npm run dev                             # http://localhost:5173/
 | `npm run lint:fix` | ESLint 修复版（会改文件，按需使用） |
 | `npm run typecheck` | `vue-tsc --noEmit` 类型检查（CI 里是**阻塞门禁**） |
 | `npm run format` | Prettier 格式化 `src/` |
-| `npm test -- --run` | 单次跑完测试（12 个文件 / **145 个用例**，全部是 `.ts`） |
+| `npm test -- --run` | 单次跑完测试（12 个文件 / **152 个用例**，全部是 `.ts`） |
 | `npm run test:run` | 同上，等价写法 |
 | `npm run test:coverage` | 跑测试并出覆盖率报告（v8 provider）；报告默认落在 `coverage/`（已 gitignore），要放到仓库外设 `COVERAGE_DIR` |
 | `npm test` | ⚠️ **watch 模式**，不会自己退出；脚本里不要用 |
@@ -73,7 +73,7 @@ vue-tsc ^3.3.13（实装 3.3.13）、typescript-eslint ^8.72.0（实装 8.72.0�
 
 > 覆盖率 `include` 写在 `vite.config.js` 里（`src/**/*.{js,ts,vue}`），**迁到 TypeScript
 > 之后要记得复查它** —— 原先只写了 `.{js,vue}`，源码全迁成 `.ts` 之后报告里就只剩 `.vue`
-> 了，看着漂亮、实际统计的是子集。当前全口径：语句 **96.77%**、函数 **94.73%**、分支 **83.87%**
+> 了，看着漂亮、实际统计的是子集。当前全口径：语句 **96.53%**、函数 **94.77%**、分支 **83.98%**
 > （含 `src/theme/dark.ts` 与 `src/theme/dashboard.ts`，语句与函数都是 100%）。
 
 ## 关键文件
@@ -85,7 +85,7 @@ vue-tsc ^3.3.13（实装 3.3.13）、typescript-eslint ^8.72.0（实装 8.72.0�
 | `src/components/dashboard/` | 大屏面板与图表（**纯 SVG，无图表库**）：`TopBar.vue` / `PanelCard.vue` / `MetricCard.vue` / `LineChart.vue` / `DonutChart.vue` / `BarChart.vue` / `EventStream.vue` |
 | `src/composables/useDashboardData.ts` | 页签 → 图表数据的**纯函数** `resolveTabView(tab, overview)`：不碰 Vue 响应式，好测；取不到的指标输出 `value: null` + `unavailable` |
 | `src/composables/useDashboardState.ts` | 页签状态（**模块级单例**）：`activeTabKey` / `setTab`，大屏与场景共用同一份 |
-| `src/composables/useEventStream.ts` | 事件流的**纯函数**辅助：`dedupeEvents()`（按 id 去重）、`formatEventTime()`（本地 HH:MM）、`explainEmptyEvents()`（**空态解释**：为什么没有事件） |
+| `src/composables/useEventStream.ts` | 事件流的**纯函数**辅助：`dedupeEvents()`（按 id 去重）、`formatEventTime()`（本地 HH:MM）、`resolveEventLocation()`（**落点解析**：全市级 → 城心，几何锚定 → 真实坐标）、`explainEmptyEvents()`（**空态解释**：为什么没有事件） |
 | `src/composables/useSceneLinkage.ts` | 页签 → 场景联动的**纯函数**：`resolveSceneLinkage()` / `resolveFocusBuildingIds()`（焦点建筑来自**后端** `facilities[].members`） |
 | `src/theme/dashboard.ts` | 大屏**设计 token**（尺寸与排版：圆角 / 描边 / 内边距 / 列宽 / 行高 / 字号阶梯 / 间距）+ 图表色序 `CHART_COLORS`（只从 `DARK_PALETTE` 取）；颜色本身仍在 `dark.ts` |
 | `src/theme/dark.ts` | **深色大屏的色板与材质工厂**（`DARK_PALETTE` / `ROAD_COLORS` / 辉光材质 / 流动虚线材质 / 拥堵分档色 / CSS 变量注入）——视觉的唯一事实来源 |
@@ -172,7 +172,7 @@ vue-tsc ^3.3.13（实装 3.3.13）、typescript-eslint ^8.72.0（实装 8.72.0�
 （`GET /api/city/overview` 的 `events`）：
 
 ```
-● 空气质量由优转为良   城心（数据范围中心）   提示   11:00
+● 空气质量由优转为良   城心（全市指标）   提示   11:00
 ```
 
 > **这个项目没有告警系统、没有摄像头、没有工单系统。**
@@ -186,6 +186,27 @@ vue-tsc ^3.3.13（实装 3.3.13）、typescript-eslint ^8.72.0（实装 8.72.0�
 - **每条都带来源**：来源名、观测时间、`metric_key`、发生时间都在事件里（悬停可见）；
 - **id 稳定**：同一条事件重复派生时 id 不变 —— 前端按 id 去重，60 秒一次的轮询不会重复插入；
 - **模型估算派生的标「（模型估算）」**：目前只有路网负载这一类。
+
+### 事件落在哪里：`location_kind` 说了算
+
+事件分两类，**由后端给的 `location_kind` 区分**（前端不靠猜）：
+
+| `location_kind` | 是哪类事件 | 落点 | 位置标签 |
+|---|---|---|---|
+| `city` | **全市级**（空气质量、天气） | **城心**（天安门 = `cityConfig.center` = 相机的绕行中心） | 城心（全市指标） |
+| `geometry` | **几何锚定**（路网负载） | **真实几何**上的点：最长主干道的弧长中点 | 主路段（OSM way/175277980） |
+
+- **全市级指标本来就没有空间位置**，画在城心是准确的；
+  而且城心正是相机盯着的那一点，所以默认鸟瞰视角下标记**永远在屏幕中心**
+  （实测屏幕坐标 **(744, 403)**，画布 1578×802）。
+- **几何锚定事件保持真实坐标** —— 真实道路的弧长中点比「城心」有信息量。
+  它离城心约 2.9 km，所以默认视角下不一定在屏内（相机转到那一侧就会看到）；
+  点它则由相机直接飞过去，飞行后标记落在屏幕中心。
+
+> **「城心」全项目只有一个**：天安门（`cityConfig.center`）。
+> 后端那个「数据范围中心」（OSM 抽取范围的围盒中心）比城心偏北约 1.1 km，
+> **不是城心** —— 拿它放标记的话，默认鸟瞰视角下标记会落到屏幕之外
+> （2026-10-22 复核时实测 y=1198，画布高 802）。
 
 ### 场景里怎么标事件
 
@@ -217,8 +238,10 @@ vue-tsc ^3.3.13（实装 3.3.13）、typescript-eslint ^8.72.0（实装 8.72.0�
 - **切页签不移动相机**：用户没点事件，就不许乱飞。切回「区域概览」必须完全恢复。
 
 实测（2026-10-22，生产构建 + 真实 Chrome）：5 个页签的切换耗时
-**22.5 / 34.7 / 42.8 / 33.3 / 23.7 ms**（验收线 < 300 ms），有脉冲环时帧率
-**108.6 fps**（验收线 ≥ 30 fps），页面**没有** "Rendering has stopped."。
+**26.3 / 35.8 / 46.1 / 44.2 / 24.1 ms**（验收线 < 300 ms），有脉冲环时帧率
+**61.6 fps**（验收线 ≥ 30 fps），页面**没有** "Rendering has stopped."。
+默认鸟瞰视角下，全市级事件标记的屏幕坐标实测 **(744, 403)**（画布 1578×802）——
+落在屏幕中心。
 
 ## 16:9 大屏骨架
 

@@ -8,7 +8,7 @@
     <!-- 16:9 大屏骨架：顶栏（标题 + 页签 + 读数带）/ 左列 / 中心场景 / 右列 / 通栏底栏 -->
     <DashboardOverlay
       :overview="cityOverview"
-      :events="events"
+      :events="resolvedEvents"
       @select-event="flyToEvent"
     >
       <!-- 顶栏右侧读数带：S1 的城市运行指标带 + 实时交通读数。
@@ -95,7 +95,7 @@ import * as Cesium from 'cesium'
 import 'cesium/Build/Cesium/Widgets/widgets.css'
 import { useCityData } from '@/composables/useCityData'
 import { useDashboardState } from '@/composables/useDashboardState'
-import { dedupeEvents } from '@/composables/useEventStream'
+import { dedupeEvents, resolveEventLocation } from '@/composables/useEventStream'
 import { resolveFocusBuildingIds, resolveSceneLinkage } from '@/composables/useSceneLinkage'
 import DashboardOverlay from './DashboardOverlay.vue'
 import {
@@ -252,6 +252,11 @@ interface CityConfig {
 
 const cityConfig: CityConfig = {
   // 天安门广场中央：开阔地带，平视模式不会穿模；朝北（heading=0）能看到天安门城楼
+  //
+  // **全项目只有一个「城心」** —— 就是这里的 `center`：
+  // 相机的绕行中心、全市级事件标记的落点都指向它。
+  // 后端那个「数据范围中心」（OSM 围盒中心）比它偏北约 1.1 km，
+  // **不能**拿来放标记（默认鸟瞰视角下会落在屏幕之外）。
   center: { lng: 116.3976, lat: 39.9055 },
   zoomLevel: 1500,
   // 平视视角：1.7m 是人眼高度，朝向正北（heading=0）
@@ -1601,6 +1606,20 @@ let eventMarkerSignature = ''
  */
 const events = computed<CityEvent[]>(() => dedupeEvents(cityOverview.value?.events))
 
+/**
+ * **落点已解析**的事件列表（场景标记、事件流面板都用这一份）。
+ *
+ * - 全市级事件（`location_kind === 'city'`）→ 落在**城心**（`cityConfig.center`），
+ *   也就是相机绕行的那一点 → 默认鸟瞰视角下标记永远在屏幕中心；
+ * - 几何锚定事件（`location_kind === 'geometry'`）→ 用**真实几何**坐标，不替换。
+ */
+const resolvedEvents = computed<CityEvent[]>(() =>
+  events.value.map(event => ({
+    ...event,
+    location: resolveEventLocation(event, cityConfig.center),
+  })),
+)
+
 /** 圆环上的点（贴地，高度 0）。 */
 const ringPositions = (lng: number, lat: number, radius: number): Cesium.Cartesian3[] => {
   const points: Cesium.Cartesian3[] = []
@@ -1739,7 +1758,8 @@ const clearEventMarkers = () => {
 const syncEventMarkers = () => {
   const activeViewer = viewer.value
   if (!activeViewer) return
-  const list = events.value.slice(0, MAX_EVENT_MARKERS)
+  // 用**已解析落点**的事件：全市级事件落在城心，几何事件用真实坐标。
+  const list = resolvedEvents.value.slice(0, MAX_EVENT_MARKERS)
   const signature = list
     .map(event => `${event.id}@${event.location?.lng ?? ''},${event.location?.lat ?? ''}`)
     .join('|')
@@ -1768,10 +1788,13 @@ const syncEventMarkers = () => {
  * - 飞行期间**不推进自转**（飞行与自转会互相打架）；
  * - 飞行结束后自转从**相机当前位置**反算轨道状态，不硬拽回去；
  * - 这是用户主动触发的，**不算「相机交互」** —— 不把自转永久停掉。
+ *
+ * 落点用**已解析**的位置：全市级事件飞到**城心**（= 绕行中心），
+ * 飞行后标记正好落在屏幕中心；几何锚定事件飞到真实几何上的点。
  */
 const flyToEvent = (event: CityEvent) => {
   const activeViewer = viewer.value
-  const location = event.location
+  const location = resolveEventLocation(event, cityConfig.center)
   if (!activeViewer || !location) return
   // 目标高度 800 m、俯角 45° → 相机落在事件点正南 800 m 处，朝北俯视。
   const southOffsetDeg = EVENT_FOCUS_HEIGHT_M / METERS_PER_DEGREE_LAT
@@ -1873,7 +1896,7 @@ watch(activeTabKey, () => {
 })
 
 // 事件集合变化 → 重建场景里的标记（光柱 + 脉冲环）。
-watch(events, () => {
+watch(resolvedEvents, () => {
   syncEventMarkers()
 })
 

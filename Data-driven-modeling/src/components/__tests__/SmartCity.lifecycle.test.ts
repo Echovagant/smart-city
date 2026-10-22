@@ -320,6 +320,8 @@ interface SmartCityVm {
   cityOverview: CityOverview | null
   /** 派生事件（已按 id 去重）。 */
   events: CityEvent[]
+  /** 落点已解析的派生事件（全市级事件落在城心）。 */
+  resolvedEvents: CityEvent[]
   /** 点击事件 → 相机飞过去。 */
   flyToEvent: (event: CityEvent) => void
   createTrafficSystem: () => void
@@ -1571,130 +1573,153 @@ describe('大屏骨架的 DOM 契约', () => {
 //
 // 全部是**行为断言**：mount 组件 → 触发真实交互 → 看可观察效果。
 // ---------------------------------------------------------------------------
+
+/** 事件流的来源标注。 */
+const S3_SOURCE = {
+  name: '中国环境监测总站',
+  url: 'https://air.cnemc.cn:18007/x',
+  observed_at: '2026-10-22T04:00:00Z',
+  fetched_at: '2026-10-22T04:30:00Z',
+  realtime: true,
+  estimated: false,
+}
+
+/** 全市级事件（空气质量）：后端给的坐标是**数据范围中心**，前端按 kind 改用城心。 */
+const S3_CITY_EVENT: CityEvent = {
+  id: 'air_quality:level_change:2026-10-22T03:00:00Z',
+  type: 'air_quality',
+  level: 'info',
+  title: '空气质量由优转为良',
+  detail: '按 AQI 分级标准换算',
+  time: '2026-10-22T03:00:00Z',
+  location_kind: 'city',
+  location: { lng: 116.4020155, lat: 39.9153679, label: '数据范围中心' },
+  metric_key: 'aqi_24h',
+  source: S3_SOURCE,
+  estimated: false,
+}
+
+/** 几何锚定事件（路网负载）：位置是真实几何上的点，不许被换成城心。 */
+const S3_GEOMETRY_EVENT: CityEvent = {
+  id: 'road_load:over_threshold:92.4',
+  type: 'road_load',
+  level: 'alert',
+  title: '路网负载指数 92.4 超过参考阈值 80',
+  detail: '静态几何折算的供给紧张度（模型估算）',
+  time: '2026-10-22T09:00:00Z',
+  location_kind: 'geometry',
+  location: { lng: 116.41, lat: 39.92, label: '主路段（OSM way/41662973）' },
+  metric_key: 'road_load_index',
+  source: S3_SOURCE,
+  estimated: true,
+}
+
+/** 一栋带 OSM id 的建筑（焦点集合按 id 匹配）。 */
+const s3BuildingFeature = (id: string) => ({
+  type: 'Feature',
+  id,
+  properties: { building: 'yes' },
+  geometry: {
+    type: 'Polygon',
+    coordinates: [
+      [
+        [116.4, 39.91],
+        [116.401, 39.91],
+        [116.401, 39.911],
+        [116.4, 39.911],
+        [116.4, 39.91],
+      ],
+    ],
+  },
+})
+
+/** 一条主干道（1~2 级道路会叠一层流动光效）。 */
+const s3RoadFeature = {
+  type: 'Feature',
+  id: 'way/1',
+  properties: { highway: 'primary' },
+  geometry: {
+    type: 'LineString',
+    coordinates: [
+      [116.39, 39.9],
+      [116.42, 39.9],
+    ],
+  },
+}
+
+const s3Overview = (events: CityEvent[]): CityOverview => ({
+  city: { code: 110000, name: '北京市', latitude: 40.05, longitude: 116.4 },
+  generated_at: '2026-10-22T04:00:00Z',
+  metrics: [
+    {
+      key: 'aqi',
+      label: '空气质量',
+      value: 58,
+      unit: 'AQI',
+      level: 2,
+      level_label: '良',
+      source: S3_SOURCE,
+    },
+    {
+      key: 'road_load_index',
+      label: '路网负载（模型估算）',
+      value: 63.5,
+      unit: '指数',
+      source: S3_SOURCE,
+    },
+    {
+      key: 'weather_temp',
+      label: '气温',
+      value: 18,
+      unit: '℃',
+      source: S3_SOURCE,
+    },
+  ],
+  series: [],
+  facilities: [
+    {
+      key: 'heritage',
+      label: '历史建筑',
+      count: 1,
+      criteria: [],
+      members: ['relation/1'],
+      source: S3_SOURCE,
+    },
+  ],
+  events,
+  degraded: [],
+})
+
+/** 后端四个端点的桩：建筑带 id（焦点集合要按 id 匹配）。 */
+const stubS3Api = (events: CityEvent[]) =>
+  vi.fn<(url: string, options: RequestInit) => Promise<Response>>((url) => {
+    const target = String(url)
+    if (target.includes('city/overview')) {
+      return Promise.resolve(jsonResponse(s3Overview(events)))
+    }
+    if (target.includes('traffic-status')) {
+      return Promise.resolve(jsonResponse({ status: 'normal' }))
+    }
+    if (target.includes('buildings')) {
+      return Promise.resolve(
+        jsonResponse({
+          type: 'FeatureCollection',
+          features: [s3BuildingFeature('relation/1')],
+        }),
+      )
+    }
+    if (target.includes('roads')) {
+      return Promise.resolve(
+        jsonResponse({ type: 'FeatureCollection', features: [s3RoadFeature] }),
+      )
+    }
+    return Promise.resolve(jsonResponse({ type: 'FeatureCollection', features: [] }))
+  })
+
 describe('派生事件流与场景联动', () => {
-  const SOURCE = {
-    name: '中国环境监测总站',
-    url: 'https://air.cnemc.cn:18007/x',
-    observed_at: '2026-10-22T04:00:00Z',
-    fetched_at: '2026-10-22T04:30:00Z',
-    realtime: true,
-    estimated: false,
-  }
-
-  /** 一栋带 OSM id 的建筑（焦点集合按 id 匹配）。 */
-  const buildingFeature = (id: string) => ({
-    type: 'Feature',
-    id,
-    properties: { building: 'yes' },
-    geometry: {
-      type: 'Polygon',
-      coordinates: [
-        [
-          [116.4, 39.91],
-          [116.401, 39.91],
-          [116.401, 39.911],
-          [116.4, 39.911],
-          [116.4, 39.91],
-        ],
-      ],
-    },
-  })
-
-  /** 一条主干道（1~2 级道路会叠一层流动光效）。 */
-  const roadFeature = {
-    type: 'Feature',
-    id: 'way/1',
-    properties: { highway: 'primary' },
-    geometry: {
-      type: 'LineString',
-      coordinates: [
-        [116.39, 39.9],
-        [116.42, 39.9],
-      ],
-    },
-  }
-
-  const eventPayload: CityEvent = {
-    id: 'air_quality:level_change:2026-10-22T03:00:00Z',
-    type: 'air_quality',
-    level: 'info',
-    title: '空气质量由优转为良',
-    detail: '按 AQI 分级标准换算',
-    time: '2026-10-22T03:00:00Z',
-    location: { lng: 116.4, lat: 39.915, label: '城心（数据范围中心）' },
-    metric_key: 'aqi_24h',
-    source: SOURCE,
-    estimated: false,
-  }
-
-  const overviewStub = (events: CityEvent[]): CityOverview => ({
-    city: { code: 110000, name: '北京市', latitude: 40.05, longitude: 116.4 },
-    generated_at: '2026-10-22T04:00:00Z',
-    metrics: [
-      {
-        key: 'aqi',
-        label: '空气质量',
-        value: 58,
-        unit: 'AQI',
-        level: 2,
-        level_label: '良',
-        source: SOURCE,
-      },
-      {
-        key: 'road_load_index',
-        label: '路网负载（模型估算）',
-        value: 63.5,
-        unit: '指数',
-        source: SOURCE,
-      },
-      {
-        key: 'weather_temp',
-        label: '气温',
-        value: 18,
-        unit: '℃',
-        source: SOURCE,
-      },
-    ],
-    series: [],
-    facilities: [
-      {
-        key: 'heritage',
-        label: '历史建筑',
-        count: 1,
-        criteria: [],
-        members: ['relation/1'],
-        source: SOURCE,
-      },
-    ],
-    events,
-    degraded: [],
-  })
-
-  /** 后端四个端点的桩：建筑带 id（焦点集合要按 id 匹配）。 */
-  const stubApi = (events: CityEvent[]) =>
-    vi.fn<(url: string, options: RequestInit) => Promise<Response>>((url) => {
-      const target = String(url)
-      if (target.includes('city/overview')) {
-        return Promise.resolve(jsonResponse(overviewStub(events)))
-      }
-      if (target.includes('traffic-status')) {
-        return Promise.resolve(jsonResponse({ status: 'normal' }))
-      }
-      if (target.includes('buildings')) {
-        return Promise.resolve(
-          jsonResponse({
-            type: 'FeatureCollection',
-            features: [buildingFeature('relation/1')],
-          }),
-        )
-      }
-      if (target.includes('roads')) {
-        return Promise.resolve(
-          jsonResponse({ type: 'FeatureCollection', features: [roadFeature] }),
-        )
-      }
-      return Promise.resolve(jsonResponse({ type: 'FeatureCollection', features: [] }))
-    })
+  const eventPayload = S3_CITY_EVENT
+  const geometryEventPayload = S3_GEOMETRY_EVENT
+  const stubApi = stubS3Api
 
   /** 从 primitives.add 的调用里挑出某个颜色的 Primitive。 */
   const primitiveWithColor = (
@@ -1759,7 +1784,8 @@ describe('派生事件流与场景联动', () => {
 
     const item = wrapper.find('.dc-event-item')
     expect(item.text()).toContain('空气质量由优转为良')
-    expect(item.text()).toContain('城心（数据范围中心）')
+    // 全市级事件的位置标签是「城心（全市指标）」
+    expect(item.text()).toContain('城心（全市指标）')
 
     const flyTo = mockViewerOf(wrapper).camera.flyTo
     flyTo.mockClear()
@@ -1773,10 +1799,38 @@ describe('派生事件流与场景联动', () => {
       duration: number
     }
     expect(call.destination.z).toBe(800)
-    expect(call.destination.x).toBe(116.4)
+    // 落点是**城心**（= 相机的绕行中心），不是后端给的数据范围中心
+    expect(call.destination.x).toBe(116.3976)
     expect(call.orientation.pitch).toBeCloseTo(-Math.PI / 4)
     expect(call.orientation.heading).toBe(0)
     expect(call.duration).toBe(1.2)
+
+    wrapper.unmount()
+  })
+
+  it('flies to the real geometry of an anchored event', async () => {
+    installFetch(stubApi([geometryEventPayload]))
+
+    const wrapper = mountSmartCity()
+    await vi.waitFor(() => {
+      expect(wrapper.findAll('.dc-event-item').length).toBe(1)
+    })
+
+    const item = wrapper.find('.dc-event-item')
+    // 几何锚定事件的位置标签是真实道路
+    expect(item.text()).toContain('主路段（OSM way/41662973）')
+
+    const flyTo = mockViewerOf(wrapper).camera.flyTo
+    flyTo.mockClear()
+    await item.trigger('click')
+
+    expect(flyTo).toHaveBeenCalledTimes(1)
+    const call = flyTo.mock.calls[0][0] as unknown as {
+      destination: { x: number; y: number; z: number }
+    }
+    // 落点是真实几何上的点，**不是**城心
+    expect(call.destination.x).toBe(116.41)
+    expect(call.destination.x).not.toBe(116.3976)
 
     wrapper.unmount()
   })
@@ -1856,5 +1910,184 @@ describe('派生事件流与场景联动', () => {
     // 事件标记（光柱 / 圆柱 / 脉冲环）必须全部清掉：重新挂载不许叠加
     expect(entitiesRemove.mock.calls.length).toBeGreaterThan(0)
     expect(primitivesRemove.mock.calls.length).toBeGreaterThan(0)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 事件标记在**默认鸟瞰视角**下的屏幕位置
+//
+// 这条是「告警脉冲环 + 垂直光柱」的生死线：标记落在屏幕外的话，
+// 用户第一眼根本看不到这个功能。
+//
+// 做法：**不写死相机参数** —— 从 Cesium mock 的 `setView` 调用里读出组件真正的
+// 相机位姿（高度 / 俯角 / 方位角），再按 Cesium 的真实视场角做投影，
+// 绕城心扫一整圈，断言标记**每一帧都在画布内**。
+//
+// 之前的事件位置（后端的「数据范围中心」= OSM 围盒中心）比城心偏北约 1.1 km：
+// 相机转到某些方位角时它落到屏幕下方之外（实测 y=1272 > 画布高 900）。
+// 最后一条断言专门盯住这个回归。
+// ---------------------------------------------------------------------------
+describe('事件标记的屏幕位置', () => {
+  const CANVAS = { width: 1600, height: 900 }
+  /** Cesium 的默认视场角（60°，作用在宽的一边）。 */
+  const FOV_RAD = Math.PI / 3
+  const METERS_PER_DEGREE_LAT = 111320
+
+  interface Vec3 {
+    x: number
+    y: number
+    z: number
+  }
+
+  const sub = (a: Vec3, b: Vec3): Vec3 => ({ x: a.x - b.x, y: a.y - b.y, z: a.z - b.z })
+  const dot = (a: Vec3, b: Vec3): number => a.x * b.x + a.y * b.y + a.z * b.z
+  const cross = (a: Vec3, b: Vec3): Vec3 => ({
+    x: a.y * b.z - a.z * b.y,
+    y: a.z * b.x - a.x * b.z,
+    z: a.x * b.y - a.y * b.x,
+  })
+  const normalize = (v: Vec3): Vec3 => {
+    const length = Math.hypot(v.x, v.y, v.z)
+    return { x: v.x / length, y: v.y / length, z: v.z / length }
+  }
+
+  /**
+   * 把世界点投到屏幕坐标（像素）。
+   *
+   * 局部 ENU 框架：x=东、y=北、z=上，原点在**城心**。
+   *
+   * `forward` 是**相机自己的视线方向**（鸟瞰模式下相机永远盯着城心），
+   * 不能拿「相机→点」的方向当视线 —— 那样每个点都会落在屏幕中心，
+   * 投影就失去意义了。
+   */
+  const project = (
+    point: Vec3,
+    camera: Vec3,
+    forward: Vec3,
+  ): { x: number; y: number } | null => {
+    const right = normalize(cross(forward, { x: 0, y: 0, z: 1 }))
+    const up = cross(right, forward)
+    const view = sub(point, camera)
+    const depth = dot(view, forward)
+    if (depth <= 0) return null
+    const halfWidth = Math.tan(FOV_RAD / 2)
+    const halfHeight = (halfWidth * CANVAS.height) / CANVAS.width
+    const ndcX = dot(view, right) / depth / halfWidth
+    const ndcY = dot(view, up) / depth / halfHeight
+    return {
+      x: ((ndcX + 1) / 2) * CANVAS.width,
+      y: ((1 - ndcY) / 2) * CANVAS.height,
+    }
+  }
+
+  /** 从组件真正的相机位姿推出绕行中心与轨道参数。 */
+  const readOrbitFrom = (wrapper: VueWrapper<SmartCityVm>) => {
+    // initCesium 的初始定位走 flyTo（不是 setView）—— 两个都看一眼，谁有算谁。
+    const flyToCalls = mockViewerOf(wrapper).camera.flyTo.mock.calls
+    const setViewCalls = mockViewerOf(wrapper).camera.setView.mock.calls
+    const calls = flyToCalls.length > 0 ? flyToCalls : setViewCalls
+    expect(calls.length).toBeGreaterThan(0)
+    const initial = calls[0][0] as unknown as {
+      destination: { x: number; y: number; z: number }
+      orientation: { heading: number; pitch: number; roll: number }
+    }
+    const altitude = initial.destination.z
+    const pitch = initial.orientation.pitch
+    // 水平距离 = 高度 / tan(俯角)（与组件的 OVERHEAD_DISTANCE_M 同一口径）
+    const distance = altitude / Math.tan(Math.abs(pitch))
+    // 方位角：heading = 方位角 + 180°
+    const azimuth = initial.orientation.heading - Math.PI
+    const centerLatRad = (initial.destination.y * Math.PI) / 180
+    const metersPerDegreeLng = METERS_PER_DEGREE_LAT * Math.cos(centerLatRad)
+    // 相机在城心的哪个方向 → 反推城心
+    const center = {
+      lng: initial.destination.x - (distance * Math.sin(azimuth)) / metersPerDegreeLng,
+      lat: initial.destination.y - (distance * Math.cos(azimuth)) / METERS_PER_DEGREE_LAT,
+    }
+    return { altitude, distance, azimuth, center, metersPerDegreeLng }
+  }
+
+  /** 世界经纬度 → 局部 ENU 坐标（相对城心）。 */
+  const toLocal = (
+    lng: number,
+    lat: number,
+    center: { lng: number; lat: number },
+    metersPerDegreeLng: number,
+  ): Vec3 => ({
+    x: (lng - center.lng) * metersPerDegreeLng,
+    y: (lat - center.lat) * METERS_PER_DEGREE_LAT,
+    z: 0,
+  })
+
+  /** 方位角 → 相机位置（局部 ENU）。 */
+  const cameraAt = (azimuth: number, distance: number, altitude: number): Vec3 => ({
+    x: distance * Math.sin(azimuth),
+    y: distance * Math.cos(azimuth),
+    z: altitude,
+  })
+
+  /**
+   * 方位角 → 相机视线方向（鸟瞰模式下相机永远盯着城心）。
+   */
+  const forwardAt = (azimuth: number): Vec3 => {
+    const camera = cameraAt(azimuth, 1, 0)
+    return normalize({ x: -camera.x, y: -camera.y, z: -1 })
+  }
+
+  it('keeps a city-level event marker inside the canvas for the whole orbit', async () => {
+    installFetch(stubS3Api([S3_CITY_EVENT]))
+
+    const wrapper = mountSmartCity()
+    await vi.waitFor(() => {
+      expect(wrapper.findAll('.dc-event-item').length).toBe(1)
+    })
+
+    // 标记的落点：组件解析好的（全市级 → 城心）
+    const marker = wrapper.vm.resolvedEvents[0]!.location!
+    expect(marker).toBeDefined()
+    const orbit = readOrbitFrom(wrapper)
+    const local = toLocal(marker.lng, marker.lat, orbit.center, orbit.metersPerDegreeLng)
+
+    // 绕城心扫一整圈：每一帧标记都必须在画布内
+    for (let degrees = 0; degrees < 360; degrees += 15) {
+      const azimuth = (degrees * Math.PI) / 180
+      const camera = cameraAt(azimuth, orbit.distance, orbit.altitude)
+      const screen = project(local, camera, forwardAt(azimuth))
+      expect(screen).not.toBeNull()
+      expect(screen!.x).toBeGreaterThanOrEqual(0)
+      expect(screen!.x).toBeLessThanOrEqual(CANVAS.width)
+      expect(screen!.y).toBeGreaterThanOrEqual(0)
+      expect(screen!.y).toBeLessThanOrEqual(CANVAS.height)
+    }
+
+    wrapper.unmount()
+  })
+
+  it('would have been off-screen with the old data-extent-centre location', () => {
+    // 回归对照：后端的「数据范围中心」（OSM 围盒中心）比城心偏北约 1.1 km。
+    // 用它当标记落点，相机转到某些方位角时它会掉到屏幕下方之外 ——
+    // 这正是本轮修掉的缺陷，所以这条断言钉住「不能退回那个位置」。
+    const CITY_CENTER = { lng: 116.3976, lat: 39.9055 }
+    const DATA_EXTENT_CENTER = { lng: 116.4020155, lat: 39.9153679 }
+    const altitude = 1500
+    const distance = 1500
+    const metersPerDegreeLng = METERS_PER_DEGREE_LAT * Math.cos((CITY_CENTER.lat * Math.PI) / 180)
+
+    const local = toLocal(
+      DATA_EXTENT_CENTER.lng,
+      DATA_EXTENT_CENTER.lat,
+      CITY_CENTER,
+      metersPerDegreeLng,
+    )
+
+    let offScreen = 0
+    for (let degrees = 0; degrees < 360; degrees += 15) {
+      const azimuth = (degrees * Math.PI) / 180
+      const screen = project(local, cameraAt(azimuth, distance, altitude), forwardAt(azimuth))
+      if (!screen || screen.x < 0 || screen.x > CANVAS.width || screen.y < 0 || screen.y > CANVAS.height) {
+        offScreen += 1
+      }
+    }
+    expect(offScreen).toBeGreaterThan(0)
   })
 })

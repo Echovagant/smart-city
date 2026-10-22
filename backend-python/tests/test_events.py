@@ -27,6 +27,7 @@ from city_data.models import (
     SeriesPoint,
     SourceInfo,
 )
+from city_data.sources import road_network
 
 SOURCE = SourceInfo(
     name="中国环境监测总站",
@@ -328,6 +329,63 @@ class TestRule4Weather:
     def test_degraded_weather_produces_nothing(self):
         result = events.derive_events([metric("weather_temp", None)], [], center=CENTER)
         assert result == []
+
+
+class TestLocationKind:
+    """``location_kind`` 区分「全市级」与「几何锚定」。
+
+    全市级事件（空气质量 / 天气）没有空间位置 —— 前端把它们落在**城心**；
+    几何锚定事件（路网负载）的位置是**真实几何**上的点，不许拿城心替换。
+    """
+
+    def test_air_quality_events_are_city_level(self):
+        result = events.derive_events(
+            [metric("aqi", 120, level=3, label="轻度污染")],
+            [aqi_series([("2026-10-22T00:00:00Z", 30), ("2026-10-22T01:00:00Z", 80)])],
+            center=CENTER,
+        )
+        assert result
+        for event in result:
+            assert event.location_kind == "city"
+            # 全市级事件的坐标是后端自己的参考点，前端会改用城心
+            assert event.location.lng == CENTER.lng
+            assert event.location.lat == CENTER.lat
+
+    def test_weather_events_are_city_level(self):
+        result = events.derive_events(
+            [metric("weather_temp", -3.0, unit="℃")], [], center=CENTER
+        )
+        assert [event.location_kind for event in result] == ["city"]
+
+    def test_road_load_event_is_geometry_anchored(self):
+        anchor = RoadAnchor(lng=116.41, lat=39.92, label="主路段（OSM way/12345）")
+        result = events.derive_events(
+            [metric("road_load_index", 92.4, source=ROAD_SOURCE)],
+            [],
+            center=CENTER,
+            road_anchor=anchor,
+        )
+        assert len(result) == 1
+        event = result[0]
+        assert event.location_kind == "geometry"
+        # 位置必须是真实几何上的点，不是城心
+        assert event.location.lng == anchor.lng
+        assert event.location.lat == anchor.lat
+        assert event.location.label == "主路段（OSM way/12345）"
+
+    def test_road_load_without_anchor_stays_geometry_anchored(self):
+        # 拿不到锚点时退回参考点，但 kind 仍然是 geometry（这条事件本来就是几何锚定的）
+        result = events.derive_events(
+            [metric("road_load_index", 92.4, source=ROAD_SOURCE)], [], center=CENTER
+        )
+        assert result[0].location_kind == "geometry"
+        assert result[0].location.lng == CENTER.lng
+
+    def test_the_reference_point_is_not_called_the_city_centre(self):
+        # 「城心」全项目只有一个（天安门，前端 cityConfig.center）。
+        # 后端这个点是**数据范围中心**，不许再叫城心。
+        assert "城心" not in events.SCENE_CENTER_FALLBACK.label
+        assert "城心" not in road_network.SCENE_CENTER_LABEL
 
 
 class TestEventContract:
