@@ -10,10 +10,36 @@ import {
 } from '../themes'
 
 describe('主题契约', () => {
-  it('三套主题，id 唯一', () => {
-    expect(THEMES).toHaveLength(3)
-    expect(THEMES.map(theme => theme.id)).toEqual(['deep-space', 'graphite', 'deep-sea'])
+  it('四套主题，id 唯一', () => {
+    expect(THEMES).toHaveLength(4)
+    expect(THEMES.map(theme => theme.id)).toEqual(['deep-space', 'graphite', 'deep-sea', 'clay'])
     expect(new Set(THEMES.map(theme => theme.id)).size).toBe(THEMES.length)
+  })
+
+  it('哑光白模：建筑比道路亮，权重与其它主题相反', () => {
+    const clay = themeById('clay')
+    // 建筑是主体：对地面的对比度要明显高于道路
+    const luminance = (hex: string): number => {
+      const value = hex.replace('#', '')
+      const channel = (index: number): number => {
+        const c = parseInt(value.slice(index, index + 2), 16) / 255
+        return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4
+      }
+      return 0.2126 * channel(0) + 0.7152 * channel(2) + 0.0722 * channel(4)
+    }
+    const contrast = (a: string, b: string): number => {
+      const la = luminance(a)
+      const lb = luminance(b)
+      return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05)
+    }
+    // 建筑 vs 地面 > 4.5:1（建筑体块自己就说话）
+    expect(contrast(clay.palette.building, clay.palette.screen)).toBeGreaterThan(4.5)
+    // 道路 vs 建筑 > 2:1（道路退到建筑后面）
+    expect(contrast(clay.roadColors.main, clay.palette.building)).toBeGreaterThan(2)
+    // 流动光效层压得很淡（它是全场最刺眼的元素）
+    expect(clay.glow.flowAlpha).toBeLessThan(0.2)
+    // 描边与界面强调色分开
+    expect(clay.palette.buildingEdge).not.toBe(clay.palette.accent)
   })
 
   it('默认主题是深空蓝', () => {

@@ -88,6 +88,14 @@ export const DARK_PALETTE: ThemePalette = {
   get buildingRoof() {
     return activeTheme.palette.buildingRoof
   },
+  /** 建筑描边：与界面 accent 分开（哑光白模要浅灰细边，界面强调色仍是蓝）。 */
+  get buildingEdge() {
+    return activeTheme.palette.buildingEdge
+  },
+  /** 广场 / 人造地面：场景里的一部分，不与大屏面板共用一个色位。 */
+  get surface() {
+    return activeTheme.palette.surface
+  },
   get chartSeries() {
     return activeTheme.palette.chartSeries
   },

@@ -26,6 +26,8 @@ export const DEEP_SPACE: ThemeDefinition = {
     text: '#e0e7f1',
     building: '#0b1526',
     buildingRoof: '#101f38',
+    buildingEdge: '#1e40af',
+    surface: '#0b1526',
     chartSeries: ['#1e40af', '#0369a1', '#0e7490', '#2b5fa8', '#38bdf8', '#60a5fa'],
   },
   roadColors: {
@@ -40,6 +42,7 @@ export const DEEP_SPACE: ThemeDefinition = {
     roadAlpha: 0.78,
     buildingPower: 0.18,
     gridAlpha: 0.12,
+    flowAlpha: 0.95,
   },
 }
 
@@ -59,6 +62,8 @@ export const GRAPHITE: ThemeDefinition = {
     text: '#e3e7ec',
     building: '#15181e',
     buildingRoof: '#1c2027',
+    buildingEdge: '#4a6fa5',
+    surface: '#15181e',
     chartSeries: ['#3c4a5e', '#4a6fa5', '#5b8fa8', '#6f7f99', '#7d8ca6', '#8fa3bd'],
   },
   roadColors: {
@@ -73,6 +78,7 @@ export const GRAPHITE: ThemeDefinition = {
     roadAlpha: 0.7,
     buildingPower: 0.15,
     gridAlpha: 0.1,
+    flowAlpha: 0.95,
   },
 }
 
@@ -92,6 +98,8 @@ export const DEEP_SEA: ThemeDefinition = {
     text: '#dcebee',
     building: '#071a20',
     buildingRoof: '#0c2630',
+    buildingEdge: '#0e7490',
+    surface: '#071a20',
     chartSeries: ['#155e75', '#0369a1', '#0e7490', '#0d9488', '#2a9d8f', '#3ba7a3'],
   },
   roadColors: {
@@ -106,11 +114,64 @@ export const DEEP_SEA: ThemeDefinition = {
     roadAlpha: 0.78,
     buildingPower: 0.18,
     gridAlpha: 0.12,
+    flowAlpha: 0.95,
+  },
+}
+
+/**
+ * C「哑光白模」：**建筑是主体，道路退成底纹**。
+ *
+ * 解决的是「建筑小道路大」——原来的配色里建筑本体色与地面底几乎同色
+ * （对比度 1.10 : 1，建筑面在画面上几乎不可见，只剩一圈描边），
+ * 而道路是 14 px 宽的亮线（≈ 21 m 的地面线宽），比 30 m 高的建筑的竖向体量还大。
+ *
+ * 这一套把权重反转过来：
+ * - 建筑本体改成**哑光浅灰**（对地面 6.09 : 1），体块自己就说话；
+ * - 道路改成比建筑**暗**的灰阶细线（对建筑 3.07 : 1 → 道路退到后面）；
+ * - 描边不发光，只是一道浅色细边（像建模软件里的棱线）；
+ * - 流动光效层压到 0.12 —— 保留一点「数据在流动」的提示，不再抢注意力。
+ *
+ * 地面**保持深色**：浅底白模需要开光照与阴影才有体块感，而本项目关了光照；
+ * 深底 + 浅建筑能拿到同样的「建筑是主体」效果，且不与深色面板打架。
+ */
+export const CLAY: ThemeDefinition = {
+  id: 'clay',
+  label: '哑光白模',
+  description: '建筑是主体，道路退成底纹。无辉光，久看不累。',
+  palette: {
+    screen: '#0d1117',
+    panel: '#101720',
+    // 界面强调色仍是蓝：描边用的是 buildingEdge，两者分开。
+    accent: '#4a7fb5',
+    flow: '#5b6a7d',
+    secondary: '#39424f',
+    warning: '#f59e0b',
+    alert: '#f43f5e',
+    text: '#dde3ea',
+    building: '#8a93a0',
+    buildingRoof: '#98a1ae',
+    buildingEdge: '#c3ccd8',
+    surface: '#1b222c',
+    chartSeries: ['#3f5f80', '#5b7fa6', '#4a6b8c', '#7d9ab8', '#6b8aa8', '#a8bfd2'],
+  },
+  roadColors: {
+    main: '#3d4653',
+    secondary: '#333c48',
+    local: '#2a323c',
+    footway: '#232a33',
+    fallback: '#1f252d',
+  },
+  glow: {
+    roadPower: 0.05,
+    roadAlpha: 0.9,
+    buildingPower: 0.04,
+    gridAlpha: 0.04,
+    flowAlpha: 0.12,
   },
 }
 
 /** 全部可选主题（顺序即界面里的展示顺序）。 */
-export const THEMES: readonly ThemeDefinition[] = [DEEP_SPACE, GRAPHITE, DEEP_SEA]
+export const THEMES: readonly ThemeDefinition[] = [DEEP_SPACE, GRAPHITE, DEEP_SEA, CLAY]
 
 /** 默认主题 id。 */
 export const DEFAULT_THEME_ID = 'deep-space'
