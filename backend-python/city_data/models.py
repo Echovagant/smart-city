@@ -16,7 +16,7 @@
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_serializer
 
 # 指标值可以是数字（AQI、路网长度、指数），也可以是字符串（质量等级文本）。
 MetricValue = Union[int, float, str, None]
@@ -63,10 +63,33 @@ class Metric(BaseModel):
 
 
 class SeriesPoint(BaseModel):
-    """时间序列上的一个点。``v`` 为 None 表示那一刻没有值。"""
+    """时间序列上的一个点。``v`` 为 None 表示那一刻没有值。
+
+    ``values`` 是**多指标序列**额外带的字段：同一个时刻各项指标的取值
+    （逐日趋势用：``pm25`` / ``pm10`` / ``o3`` / ``no2`` / ``so2`` / ``co``）。
+    逐日趋势的 AQI 仍然放在 ``v`` 里 —— 所以折线图组件不用改就能画 AQI，
+    额外的那几项污染物由 ``values`` 带着。
+
+    **向后兼容**：单指标序列（``aqi_24h``）**不带**这个字段 ——
+    序列化时整个键会被省略（见 :meth:`_omit_empty_values`），
+    所以既有序列的点形状**一个字节都没变**。
+    """
 
     t: str
     v: Optional[float] = None
+    values: Optional[Dict[str, Optional[float]]] = None
+
+    @model_serializer(mode="wrap")
+    def _omit_empty_values(self, handler: Any) -> Dict[str, Any]:
+        """``values`` 为空时**整个键不出现**。
+
+        这是「既有契约零改动」的技术手段：多指标序列的点多了 ``values``，
+        单指标序列的点仍然是 ``{"t": ..., "v": ...}`` —— 不多一个 ``"values": null``。
+        """
+        data = handler(self)
+        if isinstance(data, dict) and data.get("values") is None:
+            data.pop("values", None)
+        return data
 
 
 class Series(BaseModel):

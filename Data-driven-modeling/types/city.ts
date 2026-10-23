@@ -226,12 +226,29 @@ export interface Metric {
   source: SourceInfo
 }
 
+/**
+ * 多指标序列上，一个时刻的各项指标取值。
+ *
+ * 键是指标 key（`pm25` / `pm10` / `o3` / `no2` / `so2` / `co`），值取不到时是 null。
+ */
+export type SeriesPointValues = Record<string, number | null>
+
 /** 时间序列上的一个点。 */
 export interface SeriesPoint {
   /** ISO8601 时间戳。 */
   t: string
   /** 数值；null 表示那一刻没有值。 */
   v?: number | null
+  /**
+   * 多指标序列（例如逐日趋势）额外带的**各项指标取值**。
+   *
+   * 逐日趋势的 AQI 仍然放在 `v` 里 —— 折线图组件不用改就能画；
+   * 额外的那几项污染物日均值由 `values` 带着。
+   *
+   * 单指标序列（`aqi_24h`）**不带**这个字段：后端在值为空时整个省略这个键，
+   * 所以既有序列的点形状一个字节都没变。
+   */
+  values?: SeriesPointValues | null
 }
 
 /** 一条时间序列（例如 24 小时 AQI）。 */
@@ -434,16 +451,39 @@ export interface DashboardBar {
   unit?: string
 }
 
+/** 趋势视图里可切换的一项指标。 */
+export interface DashboardLineMetric {
+  /** 指标 key（`aqi` / `pm25` / `pm10` / `o3` / `no2` / `so2` / `co`）。 */
+  key: string
+  /** 中文名。 */
+  label: string
+  /** 单位（CO 是 mg/m³，其余是 μg/m³）。 */
+  unit?: string
+}
+
 /** 折线图的一段。 */
 export interface DashboardLine {
   /** 数据点（v 为 null 的点断线，不补 0）。 */
   points: SeriesPoint[]
+  /**
+   * 逐日序列（形状与 `points` 对称）。
+   *
+   * `v` 是当天的 AQI，`values` 是当天各项污染物的日均值。
+   * 取不到时是**空数组** —— 界面显示空态，不许编数字。
+   */
+  daily: SeriesPoint[]
+  /** 逐日视图里可切换的指标。 */
+  dailyMetrics: DashboardLineMetric[]
   /** 单位。 */
   unit?: string
   /** 来源标注。 */
   source?: SourceInfo | null
   /** 空态文案。 */
   emptyText?: string
+  /** 逐日序列的来源标注。 */
+  dailySource?: SourceInfo | null
+  /** 逐日序列的空态文案。 */
+  dailyEmptyText?: string
 }
 
 /**

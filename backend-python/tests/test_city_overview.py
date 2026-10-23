@@ -61,6 +61,34 @@ WEATHER_PAYLOAD = {
     }
 }
 
+# 逐日历史（实测上游给的是倒序 newest-first，字段带 _24h 后缀）
+DAILY_HISTORY_PAYLOAD = [
+    {
+        "TimePoint": "/Date(1792598400000)/",
+        "TimePointStr": "22日",
+        "AQI": "50",
+        "PM2_5_24h": "26",
+        "PM10_24h": "50",
+        "O3_8h_24h": "62",
+        "NO2_24h": "31",
+        "SO2_24h": "3",
+        "CO_24h": "0.5",
+        "CityCode": 110000,
+    },
+    {
+        "TimePoint": "/Date(1791561600000)/",
+        "TimePointStr": "10日",
+        "AQI": "93",
+        "PM2_5_24h": "46",
+        "PM10_24h": "84",
+        "O3_8h_24h": "151",
+        "NO2_24h": "31",
+        "SO2_24h": "4",
+        "CO_24h": "0.7",
+        "CityCode": 110000,
+    },
+]
+
 
 @pytest.fixture(autouse=True)
 def clear_aggregator_cache():
@@ -90,6 +118,8 @@ def _fake_upstream(calls=None, failing=(), slow=()):
             return REALTIME_PAYLOAD
         if "GetCityRealTimeAqiHistoryByCondition" in url:
             return HISTORY_PAYLOAD
+        if "GetCityDayAqiHistoryByCondition" in url:
+            return DAILY_HISTORY_PAYLOAD
         if "weather.com.cn" in url:
             return WEATHER_PAYLOAD
         raise SourceUnavailable("测试：未知地址 " + url)
@@ -248,6 +278,81 @@ class TestCityOverviewEndpoint:
         assert "中国环境监测总站" in payload["degraded"]
         assert "中国天气网" in payload["degraded"]
         assert payload["city"]["code"] == 110000
+
+
+class TestDailyTrendSeries:
+    """逐日趋势序列（``aqi_daily``）的契约与降级。"""
+
+    def test_daily_series_carries_the_pollutant_daily_means(self, client, monkeypatch):
+        _install(monkeypatch)
+        payload = client.get("/api/city/overview?cityCode=110000").json()
+
+        series = {s["key"]: s for s in payload["series"]}
+        assert "aqi_daily" in series
+        daily = series["aqi_daily"]
+        assert daily["unit"] == "AQI"
+        assert daily["source"]["name"] == "中国环境监测总站（逐日历史）"
+        assert daily["source"]["estimated"] is False
+        # 按时间升序
+        times = [point["t"] for point in daily["points"]]
+        assert times == sorted(times)
+        # AQI 在 v 里，污染物日均值在 values 里
+        point = daily["points"][-1]
+        assert point["v"] == 50.0
+        assert point["values"] == {
+            "pm25": 26.0,
+            "pm10": 50.0,
+            "o3": 62.0,
+            "no2": 31.0,
+            "so2": 3.0,
+            "co": 0.5,
+        }
+
+    def test_hourly_points_keep_their_original_shape(self, client, monkeypatch):
+        """既有序列的点形状**一个字节都不许变**。
+
+        多指标序列的点多了 ``values``，但 ``aqi_24h`` 的点必须仍然是
+        ``{"t": ..., "v": ...}`` —— 不多一个 ``"values": null``。
+        """
+        _install(monkeypatch)
+        payload = client.get("/api/city/overview?cityCode=110000").json()
+
+        series = {s["key"]: s for s in payload["series"]}
+        assert "aqi_24h" in series
+        for point in series["aqi_24h"]["points"]:
+            assert set(point.keys()) == {"t", "v"}
+        # 逐日序列的点才带 values
+        assert "values" in series["aqi_daily"]["points"][-1]
+
+    def test_daily_source_failure_degrades_without_inventing_numbers(self, client, monkeypatch):
+        _install(monkeypatch, failing=("GetCityDayAqiHistoryByCondition",))
+        response = client.get("/api/city/overview?cityCode=110000")
+
+        assert response.status_code == 200
+        payload = response.json()
+        # 进 degraded
+        assert "中国环境监测总站（逐日历史）" in payload["degraded"]
+        # 序列为空（没有这条序列），**不许编数字**
+        assert "aqi_daily" not in {s["key"] for s in payload["series"]}
+        # 其它源照常返回
+        assert "aqi_24h" in {s["key"] for s in payload["series"]}
+
+    def test_air_quality_outage_removes_the_daily_series(self, client, monkeypatch):
+        """空气质量源整体降级时，逐日序列也不产出。"""
+        _install(
+            monkeypatch,
+            failing=(
+                "GetAllCityRealTimeAQIModels",
+                "GetCityRealTimeAqiHistoryByCondition",
+                "GetCityDayAqiHistoryByCondition",
+            ),
+        )
+        payload = client.get("/api/city/overview?cityCode=110000").json()
+
+        assert "中国环境监测总站" in payload["degraded"]
+        assert "中国环境监测总站（逐小时历史）" in payload["degraded"]
+        assert "中国环境监测总站（逐日历史）" in payload["degraded"]
+        assert payload["series"] == []
 
 
 class TestExistingEndpointsUntouched:

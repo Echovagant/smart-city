@@ -51,6 +51,9 @@ AIR_QUALITY_TTL_SECONDS = 1800.0
 WEATHER_TTL_SECONDS = 600.0
 STATIC_TTL_SECONDS = float("inf")
 
+# 逐日历史是**日维度**的数据，一天才变一次 —— 缓存 1 小时足够。
+AIR_QUALITY_DAILY_TTL_SECONDS = 3600.0
+
 # 指标在响应里的固定顺序。前端按 key 取值，这个顺序只影响可读性。
 METRIC_ORDER: Tuple[str, ...] = (
     "aqi",
@@ -174,8 +177,9 @@ def _build_specs(
     buildings_path: Optional[Path],
     roads_path: Optional[Path],
 ) -> List[SourceSpec]:
-    """列出本城市要取的五个源。"""
+    """列出本城市要取的六个源。"""
     history_url = air_quality.HISTORY_URL + "?citycode=%s" % city_code
+    daily_url = air_quality.DAILY_HISTORY_URL + "?citycode=%s" % city_code
     weather_cityid = city_codes.WEATHER_CITY_IDS.get(city_code)
     weather_url = (
         weather.BASE_URL + weather_cityid + ".html"
@@ -204,6 +208,16 @@ def _build_specs(
             ttl=AIR_QUALITY_TTL_SECONDS,
             cache_key="aqi:history:%s" % city_code,
             fetch=lambda: air_quality.fetch_history(city_code),
+        ),
+        SourceSpec(
+            # 逐日历史：只产出一条序列（aqi_daily），**不产出指标**。
+            # 它与逐小时历史分属两个源 —— 逐日挂了不影响 24 小时曲线。
+            name=air_quality.DAILY_SOURCE_NAME,
+            url=daily_url,
+            slots=(),
+            ttl=AIR_QUALITY_DAILY_TTL_SECONDS,
+            cache_key="aqi:daily:%s" % city_code,
+            fetch=lambda: air_quality.fetch_daily_history(city_code),
         ),
         SourceSpec(
             name=weather.SOURCE_NAME,
@@ -258,7 +272,7 @@ async def build_city_overview(
 ) -> CityOverview:
     """聚合一个城市的运行指标。
 
-    五个源**并发**取数（``asyncio.gather``），每个源独立超时。
+    六个源**并发**取数（``asyncio.gather``），每个源独立超时。
     取不到的源进 ``degraded``，并在它的槽位上留下 ``value = null`` 的占位指标
     （前端据此显示「数据源暂不可用」，不会拿 0 或旧值冒充）。
     """

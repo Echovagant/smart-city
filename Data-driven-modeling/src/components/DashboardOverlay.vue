@@ -3,10 +3,10 @@ import { computed, onMounted } from 'vue'
 import BarChart from './dashboard/BarChart.vue'
 import DonutChart from './dashboard/DonutChart.vue'
 import EventStream from './dashboard/EventStream.vue'
-import LineChart from './dashboard/LineChart.vue'
 import MetricCard from './dashboard/MetricCard.vue'
 import PanelCard from './dashboard/PanelCard.vue'
 import TopBar from './dashboard/TopBar.vue'
+import TrendPanel from './dashboard/TrendPanel.vue'
 import { useDashboardState } from '@/composables/useDashboardState'
 import { resolveTabView } from '@/composables/useDashboardData'
 import { explainEmptyEvents } from '@/composables/useEventStream'
@@ -95,7 +95,7 @@ onMounted(() => {
         </TopBar>
       </div>
 
-      <!-- 左列：核心指标 + 24 小时趋势（风格板线框里的「左列两卡」） -->
+      <!-- 左列：核心指标 + 趋势面板（24 小时 / 日两个视图） -->
       <div class="dashboard-area-left">
         <PanelCard title="核心指标" :badge="view.tab.label" class="dashboard-metrics-panel">
           <div class="dashboard-metric-grid">
@@ -113,9 +113,7 @@ onMounted(() => {
             />
           </div>
         </PanelCard>
-        <PanelCard title="24 小时趋势" :badge="view.line.source?.name" class="dashboard-trend-panel">
-          <LineChart :points="view.line.points" :unit="view.line.unit" :empty-text="view.line.emptyText" />
-        </PanelCard>
+        <TrendPanel :line="view.line" />
       </div>
 
       <!-- 中心：留空，3D 场景从后面透出来 -->

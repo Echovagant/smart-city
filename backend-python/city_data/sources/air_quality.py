@@ -19,8 +19,15 @@
    与 ``"2026-10-22T11:00:00"``（不带时区的本地时间）——两种都要能解析。
 
 实时接口只给 AQI 与分级，**不给污染物浓度**；浓度要从逐小时历史里取。
-所以本模块分成两个独立的取数函数（``fetch_realtime`` / ``fetch_history``），
-聚合器把它们当两个源分别降级 —— 逐小时历史挂了不应该把实时 AQI 一起拖下水。
+所以本模块分成三个独立的取数函数（``fetch_realtime`` / ``fetch_history`` /
+``fetch_daily_history``），聚合器把它们当三个源分别降级 ——
+逐小时历史挂了不应该把实时 AQI 一起拖下水。
+
+逐日历史与逐小时历史**不是一回事**
+--------------------------------
+逐日历史是**日维度**的：一天一条，值是**24 小时均值**（字段名都带 ``_24h``），
+O3 的口径是「8 小时最大值的日平均」（字段名 ``O3_8h_24h``）。
+它回答的是「这几天怎么样」；逐小时历史回答的是「今天怎么样」。
 """
 import math
 from datetime import datetime, timedelta, timezone
@@ -33,6 +40,8 @@ from ..models import Metric, Series, SeriesPoint, SourceInfo, SourceResult
 BASE_URL = "https://air.cnemc.cn:18007"
 REALTIME_URL = BASE_URL + "/CityData/GetAllCityRealTimeAQIModels"
 HISTORY_URL = BASE_URL + "/HourChangesPublish/GetCityRealTimeAqiHistoryByCondition"
+# 逐日历史（14 天）。同样必须 POST + 空 body。
+DAILY_HISTORY_URL = BASE_URL + "/HourChangesPublish/GetCityDayAqiHistoryByCondition"
 
 # cnemc 要求带 Referer，否则可能被拒。
 HEADERS = {"Referer": BASE_URL + "/"}
@@ -43,6 +52,7 @@ CHINA_TZ = timezone(timedelta(hours=8))
 # 源的名字（前端会直接显示在指标带上）。
 SOURCE_NAME = "中国环境监测总站"
 HISTORY_SOURCE_NAME = "中国环境监测总站（逐小时历史）"
+DAILY_SOURCE_NAME = "中国环境监测总站（逐日历史）"
 
 # 降级时占位指标的槽位：正常情况下这个源会提供哪几个指标。
 REALTIME_SLOTS = (("aqi", "空气质量", "AQI"),)
@@ -64,6 +74,21 @@ POLLUTANTS = (
     ("NO2", "no2", "NO2", "μg/m³"),
     ("SO2", "so2", "SO2", "μg/m³"),
     ("CO", "co", "CO", "mg/m³"),
+)
+
+# 逐日历史里的污染物字段 → (指标 key, 中文名, 单位)。
+#
+# **字段名与逐小时的不一样**：逐日是 24 小时均值，所以都带 ``_24h`` 后缀；
+# O3 额外带 ``8h`` —— cnemc 的 O3 口径是「8 小时最大值的日平均」。
+# 指标 key 与逐小时**保持一致**（pm25 / pm10 / o3 / …），
+# 这样前端的污染物映射表不用分两套。
+DAILY_POLLUTANTS = (
+    ("PM2_5_24h", "pm25", "PM2.5", "μg/m³"),
+    ("PM10_24h", "pm10", "PM10", "μg/m³"),
+    ("O3_8h_24h", "o3", "O3", "μg/m³"),
+    ("NO2_24h", "no2", "NO2", "μg/m³"),
+    ("SO2_24h", "so2", "SO2", "μg/m³"),
+    ("CO_24h", "co", "CO", "mg/m³"),
 )
 
 # 观测时间与当前时间差超过这个秒数，就不再声称「实时」。
@@ -281,3 +306,78 @@ def fetch_history(city_code: int, timeout: float = http.DEFAULT_TIMEOUT_SECONDS)
         source=source,
     )
     return SourceResult(metrics=metrics, series=[series])
+
+
+def parse_daily_history(payload: Any) -> List[Dict[str, Any]]:
+    """把逐日历史解析成按时间升序的列表。
+
+    每个元素：``{"t": ISO 时间, "aqi": float|None, "pm25": float|None, ...}``。
+
+    与逐小时历史的区别：这里的值是**日均值**（上游字段都带 ``_24h``）。
+    """
+    if not isinstance(payload, list):
+        return []
+    rows: List[Dict[str, Any]] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        moment = parse_time_point(item.get("TimePoint"))
+        if moment is None:
+            continue
+        row: Dict[str, Any] = {"t": to_iso(moment), "aqi": _to_float(item.get("AQI"))}
+        for field_name, key, _label, _unit in DAILY_POLLUTANTS:
+            row[key] = _to_float(item.get(field_name))
+        rows.append(row)
+    rows.sort(key=lambda row: row["t"])
+    return rows
+
+
+def fetch_daily_history(city_code: int, timeout: float = http.DEFAULT_TIMEOUT_SECONDS) -> SourceResult:
+    """取某个城市的**逐日**历史（最近 14 天：AQI 日均 + 各项污染物日均）。
+
+    与逐小时历史一样：**必须用 POST 且 body 为空对象**（``{}``）——用 GET 会 404。
+
+    这一条只产出**序列**，不产出指标：指标带已经由逐小时历史提供了，
+    重复放一份日均值只会让大屏上出现两个含义不同的「PM2.5」。
+    """
+    fetched_at = now_iso()
+    url = DAILY_HISTORY_URL + "?citycode=%s" % city_code
+    payload = http.request_json(
+        url,
+        method="POST",
+        headers=dict(HEADERS, **{"Content-Type": "application/json;charset=UTF-8"}),
+        data=b"{}",
+        timeout=timeout,
+    )
+    rows = parse_daily_history(payload)
+    if not rows:
+        raise SourceUnavailable("逐日历史没有可用数据点")
+
+    latest = rows[-1]
+    source = SourceInfo(
+        name=DAILY_SOURCE_NAME,
+        url=url,
+        observed_at=latest["t"],
+        fetched_at=fetched_at,
+        # 逐日数据按定义就不是实时的（最旧的一条是 14 天前）。
+        realtime=False,
+        estimated=False,
+    )
+
+    series = Series(
+        key="aqi_daily",
+        label="逐日 AQI",
+        unit="AQI",
+        points=[
+            SeriesPoint(
+                t=row["t"],
+                # AQI 放在 v 里 —— 折线图组件不用改就能画。
+                v=row["aqi"],
+                # 各项污染物的日均值放在 values 里（键与指标 key 一致）。
+                values={key: row[key] for _f, key, _l, _u in DAILY_POLLUTANTS},
+            )
+            for row in rows
+        ],
+        source=source,
+    )
+    return SourceResult(metrics=[], series=[series])
