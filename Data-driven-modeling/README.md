@@ -39,13 +39,13 @@ npm run dev                             # http://localhost:5173/
 | 命令 | 说明 |
 |---|---|
 | `npm run dev` | 开发服务器，http://localhost:5173/ |
-| `npm run build` | 生产构建，产物在 `dist/`（Cesium 静态资源在 `dist/Cesium/`，剪枝后实测 **98 个文件**；`dist/` 共 104 个文件、7.71 MB）；**默认不产 sourcemap**，要排障用 `SOURCEMAP=true npm run build` |
+| `npm run build` | 生产构建，产物在 `dist/`（Cesium 静态资源在 `dist/Cesium/`，剪枝后实测 **98 个文件**；`dist/` 共 104 个文件、7.72 MB）；**默认不产 sourcemap**，要排障用 `SOURCEMAP=true npm run build` |
 | `npm run preview` | 预览构建产物 |
 | `npm run lint` | ESLint **只检查不修改**（`eslint . --no-fix`） |
 | `npm run lint:fix` | ESLint 修复版（会改文件，按需使用） |
 | `npm run typecheck` | `vue-tsc --noEmit` 类型检查（CI 里是**阻塞门禁**） |
 | `npm run format` | Prettier 格式化 `src/` |
-| `npm test -- --run` | 单次跑完测试（12 个文件 / **152 个用例**，全部是 `.ts`） |
+| `npm test -- --run` | 单次跑完测试（18 个文件 / **232 个用例**，全部是 `.ts`） |
 | `npm run test:run` | 同上，等价写法 |
 | `npm run test:coverage` | 跑测试并出覆盖率报告（v8 provider）；报告默认落在 `coverage/`（已 gitignore），要放到仓库外设 `COVERAGE_DIR` |
 | `npm test` | ⚠️ **watch 模式**，不会自己退出；脚本里不要用 |
@@ -73,26 +73,31 @@ vue-tsc ^3.3.13（实装 3.3.13）、typescript-eslint ^8.72.0（实装 8.72.0�
 
 > 覆盖率 `include` 写在 `vite.config.js` 里（`src/**/*.{js,ts,vue}`），**迁到 TypeScript
 > 之后要记得复查它** —— 原先只写了 `.{js,vue}`，源码全迁成 `.ts` 之后报告里就只剩 `.vue`
-> 了，看着漂亮、实际统计的是子集。当前全口径：语句 **96.53%**、函数 **94.77%**、分支 **83.98%**
-> （含 `src/theme/dark.ts` 与 `src/theme/dashboard.ts`，语句与函数都是 100%）。
+> 了，看着漂亮、实际统计的是子集。当前全口径：语句 **97.86%**、函数 **95.94%**、分支 **88.51%**
+> （含 `src/theme/dark.ts` 与 `src/theme/dashboard.ts`）。
 
 ## 关键文件
 
 | 文件 | 作用 |
 |---|---|
-| `src/components/SmartCity.vue` | 唯一的功能组件：Cesium 视图、GeoJSON 加载、交通模拟、实时交通读数、**城市运行指标带**、**事件标记（光柱 + 脉冲环）与点击定位**、**页签联动场景**、鸟瞰↔平视切换、**相机缓慢自转**（`<script setup lang="ts">`） |
+| `src/components/SmartCity.vue` | **装配层**：把场景 composable、数据轮询与大屏骨架接起来（Cesium 逻辑已全部下沉到 `src/composables/`） |
 | `src/components/DashboardOverlay.vue` | **16:9 大屏骨架**：CSS Grid（顶栏 / 左列 / 中心场景 / 右列 / 底栏），面板浮在场景之上；overlay 容器 `pointer-events: none`，只有面板 `auto`；把「点了一条事件」抛给上层 |
-| `src/components/dashboard/` | 大屏面板与图表（**纯 SVG，无图表库**）：`TopBar.vue` / `PanelCard.vue` / `MetricCard.vue` / `LineChart.vue` / `DonutChart.vue` / `BarChart.vue` / `EventStream.vue` |
+| `src/components/dashboard/` | 大屏面板与图表（**纯 SVG，无图表库**）：`TopBar.vue` / `PanelCard.vue` / `MetricCard.vue` / `LineChart.vue` / `DonutChart.vue` / `BarChart.vue` / `EventStream.vue` / `TrendPanel.vue` |
+| `src/composables/useSceneStage.ts` | **场景底座**：Cesium 初始化、深色场景、发光网格、建筑与道路装配、批量描边。**共享可变状态只有这一份**（`viewer` / 场景级批量图元的引用与材质 / 视图状态） |
+| `src/composables/useCameraRig.ts` | 相机：鸟瞰↔平视、环绕自转、交互打断与恢复、相机飞行。自转状态只有这一份，其余通过 `camera.flyTo()` 请求飞行 |
+| `src/composables/useTrafficFleet.ts` | 交通：车辆与路灯（全部用 Cesium 图元画，不引用任何 `.glb` 模型） |
+| `src/composables/useEventMarkers.ts` | 事件标记：告警光柱 / 体量圆柱 / 脉冲环的创建与清理，点事件飞过去 |
+| `src/composables/useSceneLinkageEffect.ts` | 页签联动在场景里的**副作用**：高亮焦点建筑、压暗其余、提亮流动光效层 |
 | `src/composables/useDashboardData.ts` | 页签 → 图表数据的**纯函数** `resolveTabView(tab, overview)`：不碰 Vue 响应式，好测；取不到的指标输出 `value: null` + `unavailable` |
 | `src/composables/useDashboardState.ts` | 页签状态（**模块级单例**）：`activeTabKey` / `setTab`，大屏与场景共用同一份 |
 | `src/composables/useEventStream.ts` | 事件流的**纯函数**辅助：`dedupeEvents()`（按 id 去重）、`formatEventTime()`（本地 HH:MM）、`resolveEventLocation()`（**落点解析**：全市级 → 城心，几何锚定 → 真实坐标）、`explainEmptyEvents()`（**空态解释**：为什么没有事件） |
-| `src/composables/useSceneLinkage.ts` | 页签 → 场景联动的**纯函数**：`resolveSceneLinkage()` / `resolveFocusBuildingIds()`（焦点建筑来自**后端** `facilities[].members`） |
+| `src/composables/useSceneLinkage.ts` | 页签 → 场景联动的**纯函数**：`resolveSceneLinkage()` / `resolveFocusBuildingIds()`（焦点建筑来自**后端** `facilities[].members`）。它与 `useSceneLinkageEffect.ts` 是两回事：一个是纯计算，一个是这些计算的副作用 |
 | `src/theme/dashboard.ts` | 大屏**设计 token**（尺寸与排版：圆角 / 描边 / 内边距 / 列宽 / 行高 / 字号阶梯 / 间距）+ 图表色序 `CHART_COLORS`（只从 `DARK_PALETTE` 取）；颜色本身仍在 `dark.ts` |
 | `src/theme/dark.ts` | **深色大屏的色板与材质工厂**（`DARK_PALETTE` / `ROAD_COLORS` / 辉光材质 / 流动虚线材质 / 拥堵分档色 / CSS 变量注入）——视觉的唯一事实来源 |
 | `src/api/client.ts` | 极简 fetch 封装：超时（默认 15 s）、`ApiError` 规范化；请求结束时会摘掉挂在调用方 signal 上的 abort 监听器 |
 | `src/composables/useCityData.ts` | 四个接口的调用方；`buildings`/`roads` 用 `shallowRef`（载荷是几 MB 的 GeoJSON，不能深度响应式）；另有只刷新交通状态一个端点的 `refreshTrafficStatus()` 与只刷新城市指标一个端点的 `loadCityOverview()` / `refreshCityOverview()` |
 | `src/main.ts` / `src/App.vue` | 引导入口；`App.vue` 只渲染 `<SmartCity />` |
-| `types/city.ts` | 城市类型系统（600 行）：GeoJSON 泛型子集、`OSMProperties`、四个端点的响应契约、**设施分类**、**大屏页签与图表数据**、视图状态，以及**补 Cesium 类型缺口**的 `Writable*` 与模块增强 |
+| `types/city.ts` | 城市类型系统（711 行）：GeoJSON 泛型子集、`OSMProperties`、四个端点的响应契约、**设施分类**、**大屏页签与图表数据**、视图状态，以及**补 Cesium 类型缺口**的 `Writable*` 与模块增强 |
 | `tsconfig.json` | TypeScript 严格模式配置（22 行）：`strict: true`、`noEmit: true`，`paths` 里的别名必须与 `vite.config.js` 一致 |
 | `src/env.d.ts` | `import.meta.env` 的类型（`/// <reference types="vite/client" />`） |
 | `vite.config.js` | dev 代理、`@`/`cesium` 别名、Cesium 独立 chunk、Vitest 配置；`build.sourcemap` 由 `SOURCEMAP` 环境变量控制、默认关 |
@@ -114,7 +119,7 @@ vue-tsc ^3.3.13（实装 3.3.13）、typescript-eslint ^8.72.0（实装 8.72.0�
 
 ## 控制面板的实时交通状态
 
-控制面板上有一行**实时交通读数**（`src/components/SmartCity.vue:41`）：
+控制面板上有一行**实时交通读数**（`src/components/SmartCity.vue:45`）：
 
 ```
 实时交通 · 流量 71% · 拥堵 · 更新于 13:08:10
@@ -165,6 +170,30 @@ vue-tsc ^3.3.13（实装 3.3.13）、typescript-eslint ^8.72.0（实装 8.72.0�
 > 契约在 `types/city.ts`（`SourceInfo` / `Metric` / `Series` / `CityOverview`），
 > 后端实现在 `backend-python/city_data/`。**每个 metric 都必须带 source** ——
 > 改契约要同时改两边（没有共享 schema 文件）。
+
+## 趋势面板：24 小时与逐日
+
+左列的趋势卡是**趋势面板**（`src/components/dashboard/TrendPanel.vue`），
+支持两个视图：
+
+| 视图 | 数据来源 | 回答什么问题 |
+|---|---|---|
+| **24 小时** | 后端序列 `aqi_24h`（逐小时 AQI） | 今天怎么样 |
+| **日** | 后端序列 `aqi_daily`（14 天逐日 AQI + 六项污染物日均值） | 比昨天如何，这几天趋势如何 |
+
+日视图里可切换 **7 个指标**：AQI / PM2.5 / PM10 / O3 / NO2 / SO2 / CO。
+污染物键与后端逐日序列的 `values` 键**完全一致**（也与逐小时污染物的指标 key 一致），
+前端只把键翻译成能显示的名字，**不重新实现任何分类规则**。
+
+- 折线一律用现成的 `LineChart.vue` 画 —— **它一个字没改**：
+  「`v` 为 null 就断线、没有数据就显示诚实的空态」由它自己处理。
+- 时间**自己拼**（`getMonth()` / `getDate()` / `getHours()`），
+  **不用 `toLocaleTimeString`** —— 后者受运行环境的 ICU 数据影响，输出格式不保证一致。
+- **取不到就是空态**：逐日序列缺失时显示诚实的空态文案，
+  不画一条假的平线，也不拿 24 小时的数据顶替。
+- 面板标题随视图走（「24 小时趋势」/「逐日趋势」），来源标注也是**各视图各的**。
+
+趋势面板在左列，**5 个页签下都在**（每页的左列布局一样）。
 
 ## 派生事件流与场景联动
 
@@ -250,7 +279,7 @@ vue-tsc ^3.3.13（实装 3.3.13）、typescript-eslint ^8.72.0（实装 8.72.0�
 ```
 ┌──────────── 顶栏：标题 + 5 个页签 ────────────┬── 右侧读数带 ──┐
 │ 左列：核心指标(6)   │                     │ 右列：分类分布 │
-│        24 小时趋势  │   中心 3D 场景      │        实时事件流 │
+│        趋势面板      │   中心 3D 场景      │        实时事件流 │
 ├────────────────────── 通栏底栏：城市资源概览（横向条形）+ 控制按钮/署名 ─┤
 ```
 
@@ -270,17 +299,17 @@ vue-tsc ^3.3.13（实装 3.3.13）、typescript-eslint ^8.72.0（实装 8.72.0�
   `.metric-strip`、OSM 署名行都还在 —— **只换位置，不删内容**：
   - 指标带 + 实时交通读数 → **顶栏右侧**（一条紧凑的横向读数带）；
   - 4 个控制按钮 + OSM 署名 → **通栏底栏右侧**；
-  - 左列于是只剩「核心指标」+「24 小时趋势」两块（风格板线框的「左列两卡」）。
+  - 左列于是只剩「核心指标」+「趋势面板」两块（风格板线框的「左列两卡」）。
 
 ### 5 个页签：换的是「看哪一组指标」，不是换图表类型
 
 | 页签 | 核心指标卡（6 个） | 分类分布（环形） | 趋势（折线） | 底栏条形 |
 |---|---|---|---|---|
-| 区域概览 | 建筑总数 / 道路总数 / 路网总长 / 覆盖面积 / 道路分级合计 / 设施分类总数 | 道路等级分布 | AQI 24h | 设施分类计数 |
-| 空气质量 | 首要污染物 / PM2.5 / PM10 / O3 / NO2 / SO2 | 污染物浓度 | AQI 24h | 6 项污染物浓度 |
-| 公共安全 | 医疗 / 公共安全 / 教育 / 历史建筑 / 商业与办公 / 设施分类总数 | 设施分类 | AQI 24h | 设施分类计数 |
-| 城市文旅 | 历史建筑 / 设施分类总数 / 建筑总数 / 道路总数 / 路网总长 / 覆盖面积 | 设施分类 | AQI 24h | 设施分类计数 |
-| 路网运行 | 路网总长 / 覆盖面积 / 道路分级合计 / 主干道 / 支路 / 道路总数 | 道路等级分布 | AQI 24h | 道路分级条数 |
+| 区域概览 | 建筑总数 / 道路总数 / 路网总长 / 覆盖面积 / 道路分级合计 / 设施分类总数 | 道路等级分布 | AQI 24h / 逐日趋势 | 设施分类计数 |
+| 空气质量 | 首要污染物 / PM2.5 / PM10 / O3 / NO2 / SO2 | 污染物浓度 | AQI 24h / 逐日趋势 | 6 项污染物浓度 |
+| 公共安全 | 医疗 / 公共安全 / 教育 / 历史建筑 / 商业与办公 / 设施分类总数 | 设施分类 | AQI 24h / 逐日趋势 | 设施分类计数 |
+| 城市文旅 | 历史建筑 / 设施分类总数 / 建筑总数 / 道路总数 / 路网总长 / 覆盖面积 | 设施分类 | AQI 24h / 逐日趋势 | 设施分类计数 |
+| 路网运行 | 路网总长 / 覆盖面积 / 道路分级合计 / 主干道 / 支路 / 道路总数 | 道路等级分布 | AQI 24h / 逐日趋势 | 道路分级条数 |
 
 - 每个数字都来自 `GET /api/city/overview` 的**真实字段**（按 `key` 取，不按 label 匹配）。
 - **卡片里不重复顶栏读数带的三个数**（空气质量 / 气温 / 路网负载）——
@@ -307,6 +336,7 @@ vue-tsc ^3.3.13（实装 3.3.13）、typescript-eslint ^8.72.0（实装 8.72.0�
 | `DonutChart.vue` | 环形（`stroke-dasharray`）+ 图例 | 圆心是**各段之和**；配色取自 `CHART_COLORS`（蓝青 6 档序列色） |
 | `BarChart.vue` | 横向条形 | `value` 为 null → 画成空槽并标「暂无」 |
 | `EventStream.vue` | 事件流 | 渲染**派生**事件（时间 · 标题 · 位置标签 · 严重度徽标），点一行抛 `select`；没有事件 → **说明性空态**（为什么没触发），不编条目 |
+| `TrendPanel.vue` | 趋势面板 | 24 小时 / 日两个视图 + 日视图下 7 个指标切换；折线复用 `LineChart.vue`（不改它）；时间自己拼，不用 `toLocaleTimeString`；取不到 → 空态 |
 
 **分类图表里一档橙红都没有**：普通分类（人行道 / 历史建筑 / 商业与办公）**不是告警**，
 画成橙色会被读成一条告警 —— 那是语义级错误。所以 `CHART_COLORS` 只取

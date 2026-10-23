@@ -55,6 +55,7 @@ CI（`.github/workflows/verify.yml`）在 Windows 与 Ubuntu 两个 job 上跑�
 | `GET /api/roads` | 道路 GeoJSON，同样支持 `bbox` |
 | `GET /api/traffic-status` | 按时间推导的交通状态（合成读数，不是实测路况） |
 | `GET /api/city/overview` | 城市运行指标聚合（见下） |
+| `GET /api/city/area` | 一片矩形范围内的空间统计（`bbox` **必填**） |
 
 `bbox` 参数任何不合法输入都返回 **400** 并附中文原因（个数不对 / 非数字 / `nan` / `inf` / 倒置 / 越界）。
 参数问题与数据是否可用**无关** —— 先校验再读数据。
@@ -63,15 +64,16 @@ CI（`.github/workflows/verify.yml`）在 Windows 与 Ubuntu 两个 job 上跑�
 
 | 模块 | 职责 |
 |---|---|
-| `models.py` | Pydantic 契约：`SourceInfo` / `Metric` / `Series` / `FacilityCategory` / `CityEvent` / `EventLocation` / `CityOverview` |
-| `aggregator.py` | 五个源**并发**取数（`asyncio.gather`），每个源独立 5 秒预算，按 TTL 缓存 |
+| `models.py` | Pydantic 契约：`SourceInfo` / `Metric` / `Series` / `SeriesPoint` / `FacilityCategory` / `CityEvent` / `EventLocation` / `CityOverview` / `AreaStats` |
+| `aggregator.py` | 六个源**并发**取数（`asyncio.gather`），每个源独立 5 秒预算，按 TTL 缓存 |
 | `http.py` | 只用标准库的 JSON 取数封装，所有失败统一收敛成 `SourceUnavailable` |
 | `city_codes.py` | 城市代码表的静态快照（**只有代码，没有名称**；只用于参数校验，不联网） |
 | `events.py` | **纯函数**模块：从真实指标派生事件流 |
-| `sources/air_quality.py` | 空气质量（AQI / 分级 / 首要污染物 / 24 小时逐小时序列） |
+| `sources/air_quality.py` | 空气质量（AQI / 分级 / 首要污染物 / 24 小时逐小时序列 / 14 天逐日序列） |
 | `sources/weather.py` | 气温与湿度 |
 | `sources/road_network.py` | 路网静态指标（建筑数、道路数、路网总长、覆盖面积、各等级条数）+ 路网负载指数 |
 | `sources/facilities.py` | 设施分类（按 OSM 标签统计，一栋建筑只归一类） |
+| `sources/area.py` | **纯函数**模块：按矩形范围聚合空间统计（不联网） |
 
 **降级**：任一源失败只是把它放进 `degraded`，其余指标照常返回，**端点永不 500**。
 取不到的指标值是 `null`，**不拿 0 或上一次的旧值冒充**。
@@ -86,7 +88,11 @@ CI（`.github/workflows/verify.yml`）在 Windows 与 Ubuntu 两个 job 上跑�
    命中时直接返回，不再重复序列化与压缩
 
 缓存条目记着产生它的那份原始数据对象，数据重新加载后旧条目自动作废。
-**带 `bbox` 的路径一律不缓存**（参数组合无界）。
+**带 `bbox` 的响应体不缓存**（参数组合无界）—— 缓存的是第 2 级的过滤结果，不是序列化后的响应。
+
+`GET /api/city/area` 另有一层**聚合结果缓存**（同样是 LRU-8）：范围过滤复用上面第 2 级的
+`bbox` 缓存，聚合结果再缓存一份 `AreaStats`。实测冷启动 143 ms，缓存命中中位 **2.64 ms**
+（P95 5.19 ms）。
 
 ### 传输与安全
 
@@ -103,7 +109,7 @@ CI（`.github/workflows/verify.yml`）在 Windows 与 Ubuntu 两个 job 上跑�
 
 ### 大屏骨架
 
-界面是 **16:9 大屏**：顶栏（标题 + 页签 + 读数带）、左列（核心指标 + 24 小时趋势）、
+界面是 **16:9 大屏**：顶栏（标题 + 页签 + 读数带）、左列（核心指标 + 趋势面板）、
 中心 3D 场景、右列（分类分布 + 实时事件流）、通栏底栏（城市资源概览 + 控制按钮 + 署名）。
 
 **面板浮在场景之上，不做左右分栏裁切**：Cesium 容器保持全屏，中心那一格留空，
@@ -112,14 +118,33 @@ CI（`.github/workflows/verify.yml`）在 Windows 与 Ubuntu 两个 job 上跑�
 
 ### 图表
 
-`src/components/dashboard/` 下五个组件**全是手写 SVG**：
-`MetricCard` / `LineChart` / `DonutChart` / `BarChart` / `EventStream`。
+`src/components/dashboard/` 下的图表**全是手写 SVG**：
+`MetricCard` / `LineChart` / `DonutChart` / `BarChart` / `EventStream`，
+外加趋势面板 `TrendPanel`（24 小时 / 逐日两个视图，复用 `LineChart` 画折线）。
 **不引任何图表库** —— `package.json` 与 `package-lock.json` 至今零改动。
 
 ### 场景
 
-`src/components/SmartCity.vue` 是唯一的场景组件：Cesium 初始化、建筑与道路装配、
-网格底座、车辆交通、相机自转、事件标记、页签联动都在这里。
+场景逻辑拆在 `src/composables/` 下的 5 个 composable 里，
+`src/components/SmartCity.vue` 只负责装配与编排（里面已无任何 `Cesium.` 调用）：
+
+| 文件 | 职责 |
+|---|---|
+| `useSceneStage.ts` | Cesium 初始化、深色场景、发光网格、建筑与道路装配、批量描边 |
+| `useCameraRig.ts` | 鸟瞰/平视、环绕自转、交互打断与恢复、相机飞行 |
+| `useTrafficFleet.ts` | 车辆与路灯 |
+| `useEventMarkers.ts` | 告警光柱 / 体量圆柱 / 脉冲环、点事件飞过去 |
+| `useSceneLinkageEffect.ts` | 页签联动在场景里的副作用（高亮焦点、压暗其余） |
+
+**共享可变状态只有一份**：`viewer`、场景级批量图元的引用与材质（`buildingGlow` /
+`buildingGlowMaterial` / `flow` / `flowMaterial` / `focusGlow`）、视图状态 `state`
+（图层显隐 / 视角模式 / 三组实体列表）都在 `useSceneStage` 里，其余 composable 从这里
+**拿引用**，不复制、不另存 —— 两份就是不同步的隐患。相机自转状态同理只有
+`useCameraRig` 一份，其余通过 `camera.flyTo()` 请求一次飞行，不直接碰它。
+
+`src/composables/useSceneLinkage.ts` 与 `useSceneLinkageEffect.ts` 是**两回事**：
+前者是**纯函数**（`resolveSceneLinkage` / `resolveFocusBuildingIds`），
+后者是这些纯函数落到场景里的**副作用**。
 
 - 建筑与道路来自 `Cesium.GeoJsonDataSource`
 - 建筑描边是**一个批量 Primitive**（不是每个建筑一个实体）
@@ -145,6 +170,9 @@ CI（`.github/workflows/verify.yml`）在 Windows 与 Ubuntu 两个 job 上跑�
    缓存命中时 `fetched_at` 仍是**首次取数**的时间
 5. **事件不许编**：事件流的每一条都必须从真实指标派生，派生不出来就是**空数组**。
    空态要说明「检查了哪些条件、为什么没触发」
+6. **算出来的数要写清口径**：区域统计端点的每个数字都配一个 `method` 字段 ——
+   算法说明、保留精度、线要素与面要素各多少、各数据文件的观测时间。
+   「每个数字都能追到来源」不只对指标成立，对几何折算出来的数也成立
 
 ### 颜色
 
@@ -190,9 +218,12 @@ CI（`.github/workflows/verify.yml`）在 Windows 与 Ubuntu 两个 job 上跑�
 - 界面里**常驻署名行**「数据 © OpenStreetMap contributors」—— 展示这份数据必须署名，
   删掉这一行等于违反许可证
 - 空气质量与天气走**免凭据的公开源**，不注册任何 key
+- 空气质量有两条序列：24 小时逐小时序列与 **14 天逐日序列**（逐日是各项污染物的日均值，
+  与逐小时序列分属两个源，逐日挂了不影响 24 小时曲线）
 - 天气源**只有北京可用**，别的城市直接降级 —— 这是上游的限制
 - 设施分类的判定规则**只写在后端**（`city_data/sources/facilities.py`），
   前端不判定任何标签
+- 区域统计端点**只读本地 OSM 快照**（`bbox` 必填），不走「多源并发 + 降级」那套聚合器
 
 ## 已知限制
 
@@ -200,5 +231,8 @@ CI（`.github/workflows/verify.yml`）在 Windows 与 Ubuntu 两个 job 上跑�
   `nginx -t` 验证**（编写环境里没有 Docker 与 nginx），首次使用请先本地验证
 - `dist/` 总体积 **7.72 MB**（104 个文件），其中 3.73 MB 是自托管的 Cesium 运行时。
   按「应用自身产物」口径是 3.97 MB，按「整个 `dist/`」口径不满足 5 MB
-- 城市代码表是静态快照，上游新增城市后需要重新抓
-- 天气源只给 `HH:MM`，时间戳可能落在未来，契约里会标 `realtime: false`
+- 城市代码表是静态快照（**368 个代码**，只有代码没有名称），上游新增城市后需要重新抓
+- 天气源只给 `HH:MM`，时间戳可能落在未来，契约里会标 `realtime: false`；
+  且**只有北京可用**
+- **区域统计端点目前只有后端，前端交互还没接** —— 大屏上暂时没有可点的区域入口
+- 区域统计的 `facility_categories[].members` **恒为空数组**（只给分类计数，不给成员 id）
