@@ -1,0 +1,79 @@
+# 部署形态校验：镜像构建、compose 配置解析、nginx 配置校验、容器健康检查。
+#
+# Dockerfile / docker-compose.yml / deploy/nginx.conf 的语法与可运行性
+# 在开发机上无法验证（开发机没有 docker，也没有 nginx），
+# 所以把校验放进 CI，做成每次 push / PR 都会重跑的红/绿信号。
+#
+# 只用 runner 自带的 docker 与 apt 装来的 nginx，不引入任何 GitHub Action。
+
+name: deploy-validate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-validate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: deploy (ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 失败即红：任何一步非零退出都会让本工作流变红。
+      - name: 构建镜像
+        run: docker build -t smart-city:ci .
+
+      - name: 校验 compose 配置
+        run: docker compose -f docker-compose.yml config
+
+      - name: 安装 nginx
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y nginx-light
+
+      # deploy/nginx.conf 只是一个 server 片段，不能直接当主配置用：
+      # 直接 `nginx -t -c deploy/nginx.conf` 会报
+      # "server directive is not allowed here"。
+      # 所以这里临时生成一份主配置，把它 include 进 http{} 里再校验。
+      - name: 校验 nginx 配置片段
+        run: |
+          set -euo pipefail
+          printf 'events {}\nhttp {\n    include /etc/nginx/mime.types;\n    include "%s/deploy/nginx.conf";\n}\n' "$PWD" > /tmp/nginx-test.conf
+          cat /tmp/nginx-test.conf
+          sudo nginx -t -c /tmp/nginx-test.conf
+
+      # 冒烟测试：容器起来后 /health 应返回 200。
+      # 容器里没有挂 OSM 数据（数据是运行时挂进去的），但 /health 不依赖数据。
+      - name: 镜像冒烟测试
+        run: |
+          set -euo pipefail
+          docker run -d --name smart-city-smoke -p 18080:8000 smart-city:ci
+          ready=0
+          for i in $(seq 1 30); do
+            if curl -fsS -o /tmp/health.json http://127.0.0.1:18080/health 2>/dev/null; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$ready" -ne 1 ]; then
+            echo "容器 30 秒内没有通过健康检查"
+            docker logs smart-city-smoke
+            exit 1
+          fi
+          echo "GET /health -> $(cat /tmp/health.json)"
+          # 根路径应返回前端页面（说明 dist/ 确实进了镜像）
+          echo "GET / -> $(curl -fsS -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/)"
+          # 镜像里必须有前端入口与 Cesium 静态资源，否则页面在浏览器里加载不出 3D 场景
+          docker run --rm smart-city:ci sh -c 'test -f /app/Data-driven-modeling/dist/index.html && find /app/Data-driven-modeling/dist/Cesium -type f | wc -l'
+
+      - name: 清理容器
+        if: always()
+        run: docker ps -a --filter name=smart-city-smoke --format '{{.Names}}' | xargs -r docker rm -f
