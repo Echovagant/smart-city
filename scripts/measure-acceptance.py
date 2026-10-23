@@ -8,15 +8,28 @@
 
 覆盖率数字从哪里来
 ------------------
-脚本**不现算**覆盖率（跑一遍要几十秒），而是读取已经跑好的覆盖率产物：
+脚本**不现算**覆盖率（跑一遍要几十秒），而是读取已经跑好的覆盖率产物。
+命令行显式指定的路径（--backend-coverage / --frontend-coverage）优先级最高；
+否则按下面的顺序找，取第一个**存在**的文件：
 
-    后端  <artifacts>/backend-coverage.json
-          由 `pytest --cov=main --cov=data_processor --cov-report=json:<路径>` 产出
-    前端  <artifacts>/frontend-coverage/coverage-final.json
-          由 `npm run test:coverage`（vitest --coverage，json reporter）产出
+    后端  <仓库根>/backend-python/coverage.json
+          —— pytest-cov 的 `--cov-report=json` 默认就写在这个位置；
+          找不到再回退 <度量产物目录>/backend-coverage.json
+    前端  <仓库根>/Data-driven-modeling/coverage/coverage-final.json
+          —— vitest 的 json reporter 默认写在这个位置（reportsDirectory=coverage）；
+          找不到再回退 <度量产物目录>/frontend-coverage/coverage-final.json
 
 产物缺失时对应指标显示「未提供」，其余指标照常测——脚本不猜数字。
-默认产物目录是仓库根的 .acceptance/（已 gitignore）。
+默认度量产物目录是仓库根的 .acceptance/（已 gitignore）。
+
+帧率什么时候不算数
+------------------
+帧率是**唯一**会被宿主机负载左右的指标：这台是共享开发机，
+整机 CPU 被别的进程占住时，同样的代码量出来的帧率能掉到个位数。
+度量脚本每轮都记了 systemCpuBusyPercent（测量期间整机 CPU 非空闲占比），
+所以这里取各轮中位数：中位数 ≥ 60% 时两行帧率判「不可信（宿主机 CPU 忙）」，
+既不算达标、也不算未达标，更不进未达标清单——那是机器忙，不是应用慢。
+其它指标（首屏 LCP、load、体积、覆盖率、延迟）的判定一律不受影响。
 
 延迟怎么测
 ----------
@@ -71,6 +84,10 @@ TARGET_APP_BUNDLE_MB = 5.0
 TARGET_FIRST_SCREEN_MS = 3000.0
 TARGET_FPS = 30.0
 
+# 测量期间整机 CPU 非空闲占比达到这个数，帧率数字就不作数了。
+# 阈值与 measure-browser-performance.mjs 自己告警时用的那条线一致。
+BUSY_HOST_CPU_PERCENT = 60.0
+
 # 带 bbox 的测量用例：OSM 抽取范围 116.380,39.905,116.420,39.925 的左上一块。
 # 故意不取整个范围——那等于「全量过滤」，比真实使用场景重得多。
 MEASURE_BBOX = "116.390,39.905,116.405,39.915"
@@ -84,6 +101,7 @@ PASS = "达标"
 FAIL = "未达标"
 UNKNOWN = "未提供"
 NOTE = "口径差异"
+UNRELIABLE = "不可信（宿主机 CPU 忙）"
 
 
 # ---------------------------------------------------------------------------
@@ -177,6 +195,17 @@ def percentile(samples, fraction: float) -> float:
     return samples[min(rank, len(samples)) - 1]
 
 
+def median(values):
+    """中位数。偶数个取中间两个的平均——口径与浏览器度量脚本的 median() 一致。"""
+    ordered = sorted(values)
+    if not ordered:
+        return None
+    middle = len(ordered) // 2
+    if len(ordered) % 2:
+        return float(ordered[middle])
+    return (ordered[middle - 1] + ordered[middle]) / 2.0
+
+
 # ---------------------------------------------------------------------------
 # 后端进程
 # ---------------------------------------------------------------------------
@@ -263,6 +292,24 @@ class BackendProcess:
 # ---------------------------------------------------------------------------
 # 覆盖率产物
 # ---------------------------------------------------------------------------
+def resolve_coverage_artifact(explicit, candidates):
+    """挑出实际要读的覆盖率产物路径。
+
+    explicit 是命令行显式给的路径（非 None 时优先级最高）；
+    否则按 candidates 顺序取第一个**存在**的文件。
+    一个都不存在时返回首选路径——读不到就是「未提供」，不猜数字。
+
+    返回 (路径, 来源说明)。
+    """
+    if explicit is not None:
+        return explicit, "命令行指定"
+    for index, candidate in enumerate(candidates):
+        if candidate.is_file():
+            return candidate, "工具默认路径" if index == 0 else "度量产物目录"
+    searched = "、".join(str(candidate) for candidate in candidates)
+    return candidates[0], f"未找到（已搜索：{searched}）"
+
+
 def read_backend_coverage(path: Path):
     """读 coverage.py 的 json 报告。返回 (总覆盖率百分比, {文件: [缺失行号]})。"""
     if not path.is_file():
@@ -336,6 +383,21 @@ def read_browser_metrics(path: Path):
     return data
 
 
+def busy_host_cpu_percent(browser_data):
+    """取各轮 systemCpuBusyPercent 的中位数（%）；产物里没这项时返回 None。
+
+    这个数字是「测量期间整机 CPU 非空闲占比」——宿主机忙不忙全看它。
+    """
+    values = []
+    for run in browser_data.get("runs") or []:
+        value = (run or {}).get("systemCpuBusyPercent")
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            continue
+        if math.isfinite(value):
+            values.append(float(value))
+    return median(values) if values else None
+
+
 def _source_snippet(source_path: Path, line_number: int) -> str:
     """取出某一行的源码文本（拿不到就返回空串）。"""
     try:
@@ -407,10 +469,19 @@ def parse_args(argv):
     args.repo_root = Path(args.repo_root).resolve()
     args.artifacts = Path(args.artifacts).resolve() if args.artifacts \
         else args.repo_root / ".acceptance"
+    # 覆盖率：命令行显式指定的路径优先级最高；没指定就按下面的顺序找。
     args.backend_coverage = Path(args.backend_coverage).resolve() if args.backend_coverage \
-        else args.artifacts / "backend-coverage.json"
+        else None
     args.frontend_coverage = Path(args.frontend_coverage).resolve() if args.frontend_coverage \
-        else args.artifacts / "frontend-coverage" / "coverage-final.json"
+        else None
+    args.backend_coverage_candidates = [
+        args.repo_root / "backend-python" / "coverage.json",
+        args.artifacts / "backend-coverage.json",
+    ]
+    args.frontend_coverage_candidates = [
+        args.repo_root / "Data-driven-modeling" / "coverage" / "coverage-final.json",
+        args.artifacts / "frontend-coverage" / "coverage-final.json",
+    ]
     args.dist_dir = Path(args.dist_dir).resolve() if args.dist_dir \
         else args.repo_root / "Data-driven-modeling" / "dist"
     args.browser_metrics = Path(args.browser_metrics).resolve() if args.browser_metrics \
@@ -487,13 +558,23 @@ def main(argv=None) -> int:
     print("智慧城市平台 · 验收指标度量")
     print("=" * 78)
     print(f"仓库根      : {repo_root}")
-    print(f"覆盖率产物  : {args.artifacts}")
+    print(f"度量产物目录: {args.artifacts}")
+
+    # --- 覆盖率产物落在哪 ---------------------------------------------------
+    backend_path, backend_source = resolve_coverage_artifact(
+        args.backend_coverage, args.backend_coverage_candidates
+    )
+    frontend_path, frontend_source = resolve_coverage_artifact(
+        args.frontend_coverage, args.frontend_coverage_candidates
+    )
+    print(f"后端覆盖率  : {backend_path}（{backend_source}）")
+    print(f"前端覆盖率  : {frontend_path}（{frontend_source}）")
     print()
 
     # --- 覆盖率 -------------------------------------------------------------
-    backend_percent, backend_missing = read_backend_coverage(args.backend_coverage)
+    backend_percent, backend_missing = read_backend_coverage(backend_path)
     frontend_percent, frontend_summary, frontend_missing = read_frontend_coverage(
-        args.frontend_coverage
+        frontend_path
     )
 
     # --- 产物体积 -----------------------------------------------------------
@@ -569,7 +650,7 @@ def main(argv=None) -> int:
 
     if backend_percent is None:
         rows.append(["后端覆盖率", "> 90%", "未提供", "未提供覆盖率产物"])
-        unmet.append("后端覆盖率：未提供覆盖率产物")
+        unmet.append(f"后端覆盖率：未提供覆盖率产物（{backend_path}）")
     else:
         ok = backend_percent > TARGET_BACKEND_COVERAGE
         rows.append(["后端覆盖率（main.py + data_processor.py）", "> 90%",
@@ -579,7 +660,7 @@ def main(argv=None) -> int:
 
     if frontend_percent is None:
         rows.append(["前端覆盖率", "> 80%", "未提供", "未提供覆盖率产物"])
-        unmet.append("前端覆盖率：未提供覆盖率产物")
+        unmet.append(f"前端覆盖率：未提供覆盖率产物（{frontend_path}）")
     else:
         ok = frontend_percent > TARGET_FRONTEND_COVERAGE
         rows.append(["前端覆盖率（src/**）", "> 80%",
@@ -614,6 +695,9 @@ def main(argv=None) -> int:
     # 产物由 scripts/measure-browser-performance.mjs 产出（生产构建 + 独立 headless Chrome）。
     # 产物缺失时显示「未提供」——不猜数字。
     browser = read_browser_metrics(args.browser_metrics)
+    cpu_busy_median = None
+    busy_host = False
+    busy_note = ""
     if browser is None:
         for label, target in (
             ("首屏（LargestContentfulPaint）", "< 3 s"),
@@ -629,6 +713,17 @@ def main(argv=None) -> int:
 
         def browser_median(key):
             return (summary.get(key) or {}).get("median")
+
+        # 宿主机忙不忙：只有帧率受这个影响，其它指标的判定一律不动。
+        cpu_busy_median = busy_host_cpu_percent(browser)
+        busy_host = (cpu_busy_median is not None
+                     and cpu_busy_median >= BUSY_HOST_CPU_PERCENT)
+        if busy_host:
+            busy_note = (
+                f"宿主机 CPU 忙（测量期间整机非空闲中位数 {cpu_busy_median:.0f}% "
+                f"≥ {BUSY_HOST_CPU_PERCENT:.0f}%）：两行帧率判「{UNRELIABLE}」，"
+                f"不计入未达标清单——是机器忙，不是应用慢"
+            )
 
         lcp_ms = browser_median("lcpMs")
         load_ms = browser_median("loadEventEndMs")
@@ -673,6 +768,9 @@ def main(argv=None) -> int:
 
         if fps_static is None:
             rows.append(["帧率（静止）", ">= 30 fps", "未提供", "度量产物缺该项"])
+        elif busy_host:
+            # 宿主机在抢 CPU：这个数字既不判达标也不判未达标，更不进 unmet。
+            rows.append(["帧率（静止）", ">= 30 fps", _fps(fps_static), UNRELIABLE])
         else:
             ok = fps_static >= TARGET_FPS
             rows.append(["帧率（静止）", ">= 30 fps", _fps(fps_static),
@@ -682,6 +780,8 @@ def main(argv=None) -> int:
 
         if fps_motion is None:
             rows.append(["帧率（相机运动）", ">= 30 fps", "未提供", "度量产物缺该项"])
+        elif busy_host:
+            rows.append(["帧率（相机运动）", ">= 30 fps", _fps(fps_motion), UNRELIABLE])
         else:
             ok = fps_motion >= TARGET_FPS
             rows.append(["帧率（相机运动）", ">= 30 fps", _fps(fps_motion),
@@ -777,6 +877,9 @@ def main(argv=None) -> int:
               f" · 采样 {env.get('runs')} 轮 × {env.get('sampleSeconds')} 秒"
               f" · 浏览器缓存"
               f"{'已禁用（每轮都是首次访问）' if env.get('cacheDisabled') else '已启用'}")
+        if cpu_busy_median is not None:
+            print(f"宿主机  ：测量期间整机 CPU 非空闲中位数 {cpu_busy_median:.0f}%"
+                  f"（≥ {BUSY_HOST_CPU_PERCENT:.0f}% 时帧率判「{UNRELIABLE}」）")
         print("口径  ：首屏 LCP 是浏览器的 Largest Contentful Paint。WebGL 画布不是 LCP 候选元素，")
         print("        LCP 量到的是页面文字块；「3D 城市画出来」对应的口径是「应用就绪」那一行。")
         print("        首屏量的是**浏览器已就绪之后**的页面加载；全新 Chrome 的冷启动首字节延迟")
@@ -830,6 +933,8 @@ def main(argv=None) -> int:
         print("全部指标达标。")
     if server_note:
         print(f"备注：{server_note}")
+    if busy_note:
+        print(f"备注：{busy_note}")
     print()
     print("退出码 0 —— 这一步是报告，不是门禁。")
     return 0
