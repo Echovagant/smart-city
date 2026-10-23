@@ -23,7 +23,8 @@ from typing import List, Dict, Any, Optional, Tuple
 from data_processor import DataProcessorError, get_data_processor
 from city_data import aggregator as city_aggregator
 from city_data import city_codes
-from city_data.models import CityOverview
+from city_data.models import AreaStats, CityOverview
+from city_data.sources.area import aggregate_area
 
 logger = logging.getLogger(__name__)
 
@@ -292,15 +293,33 @@ _roads_bbox_cache: "OrderedDict[Tuple[float, float, float, float], Tuple[Any, Di
 #   - gzip 字节为 None 表示响应体小于 GZIP_MINIMUM_SIZE，不压缩（与中间件规则一致）。
 _full_response_cache: Dict[str, Tuple[Any, bytes, Optional[bytes]]] = {}
 
+# 按 bbox 的空间统计缓存（GET /api/city/area）。
+#
+# key 是规范化后的 bbox 元组；条目里记着产生它的那两份原始数据对象——
+# 数据重新加载后（换了对象）旧条目自动作废，与按 bbox 的过滤结果缓存同一套失效逻辑。
+# 容量上限同为 8：bbox 的取值组合无界，不能让客户端靠发一堆不同 bbox 把内存撑爆。
+#
+# **为什么要再缓存一层聚合结果**（同一台机器、真实 OSM 快照、
+# bbox=116.390,39.905,116.405,39.915 → 1039 栋建筑 / 661 条道路，各 30 次采样）：
+#   - 冷启动（过滤 + 聚合）：142.98 ms；
+#   - 过滤已热 + 聚合缓存已热：中位 2.64 ms，P95 5.19 ms；
+#   - 过滤已热 + 每次重算聚合：中位 6.21 ms，P95 9.30 ms。
+# 过滤（shapely intersects）是大头（冷路径中位 100.03 ms），但它有 LRU；
+# 聚合本身（纯函数、不含 HTTP）中位 4.14 ms，本来每次请求都要重跑一遍。
+# 再缓存一层聚合结果，热请求从中位 6.21 ms 降到 2.64 ms（快一倍以上），
+# 代价只是一份 AreaStats 的内存（上限 8 条）—— 值得。
+_area_stats_cache: "OrderedDict[Tuple[float, float, float, float], Tuple[Any, Any, AreaStats]]" = OrderedDict()
+
 
 def _clear_caches() -> None:
-    """清空全部模块级缓存：原始 GeoJSON + 按 bbox 的过滤结果 + 全量响应序列化结果。"""
+    """清空全部模块级缓存：原始 GeoJSON + 按 bbox 的过滤结果 + 全量响应序列化结果 + 区域统计。"""
     global _buildings_cache, _roads_cache
     _buildings_cache = None
     _roads_cache = None
     _buildings_bbox_cache.clear()
     _roads_bbox_cache.clear()
     _full_response_cache.clear()
+    _area_stats_cache.clear()
 
 
 def _load_buildings() -> Dict[str, Any]:
@@ -719,6 +738,70 @@ async def get_city_overview(cityCode: str = "110000"):
         headers={
             "Cache-Control": "public, max-age=30",
             "X-Data-Generated-At": overview.generated_at,
+        },
+    )
+
+
+@app.get("/api/city/area")
+async def get_city_area(bbox: str = ""):
+    """按矩形范围聚合的空间统计。
+
+    - ``bbox`` 必填，格式 ``min_lon,min_lat,max_lon,max_lat``；非法输入一律 400
+      —— **复用** ``_parse_bbox``，所以原因文案与 ``/api/buildings`` 的同类错误完全一致。
+    - 只读**本地** OSM 快照：不走「五源并发 + 降级」那套聚合器。
+      数据文件读不到时返回 **503**（与 ``/api/buildings`` 一致），
+      **绝不返回**编出来的 0。
+    - 范围里没有任何要素是**正常结果**：200 + 数字 0（空范围，不是故障）。
+    - 面积、路网长度、道路分级、设施分类全部**复用**现成实现
+      （``city_data/sources/area.py``），口径与 ``/api/city/overview`` 的同名指标一致。
+
+    不挂 ``require_api_key``：与 ``/api/city/overview`` 同理，
+    大屏的前端不携带 key，这个端点必须始终可访问。
+    """
+    # 参数不合法是调用方的问题（400），先校验再动数据。
+    parsed = _parse_bbox(bbox)
+    try:
+        buildings_data = _load_buildings()
+        roads_data = _load_roads()
+
+        key = _bbox_cache_key(parsed)
+        entry = _area_stats_cache.get(key)
+        if entry is not None and entry[0] is buildings_data and entry[1] is roads_data:
+            _area_stats_cache.move_to_end(key)  # LRU：刚用过的条目留在最后
+            stats = entry[2]
+        else:
+            buildings = _filtered_collection(_buildings_bbox_cache, buildings_data, parsed)
+            roads = _filtered_collection(_roads_bbox_cache, roads_data, parsed)
+            buildings_timestamp = buildings_data.get("timestamp")
+            roads_timestamp = roads_data.get("timestamp")
+            observed_at = (
+                buildings_timestamp
+                if isinstance(buildings_timestamp, str)
+                else (roads_timestamp if isinstance(roads_timestamp, str) else None)
+            )
+            stats = aggregate_area(
+                buildings,
+                roads,
+                parsed.as_list(),
+                observed_at=observed_at,
+                observed_at_by_file={
+                    "buildings": buildings_timestamp,
+                    "roads": roads_timestamp,
+                },)
+            _area_stats_cache[key] = (buildings_data, roads_data, stats)
+            _area_stats_cache.move_to_end(key)
+            while len(_area_stats_cache) > _BBOX_CACHE_MAX_ENTRIES:
+                _area_stats_cache.popitem(last=False)  # 淘汰最久未用的条目
+    except DataProcessorError:
+        # 数据缺失或损坏是我们的问题（503）：细节只写日志，不回显给调用方。
+        logger.exception("区域统计数据不可用")
+        raise HTTPException(status_code=503, detail=DATA_UNAVAILABLE_DETAIL)
+
+    return JSONResponse(
+        content=jsonable_encoder(stats),
+        headers={
+            "Cache-Control": "public, max-age=30",
+            "X-Data-Generated-At": stats.source.fetched_at,
         },
     )
 

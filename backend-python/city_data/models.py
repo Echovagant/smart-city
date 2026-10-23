@@ -193,6 +193,38 @@ class CityOverview(BaseModel):
     degraded: List[str] = Field(default_factory=list)
 
 
+class AreaStats(BaseModel):
+    """`GET /api/city/area` 的响应：一片矩形范围内的空间统计。
+
+    - ``bbox``：回显规范化后的四个数（min_lon, min_lat, max_lon, max_lat）。
+    - ``area_km2``：该范围的近似面积（km²）。
+    - ``building_count``：范围内的建筑要素数。
+    - ``road_count``：范围内的道路要素数（**含**广场、人造地面这类面要素）。
+    - ``road_length_km``：路网总长（km）—— **只有线要素计入长度**。
+    - ``road_length_by_tier_km``：按等级分解（主干道 / 次干道 / 支路 / 人行道 / 其他）。
+    - ``facility_counts``：设施分类计数（键与 ``facilities.FACILITY_CATEGORIES`` 一致）。
+    - ``facility_categories``：同一份计数的带标签版本（分类名 + 判定依据 + 各自来源）。
+    - ``building_density_per_km2``：建筑密度（栋 / km²）。
+    - ``source``：**所有数字的来源**。全部来自本地 OSM 快照，``estimated = false``。
+    - ``method``：**算法口径**。路网长度与面积都是几何折算出来的，
+      口径写在这里，与 ``city_data/sources/road_network.py`` 保持一致。
+
+    空范围（bbox 里没有任何要素）是**正常结果**：数字是 0，不是故障。
+    """
+
+    bbox: List[float] = Field(default_factory=list)
+    area_km2: float = 0.0
+    building_count: int = 0
+    road_count: int = 0
+    road_length_km: float = 0.0
+    road_length_by_tier_km: Dict[str, float] = Field(default_factory=dict)
+    facility_counts: Dict[str, int] = Field(default_factory=dict)
+    facility_categories: List[FacilityCategory] = Field(default_factory=list)
+    building_density_per_km2: float = 0.0
+    source: SourceInfo
+    method: Dict[str, Any] = Field(default_factory=dict)
+
+
 @dataclass
 class SourceResult:
     """单个数据源的取数结果（内部结构，不直接出现在响应里）。"""
