@@ -1,4 +1,4 @@
-import { onUnmounted, ref, shallowRef, watch } from 'vue'
+import { isRef, onUnmounted, ref, shallowRef, toRaw, watch } from 'vue'
 import type { Ref } from 'vue'
 import * as Cesium from 'cesium'
 import { apiGet, ApiError } from '@/api/client'
@@ -283,6 +283,21 @@ export function useAreaQuery(options: AreaQueryOptions = {}): AreaQuery {
   /** 盯着底座里的 viewer：它什么时候有值，就什么时候装上监听。 */
   let stopWatch: (() => void) | null = null
 
+  /**
+   * 底座里那个 `viewer` 引用。
+   *
+   * **为什么要 `toRaw`**：底座可能经过**深响应式代理**传进来，而 Vue 在深响应式对象上
+   * **会解包 ref** —— `stage.viewer` 拿回来的是 `null` 而不是那个 `Ref`。
+   * 拿它去 `watch` 只会得到一句「Invalid watch source」警告，监听根本装不上，
+   * 表现为「点地面没反应」且没有任何报错。
+   * `toRaw` 拿回原始对象，ref 还在原位；解包后的副本只作为兜底。
+   */
+  const viewerRefOf = (stage: SceneStage): Ref<Cesium.Viewer | null> | null => {
+    const raw = toRaw(stage) as { viewer?: unknown }
+    const candidate = isRef(raw.viewer) ? raw.viewer : stage.viewer
+    return isRef(candidate) ? (candidate as Ref<Cesium.Viewer | null>) : null
+  }
+
   const attachStage = (stage: SceneStage | null): void => {
     stopWatch?.()
     stopWatch = null
@@ -290,8 +305,14 @@ export function useAreaQuery(options: AreaQueryOptions = {}): AreaQuery {
       uninstallPick()
       return
     }
+    const viewerRef = viewerRefOf(stage)
+    if (!viewerRef) {
+      // 底座里没有可用的 viewer 引用：不装监听（装了也是坏的）。
+      uninstallPick()
+      return
+    }
     stopWatch = watch(
-      stage.viewer,
+      viewerRef,
       (viewer) => {
         if (viewer) installPick(viewer)
         else uninstallPick()

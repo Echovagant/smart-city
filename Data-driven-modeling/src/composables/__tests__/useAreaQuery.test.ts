@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { Mock } from 'vitest'
-import { defineComponent, h, ref } from 'vue'
+import { defineComponent, h, reactive, ref } from 'vue'
 import { mount, flushPromises } from '@vue/test-utils'
 
 vi.mock('cesium', async () => {
@@ -404,6 +404,15 @@ describe('useAreaQuery 的拾取', () => {
     await flushPromises()
     expect(center.value).toBeNull()
     expect(stats.value).toBeNull()
+  })
+
+  it('底座经过深响应式代理传进来时，viewer 引用仍找得到（ref 被解包也不怕）', () => {
+    const viewer = makeViewer(pickedCartesian())
+    // 深响应式对象上 Vue 会**解包 ref**：stage.viewer 拿回来是 null 而不是那个 Ref。
+    // 组件 props 在测试工具里就是深响应式的，所以这条路径必须走通。
+    const stage = reactive(makeStage(viewer)) as unknown as SceneStage
+    withSetup(() => useAreaQuery({ stage }))
+    expect(stub().ScreenSpaceEventHandler).toHaveBeenCalledTimes(1)
   })
 
   it('场景底座换掉时，旧的点击监听会被摘掉', async () => {
