@@ -1,0 +1,83 @@
+{
+  "schema": "e5-browser-performance/1",
+  "generatedAt": "2026-10-22T09:00:00.000Z",
+  "environment": {
+    "chromeBinary": "chrome",
+    "chromeVersion": "Chrome/141.0.7390.54",
+    "headless": true,
+    "node": "v22.14.0",
+    "platform": "win32 x64",
+    "hostname": "fixture-host",
+    "cpuModel": "Fixture CPU",
+    "cpuCount": 8,
+    "viewport": "1578x802",
+    "cacheDisabled": true,
+    "sampleSeconds": 3,
+    "runs": 3,
+    "successfulRuns": 3,
+    "failedRuns": 0
+  },
+  "targets": { "firstScreenMs": 3000, "fps": 30 },
+  "summary": {
+    "lcpMs": { "values": [820, 910, 870], "median": 870, "min": 820, "max": 910, "spread": 90 },
+    "loadEventEndMs": { "values": [1500, 1660, 1580], "median": 1580, "min": 1500, "max": 1660, "spread": 160 },
+    "appReadyMs": { "values": [2300, 2450, 2380], "median": 2380, "min": 2300, "max": 2450, "spread": 150 },
+    "fpsStatic": { "values": [40.8, 41.9, 41.0], "median": 41.0, "min": 40.8, "max": 41.9, "spread": 1.1 },
+    "fpsMotion": { "values": [0.4, 0.5, 0.4], "median": 0.4, "min": 0.4, "max": 0.5, "spread": 0.1 },
+    "transferBytes": { "values": [734003, 734003, 734003], "median": 734003, "min": 734003, "max": 734003, "spread": 0 },
+    "decodedBytes": { "values": [2411724, 2411724, 2411724], "median": 2411724, "min": 2411724, "max": 2411724, "spread": 0 },
+    "externalTileCount": { "values": [0, 0, 0], "median": 0, "min": 0, "max": 0, "spread": 0 },
+    "externalTileDurationMs": { "values": [0, 0, 0], "median": 0, "min": 0, "max": 0, "spread": 0 },
+    "coldStartFirstByteMs": { "values": [120, 118, 121], "median": 120, "min": 118, "max": 121, "spread": 3 }
+  },
+  "runs": [
+    {
+      "run": 1,
+      "lcpMs": 820,
+      "loadEventEndMs": 1500,
+      "appReadyMs": 2300,
+      "fpsStatic": 40.8,
+      "fpsMotion": 0.4,
+      "sampleSeconds": 3,
+      "systemCpuBusyPercent": 72.4,
+      "transfer": {
+        "app": { "count": 12, "transferBytes": 520000, "decodedBytes": 1800000 },
+        "cesium": { "count": 3, "transferBytes": 214003, "decodedBytes": 611724 },
+        "api": { "count": 2, "transferBytes": 0, "decodedBytes": 0 },
+        "external": { "tileCount": 0, "tileDurationMs": 0 }
+      }
+    },
+    {
+      "run": 2,
+      "lcpMs": 910,
+      "loadEventEndMs": 1660,
+      "appReadyMs": 2450,
+      "fpsStatic": 41.9,
+      "fpsMotion": 0.5,
+      "sampleSeconds": 3,
+      "systemCpuBusyPercent": 81.0,
+      "transfer": {
+        "app": { "count": 12, "transferBytes": 520000, "decodedBytes": 1800000 },
+        "cesium": { "count": 3, "transferBytes": 214003, "decodedBytes": 611724 },
+        "api": { "count": 2, "transferBytes": 0, "decodedBytes": 0 },
+        "external": { "tileCount": 0, "tileDurationMs": 0 }
+      }
+    },
+    {
+      "run": 3,
+      "lcpMs": 870,
+      "loadEventEndMs": 1580,
+      "appReadyMs": 2380,
+      "fpsStatic": 41.0,
+      "fpsMotion": 0.4,
+      "sampleSeconds": 3,
+      "systemCpuBusyPercent": 65.2,
+      "transfer": {
+        "app": { "count": 12, "transferBytes": 520000, "decodedBytes": 1800000 },
+        "cesium": { "count": 3, "transferBytes": 214003, "decodedBytes": 611724 },
+        "api": { "count": 2, "transferBytes": 0, "decodedBytes": 0 },
+        "external": { "tileCount": 0, "tileDurationMs": 0 }
+      }
+    }
+  ]
+}
