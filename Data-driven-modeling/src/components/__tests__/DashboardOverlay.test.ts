@@ -1,8 +1,15 @@
 import { mount } from '@vue/test-utils'
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { ref } from 'vue'
+
+vi.mock('cesium', async () => {
+  const { createCesiumStub } = await import('../../composables/__tests__/cesiumStub')
+  return createCesiumStub()
+})
 
 import DashboardOverlay from '../DashboardOverlay.vue'
 import { DEFAULT_TAB_KEY, useDashboardState } from '@/composables/useDashboardState'
+import type { SceneStage } from '@/composables/useSceneStage'
 import type { CityOverview } from '../../../types/city'
 
 /**
@@ -135,5 +142,57 @@ describe('DashboardOverlay', () => {
     const daily = trend.findAll('.dc-trend-view').find(button => button.text() === '日')
     await daily!.trigger('click')
     expect(trend.find('.dc-panel-title').text()).toBe('逐日趋势')
+  })
+
+  it('puts the area statistics panel at the top of the right column', () => {
+    const wrapper = mount(DashboardOverlay, { props: { overview: overviewPayload() } })
+
+    const right = wrapper.find('.dashboard-area-right')
+    const area = right.find('.dashboard-area-stats')
+    expect(area.exists()).toBe(true)
+    // 区域统计排在右列第一块（点完地面数字就在视线里）
+    expect(right.element.firstElementChild?.classList.contains('dashboard-area-stats')).toBe(true)
+    // 三档半径都在
+    expect(area.findAll('.dc-area-radius-option').map(option => option.text())).toEqual([
+      '200 m',
+      '300 m',
+      '500 m',
+    ])
+  })
+
+  it('says so when the scene stage is not wired up', () => {
+    const wrapper = mount(DashboardOverlay, { props: { overview: overviewPayload() } })
+    const area = wrapper.find('.dashboard-area-stats')
+    // 没有底座就没有拾取：直说，不装成「在场景里点一下地面」
+    expect(area.find('.dc-area-empty-text').text()).toBe('场景底座未就绪，无法拾取')
+    expect(area.find('.dc-area-empty-text').classes()).toContain('is-not-ready')
+  })
+
+  it('shows the picking hint once the scene stage is wired up', async () => {
+    const stage = { viewer: ref(null) } as unknown as SceneStage
+    const wrapper = mount(DashboardOverlay, {
+      props: { overview: overviewPayload(), stage },
+    })
+    const area = wrapper.find('.dashboard-area-stats')
+    expect(area.find('.dc-area-empty-text').text()).toBe('在场景里点一下地面，查看该范围的统计')
+    expect(area.find('.dc-area-empty-text').classes()).not.toContain('is-not-ready')
+  })
+
+  it('picks up a scene stage that arrives later', async () => {
+    const wrapper = mount(DashboardOverlay, { props: { overview: overviewPayload() } })
+    expect(wrapper.find('.dc-area-empty-text').text()).toBe('场景底座未就绪，无法拾取')
+
+    const stage = { viewer: ref(null) } as unknown as SceneStage
+    await wrapper.setProps({ stage })
+
+    expect(wrapper.find('.dc-area-empty-text').text()).toBe('在场景里点一下地面，查看该范围的统计')
+  })
+
+  it('keeps the left column to the two panels it had', () => {
+    const wrapper = mount(DashboardOverlay, { props: { overview: overviewPayload() } })
+    const left = wrapper.find('.dashboard-area-left')
+    expect(left.findAll('.dc-panel')).toHaveLength(2)
+    // 右列多了区域统计这一块
+    expect(wrapper.find('.dashboard-area-right').findAll('.dc-panel')).toHaveLength(3)
   })
 })
