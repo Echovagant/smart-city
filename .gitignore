@@ -29,5 +29,5 @@ coverage.json
 /智慧城市3D可视化计划书.docx
 /智慧城市 3D 可视化.png
 
-# 说明：本机私有的忽略项（点目录、Agent 指令文件等）放在 .git/info/exclude 里，
+# 说明：本机私有的忽略项（点目录、本地开发说明等）放在 .git/info/exclude 里，
 # 那个文件从不入库 —— 公开仓库的 .gitignore 不需要列出它们。
