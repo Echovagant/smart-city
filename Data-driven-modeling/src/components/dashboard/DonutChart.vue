@@ -85,7 +85,7 @@ const legend = computed(() =>
           :cy="CENTER"
           :r="RADIUS"
           fill="none"
-          stroke="rgba(59, 130, 246, 0.16)"
+          stroke="color-mix(in srgb, var(--dc-secondary, #24507f) 16%, transparent)"
           :stroke-width="STROKE"
         />
         <circle
@@ -133,14 +133,14 @@ const legend = computed(() =>
 }
 
 .dc-donut-value {
-  fill: var(--dc-flow, #22d3ee);
+  fill: var(--dc-flow, #0e7490);
   font-size: 15px;
   font-weight: 600;
   text-anchor: middle;
 }
 
 .dc-donut-label {
-  fill: rgba(226, 232, 240, 0.55);
+  fill: color-mix(in srgb, var(--dc-text, #cbd5e1) 55%, var(--dc-panel, #0b1526));
   font-size: 7px;
   text-anchor: middle;
 }
@@ -159,7 +159,7 @@ const legend = computed(() =>
   gap: 6px;
   padding: 2px 0;
   font-size: var(--dc-label-size, 11px);
-  color: rgba(226, 232, 240, 0.78);
+  color: color-mix(in srgb, var(--dc-text, #cbd5e1) 78%, var(--dc-panel, #0b1526));
 }
 
 .dc-legend-dot {
@@ -180,12 +180,12 @@ const legend = computed(() =>
 .dc-legend-value {
   flex: 0 0 auto;
   font-family: Consolas, 'SF Mono', 'Roboto Mono', ui-monospace, monospace;
-  color: var(--dc-flow, #22d3ee);
+  color: var(--dc-flow, #0e7490);
 }
 
 .dc-chart-empty {
   margin: 0;
   font-size: var(--dc-label-size, 11px);
-  color: rgba(226, 232, 240, 0.42);
+  color: color-mix(in srgb, var(--dc-text, #cbd5e1) 42%, var(--dc-panel, #0b1526));
 }
 </style>

@@ -192,18 +192,18 @@ const annotations = computed(() => {
 }
 
 .dc-line-grid line {
-  stroke: rgba(59, 130, 246, 0.18);
+  stroke: color-mix(in srgb, var(--dc-secondary, #24507f) 18%, transparent);
   stroke-width: 0.6;
 }
 
 .dc-line-grid text {
-  fill: rgba(226, 232, 240, 0.38);
+  fill: color-mix(in srgb, var(--dc-text, #cbd5e1) 38%, var(--dc-panel, #0b1526));
   font-size: 7px;
   text-anchor: end;
 }
 
 .dc-line-note {
-  fill: var(--dc-flow, #22d3ee);
+  fill: var(--dc-flow, #0e7490);
   font-size: 8px;
 }
 
@@ -211,6 +211,6 @@ const annotations = computed(() => {
 .dc-chart-empty {
   margin: 0;
   font-size: var(--dc-label-size, 11px);
-  color: rgba(226, 232, 240, 0.42);
+  color: color-mix(in srgb, var(--dc-text, #cbd5e1) 42%, var(--dc-panel, #0b1526));
 }
 </style>

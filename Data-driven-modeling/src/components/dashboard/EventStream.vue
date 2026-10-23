@@ -86,7 +86,7 @@ const onSelect = (event: CityEvent) => emit('select', event)
 }
 
 .dc-event-row {
-  border-bottom: 1px solid rgba(22, 93, 255, 0.18);
+  border-bottom: 1px solid color-mix(in srgb, var(--dc-accent, #1e40af) 18%, transparent);
 }
 
 .dc-event-item {
@@ -99,13 +99,13 @@ const onSelect = (event: CityEvent) => emit('select', event)
   border: 0;
   font-family: inherit;
   font-size: var(--dc-label-size, 11px);
-  color: rgba(226, 232, 240, 0.78);
+  color: color-mix(in srgb, var(--dc-text, #cbd5e1) 78%, var(--dc-panel, #0b1526));
   text-align: left;
   cursor: pointer;
 }
 
 .dc-event-item:hover {
-  color: var(--dc-text, #e2e8f0);
+  color: var(--dc-text, #cbd5e1);
 }
 
 .dc-event-dot {
@@ -113,7 +113,7 @@ const onSelect = (event: CityEvent) => emit('select', event)
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--dc-accent, #165dff);
+  background: var(--dc-accent, #1e40af);
 }
 
 .tone-warn .dc-event-dot {
@@ -144,7 +144,7 @@ const onSelect = (event: CityEvent) => emit('select', event)
   flex: 0 1 auto;
   min-width: 0;
   max-width: 40%;
-  color: rgba(226, 232, 240, 0.55);
+  color: color-mix(in srgb, var(--dc-text, #cbd5e1) 55%, var(--dc-panel, #0b1526));
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -158,7 +158,7 @@ const onSelect = (event: CityEvent) => emit('select', event)
   border-radius: 2px;
   font-size: 9px;
   letter-spacing: 0.06em;
-  color: var(--dc-accent, #165dff);
+  color: var(--dc-accent, #1e40af);
 }
 
 .tone-warn .dc-event-badge {
@@ -172,7 +172,7 @@ const onSelect = (event: CityEvent) => emit('select', event)
 .dc-event-time {
   flex: 0 0 auto;
   font-family: Consolas, 'SF Mono', 'Roboto Mono', ui-monospace, monospace;
-  color: rgba(226, 232, 240, 0.5);
+  color: color-mix(in srgb, var(--dc-text, #cbd5e1) 50%, var(--dc-panel, #0b1526));
 }
 
 /* 空态：诚实地说「没有事件」，不编一条出来 */
@@ -180,6 +180,6 @@ const onSelect = (event: CityEvent) => emit('select', event)
   margin: 0;
   font-size: var(--dc-label-size, 11px);
   line-height: 1.5;
-  color: rgba(226, 232, 240, 0.42);
+  color: color-mix(in srgb, var(--dc-text, #cbd5e1) 42%, var(--dc-panel, #0b1526));
 }
 </style>

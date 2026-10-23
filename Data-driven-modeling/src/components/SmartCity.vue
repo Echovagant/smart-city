@@ -564,7 +564,7 @@ onUnmounted(() => {
   height: 100vh;
   /* 大屏 overlay 是 inset: 0 + overflow: hidden：窄屏也不许出现横向滚动条 */
   overflow: hidden;
-  background: var(--dc-screen, #050a14);
+  background: var(--dc-screen, #04070f);
 }
 
 .cesium-container {
@@ -591,7 +591,7 @@ onUnmounted(() => {
   width: 100%;
   height: 100%;
   min-height: 0;
-  color: var(--dc-text, #e2e8f0);
+  color: var(--dc-text, #cbd5e1);
 }
 
 /* 四个控制按钮：2×2 排布（类名与行为不变） */
@@ -613,9 +613,9 @@ onUnmounted(() => {
   width: 100%;
   margin: 0;
   padding: 5px 10px;
-  background: rgba(5, 10, 20, 0.72);
-  color: var(--dc-text, #e2e8f0);
-  border: 1px solid rgba(59, 130, 246, 0.5);
+  background: color-mix(in srgb, var(--dc-screen, #04070f) 72%, transparent);
+  color: var(--dc-text, #cbd5e1);
+  border: 1px solid color-mix(in srgb, var(--dc-secondary, #24507f) 50%, transparent);
   border-radius: 2px;
   font-family: inherit;
   font-size: 12px;
@@ -626,9 +626,9 @@ onUnmounted(() => {
 }
 
 .control-panel button:hover {
-  border-color: var(--dc-flow, #22d3ee);
-  color: var(--dc-flow, #22d3ee);
-  box-shadow: 0 0 14px rgba(34, 211, 238, 0.25);
+  border-color: var(--dc-flow, #0e7490);
+  color: var(--dc-flow, #0e7490);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--dc-flow, #0e7490) 25%, transparent);
 }
 
 /* 数据加载状态提示：与控制面板同一套深色半透明观感 */
@@ -637,14 +637,17 @@ onUnmounted(() => {
   margin-bottom: 4px;
   padding: 4px 8px;
   border-radius: 2px;
-  background: var(--dc-panel-surface, rgba(5, 10, 20, 0.55));
+  background: var(
+    --dc-panel-surface,
+    color-mix(in srgb, var(--dc-screen, #04070f) 55%, transparent)
+  );
   font-size: 11px;
   line-height: 1.4;
   word-break: break-all;
 }
 
 .status-hint {
-  color: var(--dc-flow, #22d3ee);
+  color: var(--dc-flow, #0e7490);
 }
 
 .status-error {
@@ -667,8 +670,11 @@ onUnmounted(() => {
   min-width: 0;
   overflow: hidden;
   padding: 4px 8px;
-  background: var(--dc-panel-surface, rgba(5, 10, 20, 0.55));
-  border: 1px solid rgba(22, 93, 255, 0.28);
+  background: var(
+    --dc-panel-surface,
+    color-mix(in srgb, var(--dc-screen, #04070f) 55%, transparent)
+  );
+  border: 1px solid color-mix(in srgb, var(--dc-accent, #1e40af) 28%, transparent);
   border-radius: 2px;
 }
 
@@ -683,7 +689,7 @@ onUnmounted(() => {
 .metric-label {
   font-size: 10px;
   letter-spacing: 0.1em;
-  color: rgba(226, 232, 240, 0.72);
+  color: color-mix(in srgb, var(--dc-text, #cbd5e1) 72%, var(--dc-screen, #04070f));
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -708,8 +714,8 @@ onUnmounted(() => {
   font-size: 16px;
   font-weight: 600;
   line-height: 1.15;
-  color: var(--dc-flow, #22d3ee);
-  text-shadow: 0 0 10px rgba(34, 211, 238, 0.3);
+  color: var(--dc-flow, #0e7490);
+  text-shadow: 0 0 10px color-mix(in srgb, var(--dc-flow, #0e7490) 30%, transparent);
 }
 
 /* 取不到的值：不冒充 0，也不冒充旧值 —— 直说「数据源暂不可用」 */
@@ -718,7 +724,7 @@ onUnmounted(() => {
   font-size: 11px;
   font-weight: 400;
   line-height: 1.4;
-  color: rgba(226, 232, 240, 0.45);
+  color: color-mix(in srgb, var(--dc-text, #cbd5e1) 45%, var(--dc-screen, #04070f));
   text-shadow: none;
 }
 
@@ -731,7 +737,7 @@ onUnmounted(() => {
 }
 
 .metric-badge.tone-ok {
-  color: var(--dc-flow, #22d3ee);
+  color: var(--dc-flow, #0e7490);
 }
 
 .metric-badge.tone-warn {
@@ -746,7 +752,7 @@ onUnmounted(() => {
   margin-top: 2px;
   max-width: 104px;
   font-size: 9px;
-  color: rgba(226, 232, 240, 0.6);
+  color: color-mix(in srgb, var(--dc-text, #cbd5e1) 60%, var(--dc-screen, #04070f));
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -758,7 +764,7 @@ onUnmounted(() => {
   max-width: 100%;
   font-size: 9px;
   line-height: 1.3;
-  color: rgba(226, 232, 240, 0.42);
+  color: color-mix(in srgb, var(--dc-text, #cbd5e1) 42%, var(--dc-screen, #04070f));
   cursor: help;
   white-space: nowrap;
   overflow: hidden;
@@ -773,15 +779,18 @@ onUnmounted(() => {
   gap: 6px 8px;
   min-width: 0;
   padding: 4px 8px;
-  background: var(--dc-panel-surface, rgba(5, 10, 20, 0.55));
-  border: 1px solid rgba(22, 93, 255, 0.28);
+  background: var(
+    --dc-panel-surface,
+    color-mix(in srgb, var(--dc-screen, #04070f) 55%, transparent)
+  );
+  border: 1px solid color-mix(in srgb, var(--dc-accent, #1e40af) 28%, transparent);
   border-radius: 2px;
 }
 
 .traffic-label {
   font-size: 10px;
   letter-spacing: 0.14em;
-  color: rgba(226, 232, 240, 0.72);
+  color: color-mix(in srgb, var(--dc-text, #cbd5e1) 72%, var(--dc-screen, #04070f));
   white-space: nowrap;
 }
 
@@ -790,8 +799,8 @@ onUnmounted(() => {
   font-size: 17px;
   font-weight: 600;
   line-height: 1;
-  color: var(--dc-flow, #22d3ee);
-  text-shadow: 0 0 10px rgba(34, 211, 238, 0.35);
+  color: var(--dc-flow, #0e7490);
+  text-shadow: 0 0 10px color-mix(in srgb, var(--dc-flow, #0e7490) 35%, transparent);
 }
 
 .traffic-badge {
@@ -804,7 +813,7 @@ onUnmounted(() => {
 }
 
 .traffic-badge.tone-ok {
-  color: var(--dc-flow, #22d3ee);
+  color: var(--dc-flow, #0e7490);
 }
 
 .traffic-badge.tone-warn {
@@ -818,7 +827,7 @@ onUnmounted(() => {
 .traffic-clock {
   font-family: Consolas, 'SF Mono', ui-monospace, monospace;
   font-size: 10px;
-  color: rgba(226, 232, 240, 0.55);
+  color: color-mix(in srgb, var(--dc-text, #cbd5e1) 55%, var(--dc-screen, #04070f));
   white-space: nowrap;
 }
 
@@ -826,8 +835,8 @@ onUnmounted(() => {
 .attribution {
   margin-top: auto;
   padding-top: 6px;
-  border-top: 1px solid rgba(22, 93, 255, 0.28);
-  color: rgba(226, 232, 240, 0.5);
+  border-top: 1px solid color-mix(in srgb, var(--dc-accent, #1e40af) 28%, transparent);
+  color: color-mix(in srgb, var(--dc-text, #cbd5e1) 50%, var(--dc-panel, #0b1526));
   font-size: 11px;
   line-height: 1.4;
 }

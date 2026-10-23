@@ -110,8 +110,11 @@ const sourceTitle = computed(() => {
   gap: 2px;
   min-width: 0;
   padding: 6px 8px;
-  background: var(--dc-panel-surface, rgba(5, 10, 20, 0.55));
-  border: 1px solid rgba(22, 93, 255, 0.24);
+  background: var(
+    --dc-panel-surface,
+    color-mix(in srgb, var(--dc-screen, #04070f) 55%, transparent)
+  );
+  border: 1px solid color-mix(in srgb, var(--dc-accent, #1e40af) 24%, transparent);
   border-radius: var(--dc-panel-radius, 2px);
 }
 
@@ -125,7 +128,7 @@ const sourceTitle = computed(() => {
 .dc-metric-label {
   font-size: var(--dc-label-size, 11px);
   letter-spacing: 0.1em;
-  color: rgba(226, 232, 240, 0.72);
+  color: color-mix(in srgb, var(--dc-text, #cbd5e1) 72%, var(--dc-screen, #04070f));
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -150,8 +153,8 @@ const sourceTitle = computed(() => {
   font-size: var(--dc-value-size, 24px);
   font-weight: 600;
   line-height: 1.15;
-  color: var(--dc-flow, #22d3ee);
-  text-shadow: 0 0 12px rgba(34, 211, 238, 0.35);
+  color: var(--dc-flow, #0e7490);
+  text-shadow: 0 0 12px color-mix(in srgb, var(--dc-flow, #0e7490) 35%, transparent);
 }
 
 /* 取不到的值：不冒充 0，也不冒充旧值 —— 直说「数据源暂不可用」 */
@@ -160,13 +163,13 @@ const sourceTitle = computed(() => {
   font-size: var(--dc-label-size, 11px);
   font-weight: 400;
   line-height: 1.6;
-  color: rgba(226, 232, 240, 0.45);
+  color: color-mix(in srgb, var(--dc-text, #cbd5e1) 45%, var(--dc-screen, #04070f));
   text-shadow: none;
 }
 
 .dc-metric-unit {
   font-size: var(--dc-label-size, 11px);
-  color: rgba(226, 232, 240, 0.65);
+  color: color-mix(in srgb, var(--dc-text, #cbd5e1) 65%, var(--dc-screen, #04070f));
 }
 
 .dc-metric-badge {
@@ -179,7 +182,7 @@ const sourceTitle = computed(() => {
 }
 
 .tone-ok .dc-metric-badge {
-  color: var(--dc-flow, #22d3ee);
+  color: var(--dc-flow, #0e7490);
 }
 
 .tone-warn .dc-metric-badge {
@@ -191,14 +194,14 @@ const sourceTitle = computed(() => {
 }
 
 .tone-accent .dc-metric-badge {
-  color: var(--dc-accent, #165dff);
+  color: var(--dc-accent, #1e40af);
 }
 
 /* 来源标注：来源名 + 观测时间。悬停出完整信息 */
 .dc-metric-source {
   font-size: var(--dc-panel-small-size, 10px);
   line-height: 1.3;
-  color: rgba(226, 232, 240, 0.42);
+  color: color-mix(in srgb, var(--dc-text, #cbd5e1) 42%, var(--dc-screen, #04070f));
   cursor: help;
   white-space: nowrap;
   overflow: hidden;

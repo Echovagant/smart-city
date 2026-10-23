@@ -356,7 +356,7 @@ onMounted(() => {
   margin: 0 0 6px;
   font-size: var(--dc-label-size, 11px);
   line-height: 1.4;
-  color: rgba(226, 232, 240, 0.5);
+  color: color-mix(in srgb, var(--dc-text, #cbd5e1) 50%, var(--dc-panel, #0b1526));
 }
 
 /* 底栏卡片：内部一行（条形图 + 右侧操作区），不滚动 */

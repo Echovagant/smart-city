@@ -93,7 +93,7 @@ const rows = computed(() =>
 .dc-bar-label {
   flex: 0 0 84px;
   font-size: var(--dc-label-size, 11px);
-  color: rgba(226, 232, 240, 0.72);
+  color: color-mix(in srgb, var(--dc-text, #cbd5e1) 72%, var(--dc-panel, #0b1526));
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -103,8 +103,8 @@ const rows = computed(() =>
   flex: 1;
   min-width: 0;
   height: var(--dc-chart-bar-height, 14px);
-  background: rgba(5, 10, 20, 0.6);
-  border: 1px solid rgba(22, 93, 255, 0.22);
+  background: color-mix(in srgb, var(--dc-screen, #04070f) 60%, transparent);
+  border: 1px solid color-mix(in srgb, var(--dc-accent, #1e40af) 22%, transparent);
   border-radius: var(--dc-panel-radius, 2px);
   overflow: hidden;
 }
@@ -112,7 +112,7 @@ const rows = computed(() =>
 .dc-bar-fill {
   display: block;
   height: 100%;
-  box-shadow: 0 0 10px rgba(34, 211, 238, 0.3);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--dc-flow, #0e7490) 30%, transparent);
 }
 
 /* 取不到的那一条：留一个空槽（不画长度），旁边标「暂无」 */
@@ -120,8 +120,8 @@ const rows = computed(() =>
   width: 100%;
   background: repeating-linear-gradient(
     45deg,
-    rgba(226, 232, 240, 0.06),
-    rgba(226, 232, 240, 0.06) 4px,
+    color-mix(in srgb, var(--dc-text, #cbd5e1) 6%, transparent),
+    color-mix(in srgb, var(--dc-text, #cbd5e1) 6%, transparent) 4px,
     transparent 4px,
     transparent 8px
   );
@@ -133,17 +133,17 @@ const rows = computed(() =>
   text-align: right;
   font-family: Consolas, 'SF Mono', 'Roboto Mono', ui-monospace, monospace;
   font-size: var(--dc-label-size, 11px);
-  color: var(--dc-flow, #22d3ee);
+  color: var(--dc-flow, #0e7490);
 }
 
 .dc-bar-value.is-unavailable {
   font-family: inherit;
-  color: rgba(226, 232, 240, 0.42);
+  color: color-mix(in srgb, var(--dc-text, #cbd5e1) 42%, var(--dc-panel, #0b1526));
 }
 
 .dc-chart-empty {
   margin: 0;
   font-size: var(--dc-label-size, 11px);
-  color: rgba(226, 232, 240, 0.42);
+  color: color-mix(in srgb, var(--dc-text, #cbd5e1) 42%, var(--dc-panel, #0b1526));
 }
 </style>

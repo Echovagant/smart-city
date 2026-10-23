@@ -190,32 +190,32 @@ const rangeText = computed(() => {
 /* 切换按钮与顶栏页签同一套视觉语言（细边 + 青色选中态） */
 .dc-trend-view {
   padding: 2px 10px;
-  background: rgba(5, 10, 20, 0.72);
-  border: 1px solid rgba(59, 130, 246, 0.4);
+  background: color-mix(in srgb, var(--dc-screen, #04070f) 72%, transparent);
+  border: 1px solid color-mix(in srgb, var(--dc-secondary, #24507f) 40%, transparent);
   border-radius: var(--dc-panel-radius, 2px);
   font-family: inherit;
   font-size: var(--dc-label-size, 11px);
   letter-spacing: 0.1em;
-  color: rgba(226, 232, 240, 0.68);
+  color: color-mix(in srgb, var(--dc-text, #cbd5e1) 68%, var(--dc-screen, #04070f));
   cursor: pointer;
   transition: border-color 0.2s ease, color 0.2s ease, box-shadow 0.2s ease;
 }
 
 .dc-trend-view:hover {
-  border-color: var(--dc-flow, #22d3ee);
-  color: var(--dc-flow, #22d3ee);
+  border-color: var(--dc-flow, #0e7490);
+  color: var(--dc-flow, #0e7490);
 }
 
 .dc-trend-view.is-active {
-  border-color: var(--dc-flow, #22d3ee);
-  color: var(--dc-flow, #22d3ee);
-  box-shadow: 0 0 14px rgba(34, 211, 238, 0.28);
+  border-color: var(--dc-flow, #0e7490);
+  color: var(--dc-flow, #0e7490);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--dc-flow, #0e7490) 28%, transparent);
 }
 
 /* 时间范围：本地时区，说清楚是本地时间 */
 .dc-trend-range {
   font-size: var(--dc-panel-small-size, 10px);
-  color: rgba(226, 232, 240, 0.42);
+  color: color-mix(in srgb, var(--dc-text, #cbd5e1) 42%, var(--dc-panel, #0b1526));
   white-space: nowrap;
 }
 
@@ -236,22 +236,22 @@ const rangeText = computed(() => {
 .dc-trend-metric {
   padding: 1px 6px;
   background: transparent;
-  border: 1px solid rgba(59, 130, 246, 0.3);
+  border: 1px solid color-mix(in srgb, var(--dc-secondary, #24507f) 30%, transparent);
   border-radius: var(--dc-panel-radius, 2px);
   font-family: inherit;
   font-size: var(--dc-panel-small-size, 10px);
-  color: rgba(226, 232, 240, 0.55);
+  color: color-mix(in srgb, var(--dc-text, #cbd5e1) 55%, var(--dc-panel, #0b1526));
   cursor: pointer;
   transition: border-color 0.2s ease, color 0.2s ease;
 }
 
 .dc-trend-metric:hover {
-  border-color: var(--dc-flow, #22d3ee);
-  color: var(--dc-flow, #22d3ee);
+  border-color: var(--dc-flow, #0e7490);
+  color: var(--dc-flow, #0e7490);
 }
 
 .dc-trend-metric.is-active {
-  border-color: var(--dc-flow, #22d3ee);
-  color: var(--dc-flow, #22d3ee);
+  border-color: var(--dc-flow, #0e7490);
+  color: var(--dc-flow, #0e7490);
 }
 </style>

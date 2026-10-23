@@ -31,11 +31,12 @@ defineProps<{
   flex-direction: column;
   min-height: 0;
   padding: var(--dc-panel-padding, 12px);
-  background: var(--dc-panel-bg, rgba(13, 26, 46, 0.82));
-  border: var(--dc-panel-border-width, 1px) solid rgba(22, 93, 255, 0.35);
+  background: var(--dc-panel-bg, color-mix(in srgb, var(--dc-panel, #0b1526) 82%, transparent));
+  border: var(--dc-panel-border-width, 1px) solid
+    color-mix(in srgb, var(--dc-accent, #1e40af) 35%, transparent);
   border-radius: var(--dc-panel-radius, 2px);
-  color: var(--dc-text, #e2e8f0);
-  box-shadow: 0 0 18px rgba(22, 93, 255, 0.12);
+  color: var(--dc-text, #cbd5e1);
+  box-shadow: 0 0 18px color-mix(in srgb, var(--dc-accent, #1e40af) 12%, transparent);
 }
 
 .dc-panel-head {
@@ -50,17 +51,17 @@ defineProps<{
   font-size: var(--dc-panel-title-size, 13px);
   font-weight: 600;
   letter-spacing: 0.16em;
-  color: var(--dc-flow, #22d3ee);
+  color: var(--dc-flow, #0e7490);
   white-space: nowrap;
 }
 
 .dc-panel-badge {
   padding: 1px 6px;
-  border: 1px solid rgba(34, 211, 238, 0.5);
+  border: 1px solid color-mix(in srgb, var(--dc-flow, #0e7490) 50%, transparent);
   border-radius: var(--dc-panel-radius, 2px);
   font-size: var(--dc-panel-small-size, 10px);
   letter-spacing: 0.08em;
-  color: rgba(34, 211, 238, 0.85);
+  color: color-mix(in srgb, var(--dc-flow, #0e7490) 85%, var(--dc-panel, #0b1526));
   white-space: nowrap;
 }
 
@@ -68,7 +69,11 @@ defineProps<{
 .dc-panel-rule {
   flex: 1;
   height: 1px;
-  background: linear-gradient(90deg, rgba(22, 93, 255, 0.55), rgba(22, 93, 255, 0));
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--dc-accent, #1e40af) 55%, transparent),
+    transparent
+  );
 }
 
 .dc-panel-body {

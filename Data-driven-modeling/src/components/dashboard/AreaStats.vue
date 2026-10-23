@@ -290,31 +290,31 @@ const onRadius = (meters: number): void => emit('update:radius', meters)
 .dc-area-radius-label {
   font-size: var(--dc-label-size, 11px);
   letter-spacing: 0.1em;
-  color: rgba(226, 232, 240, 0.55);
+  color: color-mix(in srgb, var(--dc-text, #cbd5e1) 55%, var(--dc-panel, #0b1526));
 }
 
 .dc-area-radius-option {
   padding: 1px 8px;
-  background: rgba(5, 10, 20, 0.72);
-  border: 1px solid rgba(59, 130, 246, 0.4);
+  background: color-mix(in srgb, var(--dc-screen, #04070f) 72%, transparent);
+  border: 1px solid color-mix(in srgb, var(--dc-secondary, #24507f) 40%, transparent);
   border-radius: var(--dc-panel-radius, 2px);
   font-family: inherit;
   font-size: var(--dc-label-size, 11px);
   letter-spacing: 0.06em;
-  color: rgba(226, 232, 240, 0.68);
+  color: color-mix(in srgb, var(--dc-text, #cbd5e1) 68%, var(--dc-screen, #04070f));
   cursor: pointer;
   transition: border-color 0.2s ease, color 0.2s ease, box-shadow 0.2s ease;
 }
 
 .dc-area-radius-option:hover {
-  border-color: var(--dc-flow, #22d3ee);
-  color: var(--dc-flow, #22d3ee);
+  border-color: var(--dc-flow, #0e7490);
+  color: var(--dc-flow, #0e7490);
 }
 
 .dc-area-radius-option.is-active {
-  border-color: var(--dc-flow, #22d3ee);
-  color: var(--dc-flow, #22d3ee);
-  box-shadow: 0 0 14px rgba(34, 211, 238, 0.28);
+  border-color: var(--dc-flow, #0e7490);
+  color: var(--dc-flow, #0e7490);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--dc-flow, #0e7490) 28%, transparent);
 }
 
 /* 空态：说清楚怎么用 */
@@ -328,7 +328,7 @@ const onRadius = (meters: number): void => emit('update:radius', meters)
   margin: 0 0 4px;
   font-size: var(--dc-label-size, 11px);
   line-height: 1.6;
-  color: rgba(226, 232, 240, 0.6);
+  color: color-mix(in srgb, var(--dc-text, #cbd5e1) 60%, var(--dc-panel, #0b1526));
 }
 
 .dc-area-hint {
@@ -341,7 +341,7 @@ const onRadius = (meters: number): void => emit('update:radius', meters)
 }
 
 .dc-area-empty-sub {
-  color: rgba(226, 232, 240, 0.38);
+  color: color-mix(in srgb, var(--dc-text, #cbd5e1) 38%, var(--dc-panel, #0b1526));
 }
 
 .dc-area-error {
@@ -355,7 +355,7 @@ const onRadius = (meters: number): void => emit('update:radius', meters)
 .dc-area-loading {
   padding: 8px 2px;
   font-size: var(--dc-label-size, 11px);
-  color: rgba(226, 232, 240, 0.5);
+  color: color-mix(in srgb, var(--dc-text, #cbd5e1) 50%, var(--dc-panel, #0b1526));
 }
 
 /* 四个头条数字：2 × 2 */
@@ -371,15 +371,18 @@ const onRadius = (meters: number): void => emit('update:radius', meters)
   gap: 1px;
   min-width: 0;
   padding: 5px 7px;
-  background: var(--dc-panel-surface, rgba(5, 10, 20, 0.55));
-  border: 1px solid rgba(22, 93, 255, 0.24);
+  background: var(
+    --dc-panel-surface,
+    color-mix(in srgb, var(--dc-screen, #04070f) 55%, transparent)
+  );
+  border: 1px solid color-mix(in srgb, var(--dc-accent, #1e40af) 24%, transparent);
   border-radius: var(--dc-panel-radius, 2px);
 }
 
 .dc-area-stat-label {
   font-size: var(--dc-panel-small-size, 10px);
   letter-spacing: 0.1em;
-  color: rgba(226, 232, 240, 0.6);
+  color: color-mix(in srgb, var(--dc-text, #cbd5e1) 60%, var(--dc-screen, #04070f));
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -397,8 +400,8 @@ const onRadius = (meters: number): void => emit('update:radius', meters)
   font-size: 18px;
   font-weight: 600;
   line-height: 1.2;
-  color: var(--dc-flow, #22d3ee);
-  text-shadow: 0 0 12px rgba(34, 211, 238, 0.35);
+  color: var(--dc-flow, #0e7490);
+  text-shadow: 0 0 12px color-mix(in srgb, var(--dc-flow, #0e7490) 35%, transparent);
 }
 
 /* 取不到的值：不冒充 0 */
@@ -406,13 +409,13 @@ const onRadius = (meters: number): void => emit('update:radius', meters)
   font-family: inherit;
   font-size: var(--dc-panel-small-size, 10px);
   font-weight: 400;
-  color: rgba(226, 232, 240, 0.45);
+  color: color-mix(in srgb, var(--dc-text, #cbd5e1) 45%, var(--dc-screen, #04070f));
   text-shadow: none;
 }
 
 .dc-area-stat-unit {
   font-size: var(--dc-panel-small-size, 10px);
-  color: rgba(226, 232, 240, 0.6);
+  color: color-mix(in srgb, var(--dc-text, #cbd5e1) 60%, var(--dc-screen, #04070f));
 }
 
 /* 分解行：道路分级 / 设施分类 / 选中范围 */
@@ -427,7 +430,7 @@ const onRadius = (meters: number): void => emit('update:radius', meters)
   flex: 0 0 auto;
   font-size: var(--dc-panel-small-size, 10px);
   letter-spacing: 0.1em;
-  color: rgba(226, 232, 240, 0.5);
+  color: color-mix(in srgb, var(--dc-text, #cbd5e1) 50%, var(--dc-panel, #0b1526));
 }
 
 .dc-area-line-value {
@@ -436,12 +439,12 @@ const onRadius = (meters: number): void => emit('update:radius', meters)
   gap: 4px;
   min-width: 0;
   font-size: var(--dc-panel-small-size, 10px);
-  color: rgba(226, 232, 240, 0.72);
+  color: color-mix(in srgb, var(--dc-text, #cbd5e1) 72%, var(--dc-panel, #0b1526));
 }
 
 .dc-area-chip {
   padding: 0 5px;
-  border: 1px solid rgba(59, 130, 246, 0.28);
+  border: 1px solid color-mix(in srgb, var(--dc-secondary, #24507f) 28%, transparent);
   border-radius: var(--dc-panel-radius, 2px);
   white-space: nowrap;
 }
@@ -453,7 +456,7 @@ const onRadius = (meters: number): void => emit('update:radius', meters)
 .dc-area-source {
   font-size: var(--dc-panel-small-size, 10px);
   line-height: 1.3;
-  color: rgba(226, 232, 240, 0.42);
+  color: color-mix(in srgb, var(--dc-text, #cbd5e1) 42%, var(--dc-panel, #0b1526));
   cursor: help;
   white-space: nowrap;
   overflow: hidden;
@@ -469,17 +472,17 @@ const onRadius = (meters: number): void => emit('update:radius', meters)
 .dc-area-clear {
   padding: 1px 8px;
   background: transparent;
-  border: 1px solid rgba(59, 130, 246, 0.3);
+  border: 1px solid color-mix(in srgb, var(--dc-secondary, #24507f) 30%, transparent);
   border-radius: var(--dc-panel-radius, 2px);
   font-family: inherit;
   font-size: var(--dc-panel-small-size, 10px);
-  color: rgba(226, 232, 240, 0.55);
+  color: color-mix(in srgb, var(--dc-text, #cbd5e1) 55%, var(--dc-panel, #0b1526));
   cursor: pointer;
   transition: border-color 0.2s ease, color 0.2s ease;
 }
 
 .dc-area-clear:hover {
-  border-color: var(--dc-flow, #22d3ee);
-  color: var(--dc-flow, #22d3ee);
+  border-color: var(--dc-flow, #0e7490);
+  color: var(--dc-flow, #0e7490);
 }
 </style>

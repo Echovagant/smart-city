@@ -62,11 +62,11 @@ const emit = defineEmits<{
   padding: 8px 12px;
   background: linear-gradient(
     180deg,
-    rgba(13, 26, 46, 0.92) 0%,
-    rgba(13, 26, 46, 0.55) 70%,
-    rgba(13, 26, 46, 0) 100%
+    color-mix(in srgb, var(--dc-panel, #0b1526) 92%, transparent) 0%,
+    color-mix(in srgb, var(--dc-panel, #0b1526) 55%, transparent) 70%,
+    transparent 100%
   );
-  border-bottom: 1px solid rgba(22, 93, 255, 0.45);
+  border-bottom: 1px solid color-mix(in srgb, var(--dc-accent, #1e40af) 45%, transparent);
 }
 
 .dc-topbar-title {
@@ -76,8 +76,8 @@ const emit = defineEmits<{
   font-weight: 600;
   letter-spacing: 0.24em;
   text-indent: 0.24em;
-  color: var(--dc-text, #e2e8f0);
-  text-shadow: 0 0 18px rgba(34, 211, 238, 0.45);
+  color: var(--dc-text, #cbd5e1);
+  text-shadow: 0 0 18px color-mix(in srgb, var(--dc-flow, #0e7490) 45%, transparent);
   white-space: nowrap;
 }
 
@@ -94,26 +94,26 @@ const emit = defineEmits<{
 
 .dc-tab {
   padding: 3px 14px;
-  background: rgba(5, 10, 20, 0.72);
-  border: 1px solid rgba(59, 130, 246, 0.4);
+  background: color-mix(in srgb, var(--dc-screen, #04070f) 72%, transparent);
+  border: 1px solid color-mix(in srgb, var(--dc-secondary, #24507f) 40%, transparent);
   border-radius: var(--dc-panel-radius, 2px);
   font-family: inherit;
   font-size: var(--dc-label-size, 11px);
   letter-spacing: 0.14em;
-  color: rgba(226, 232, 240, 0.68);
+  color: color-mix(in srgb, var(--dc-text, #cbd5e1) 68%, var(--dc-screen, #04070f));
   cursor: pointer;
   transition: border-color 0.2s ease, color 0.2s ease, box-shadow 0.2s ease;
 }
 
 .dc-tab:hover {
-  border-color: var(--dc-flow, #22d3ee);
-  color: var(--dc-flow, #22d3ee);
+  border-color: var(--dc-flow, #0e7490);
+  color: var(--dc-flow, #0e7490);
 }
 
 .dc-tab.is-active {
-  border-color: var(--dc-flow, #22d3ee);
-  color: var(--dc-flow, #22d3ee);
-  box-shadow: 0 0 14px rgba(34, 211, 238, 0.28);
+  border-color: var(--dc-flow, #0e7490);
+  color: var(--dc-flow, #0e7490);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--dc-flow, #0e7490) 28%, transparent);
 }
 
 /* 右侧读数带：S1 的指标带 + 实时交通读数。
