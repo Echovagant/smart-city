@@ -8,10 +8,22 @@
   * 抓到的数据直接写成 backend-python/geojson/*.geojson，与仓库里已存在的
     那份 OSM 抽取结构兼容（features[].properties 是扁平 tag 字典，
     features[].id 是 "way/123" / "relation/456"）。
-  * 本机到海外 CDN 的链路慢且经常不可达，所以每个端点重试 3 次，
-    读超时 180 秒（与查询自带的 [timeout:180] 对齐），失败后退避 10 秒再试；
+  * 本机到部分实例的链路慢且经常不可达，所以抓取分两步：
+      1) 健康探测 —— 正式查询之前，先对每个端点发一次**短超时**
+         （PROBE_TIMEOUT 秒）的轻量查询。探不通就立刻换下一个端点，
+         **不进入重试循环**：死端点最多浪费 PROBE_TIMEOUT 秒，
+         而不是 3 × HTTP_TIMEOUT 秒（实测有实例 DNS 直接解析失败）。
+      2) 正式查询 —— 探测通过的端点最多试 MAX_ATTEMPTS 次，读超时
+         HTTP_TIMEOUT 秒（与查询自带的 [timeout:180] 对齐），失败后退避重试。
+    退避是**指数**的：BACKOFF_BASE * 2 ** (attempt - 1)，封顶 BACKOFF_MAX。
+    当前参数下曲线是 10 秒 → 20 秒 → 40 秒（上限 60 秒），
+    MAX_ATTEMPTS = 3 时实际用到的间隔是 10 秒与 20 秒。
     换端点之前会打印进度。实测 roads 的 `out count` 单是计数就要 41.5 秒，
     30 秒的读超时对 roads 数据集是必然失败的。
+  * 端点列表默认是若干公开实例（DEFAULT_ENDPOINTS，可以自行补充）。
+    本机链路不同时，用环境变量 OVERPASS_ENDPOINTS 覆盖它 —— 逗号分隔的
+    URL 列表，给了就用它替代默认列表；空值或全是非法值时回落到默认列表。
+    命令行 --endpoint 优先级最高（只用它给的那一个）。
 
 用法：
     cd backend-python
@@ -21,6 +33,8 @@
         --endpoint https://overpass-api.de/api/interpreter \
         --bbox 39.905,116.380,39.925,116.420 \
         --out-dir geojson
+    OVERPASS_ENDPOINTS=https://a.example/api/interpreter,https://b.example/api/interpreter \
+        ./.venv/Scripts/python.exe scripts/fetch_osm_data.py
 
 输出数据的版权：OSM 数据遵循 ODbL，界面或文档里展示它时必须标注
 "© OpenStreetMap contributors"。
@@ -46,6 +60,9 @@ DEFAULT_ENDPOINTS = [
     "https://overpass.kumi.systems/api/interpreter",
     "https://overpass.osm.ch/api/interpreter",
 ]
+# 默认列表只是若干公开实例，可以自行补充；本机链路不同时用环境变量覆盖。
+# 环境变量名：逗号分隔的端点 URL 列表。给了就替代默认列表。
+ENDPOINTS_ENV_VAR = "OVERPASS_ENDPOINTS"
 
 # 抓取范围：south, west, north, east = 39.905,116.380,39.925,116.420，
 # 即北京天安门周边约 4 km × 2 km。前端不再默认带 bbox 请求（见 Plan 011），
@@ -58,7 +75,17 @@ DEFAULT_BBOX = (39.905, 116.380, 39.925, 116.420)
 # 带几何的完整查询更久 —— 30 秒的读超时对 roads 数据集是必然失败的。
 HTTP_TIMEOUT = 180  # 秒
 MAX_ATTEMPTS = 3  # 每个端点最多试 3 次
-BACKOFF_SECONDS = 10  # 每次重试前退避 10 秒
+
+# 指数退避：第 attempt 次失败后等 BACKOFF_BASE * 2 ** (attempt - 1) 秒，
+# 封顶 BACKOFF_MAX。当前参数下的曲线是 10 → 20 → 40（上限 60）秒；
+# MAX_ATTEMPTS = 3 时实际用到的间隔是 10 秒与 20 秒。
+BACKOFF_BASE = 10  # 秒，退避基数
+BACKOFF_MAX = 60  # 秒，退避上限
+
+# 健康探测：正式查询前的轻量检查。短超时（12 秒）+ 极小查询，
+# 探不通就立刻换下一个端点，不进入重试循环。
+PROBE_TIMEOUT = 12  # 秒
+PROBE_QUERY = "[out:json];node(1);out;"  # 按 id 取单个节点，最轻量的一条查询
 
 # 默认输出目录：<repo>/backend-python/geojson（本脚本位于 backend-python/scripts/）
 DEFAULT_OUT_DIR = Path(__file__).resolve().parent.parent / "geojson"
@@ -101,6 +128,15 @@ def build_query(kind: str, bbox) -> str:
 
 # ---------------------------------------------------------------- HTTP
 
+def _urlopen(request, timeout):
+    """唯一的出网口。单独抽一层是为了让测试能用桩替换它，不碰真实网络。"""
+    return urllib.request.urlopen(request, timeout=timeout)
+
+
+def _user_agent() -> str:
+    return "smart-city-fetch-osm-data/1.0 (stdlib urllib)"
+
+
 def request_json(endpoint: str, query: str, timeout: int = HTTP_TIMEOUT):
     """POST 一条 Overpass 查询，返回解析后的 JSON。"""
     payload = urllib.parse.urlencode({"data": query}).encode("utf-8")
@@ -109,25 +145,129 @@ def request_json(endpoint: str, query: str, timeout: int = HTTP_TIMEOUT):
         data=payload,
         headers={
             "Content-Type": "application/x-www-form-urlencoded",
-            "User-Agent": "smart-city-fetch-osm-data/1.0 (stdlib urllib)",
+            "User-Agent": _user_agent(),
         },
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
+    with _urlopen(request, timeout) as response:
         raw = response.read()
     return json.loads(raw.decode("utf-8"))
+
+
+# ---------------------------------------------------------------- 退避
+
+def backoff_delay(attempt: int) -> int:
+    """第 attempt 次失败之后的退避秒数。
+
+    指数退避：BACKOFF_BASE * 2 ** (attempt - 1)，封顶 BACKOFF_MAX。
+    当前参数下曲线是 10 → 20 → 40（上限 60）秒。
+    """
+    if attempt < 1:
+        attempt = 1
+    return min(BACKOFF_BASE * (2 ** (attempt - 1)), BACKOFF_MAX)
+
+
+# ---------------------------------------------------------------- 健康探测
+
+def probe_url(endpoint: str) -> str:
+    """健康探测用的 URL：GET <endpoint>?data=<极小查询>。
+
+    用 GET 打同一个 interpreter 地址（而不是同级的 /status 之类的旁路路径），
+    探测结果才真的预告「正式查询能不能走通」。
+    """
+    parts = urllib.parse.urlsplit(endpoint)
+    query = urllib.parse.urlencode({"data": PROBE_QUERY})
+    return urllib.parse.urlunsplit(
+        (parts.scheme, parts.netloc, parts.path, query, parts.fragment)
+    )
+
+
+def probe_endpoint(endpoint: str, timeout: int = PROBE_TIMEOUT) -> bool:
+    """短超时轻量探测端点是否可用。返回 True/False，不抛异常。
+
+    探不通（DNS 失败、连接被拒、超时、非 JSON 响应）一律算不可用，
+    调用方要立刻换下一个端点，不要为它进重试循环。
+    """
+    try:
+        request = urllib.request.Request(
+            probe_url(endpoint),
+            headers={"User-Agent": _user_agent()},
+            method="GET",
+        )
+        with _urlopen(request, timeout) as response:
+            raw = response.read()
+        json.loads(raw.decode("utf-8"))
+    except Exception as exc:  # noqa: BLE001 - 网络错误种类多，统一收敛
+        print(
+            f"[fetch_osm_data] probe failed, skipping endpoint: "
+            f"{endpoint} ({type(exc).__name__}: {exc})",
+            file=sys.stderr,
+        )
+        return False
+    return True
+
+
+# ---------------------------------------------------------------- 端点列表
+
+def _is_valid_endpoint(candidate: str) -> bool:
+    """只接受 http / https 的绝对 URL。"""
+    return candidate.startswith(("http://", "https://"))
+
+
+def endpoints_from_env(env=None) -> list:
+    """从环境变量 OVERPASS_ENDPOINTS 读端点列表。
+
+    逗号分隔的 URL 列表。返回空列表表示「没有可用的自定义端点」，
+    调用方据此回落到默认列表。非法条目（非 http/https URL）被丢掉，
+    并打印一行提示 —— 不是静默吞掉。
+    """
+    environ = os.environ if env is None else env
+    raw = environ.get(ENDPOINTS_ENV_VAR)
+    if raw is None:
+        return []
+    candidates = [part.strip() for part in raw.split(",")]
+    candidates = [part for part in candidates if part]
+    valid = [part for part in candidates if _is_valid_endpoint(part)]
+    for bad in (part for part in candidates if not _is_valid_endpoint(part)):
+        print(
+            f"[fetch_osm_data] ignoring invalid endpoint in {ENDPOINTS_ENV_VAR}: {bad!r}",
+            file=sys.stderr,
+        )
+    return valid
+
+
+def resolve_endpoints(explicit=None, env=None) -> list:
+    """决定这次用哪些端点。
+
+    优先级：命令行 --endpoint > 环境变量 OVERPASS_ENDPOINTS > 默认列表。
+    环境变量为空 / 全是非法值时回落到默认列表（不是空列表 ——
+    空列表会让抓取直接失败，没有退路）。
+    """
+    if explicit:
+        return [explicit]
+    from_env = endpoints_from_env(env)
+    if from_env:
+        return from_env
+    return list(DEFAULT_ENDPOINTS)
 
 
 def fetch_overpass(query: str, endpoints):
     """依次尝试端点，返回 (数据, 成功的端点)。全部失败则抛 FetchError。
 
+    每个端点分两步：先做健康探测（短超时），探不通就立刻换下一个 ——
+    **不进入重试循环**，不为死端点白等 3 × HTTP_TIMEOUT 秒。
+    探测通过的端点才进入正式查询的重试循环。
+
     HTTP 200 并不代表成功：Overpass 会在 "remark" 字段里报告运行时错误
-    （查询超时等），而区域性镜像（只收录本国数据的实例）会对本项目这个
-    北京 bbox 直接返回 0 个元素。两种情况都当成这次尝试失败，换下一个
+    （查询超时等），而只收录部分区域数据的实例会对本项目这个 bbox
+    直接返回 0 个元素。两种情况都当成这次尝试失败，换下一个
     端点继续；绝不把空结果当成有效数据写出去。
     """
     failures = []
     for endpoint in endpoints:
+        if not probe_endpoint(endpoint):
+            failures.append(f"  {endpoint} [probe] unreachable")
+            continue
         for attempt in range(1, MAX_ATTEMPTS + 1):
             try:
                 data = request_json(endpoint, query)
@@ -146,11 +286,12 @@ def fetch_overpass(query: str, endpoints):
                     file=sys.stderr,
                 )
                 if attempt < MAX_ATTEMPTS:
+                    delay = backoff_delay(attempt)
                     print(
-                        f"[fetch_osm_data] retrying in {BACKOFF_SECONDS}s ...",
+                        f"[fetch_osm_data] retrying in {delay}s ...",
                         file=sys.stderr,
                     )
-                    time.sleep(BACKOFF_SECONDS)
+                    time.sleep(delay)
                 continue
             print(f"[fetch_osm_data] using endpoint: {endpoint}")
             return data, endpoint
@@ -343,7 +484,8 @@ def parse_args(argv=None):
     parser.add_argument(
         "--endpoint",
         default=None,
-        help="只使用这一个 Overpass 端点（默认按顺序尝试内置列表）",
+        help="只使用这一个 Overpass 端点（优先级最高；不给就用环境变量 %s 或内置列表）"
+        % ENDPOINTS_ENV_VAR,
     )
     parser.add_argument(
         "--bbox",
@@ -367,12 +509,15 @@ def parse_args(argv=None):
 def main(argv=None) -> int:
     args = parse_args(argv)
     bbox = parse_bbox(args.bbox)
-    endpoints = [args.endpoint] if args.endpoint else list(DEFAULT_ENDPOINTS)
+    endpoints = resolve_endpoints(args.endpoint)
     out_dir = Path(args.out_dir)
     datasets = ["buildings", "roads"] if args.only is None else [args.only]
 
     print(f"[fetch_osm_data] bbox (south,west,north,east) = {bbox}")
     print(f"[fetch_osm_data] out-dir = {out_dir}")
+    print(f"[fetch_osm_data] endpoints ({len(endpoints)}):")
+    for endpoint in endpoints:
+        print(f"[fetch_osm_data]   - {endpoint}")
 
     written = []
     for kind in datasets:
