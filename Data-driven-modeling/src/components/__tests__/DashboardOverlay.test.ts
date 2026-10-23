@@ -113,8 +113,27 @@ describe('DashboardOverlay', () => {
     // 控制面板在通栏底栏里
     const bottom = wrapper.find('.dashboard-area-bottom')
     expect(bottom.find('.fake-control-panel').exists()).toBe(true)
-    // 左列只剩「核心指标」+「24 小时趋势」两块
+    // 左列只剩「核心指标」+ 趋势面板两块
     const left = wrapper.find('.dashboard-area-left')
     expect(left.findAll('.dc-panel')).toHaveLength(2)
+  })
+
+  it('puts the trend panel in the left column with both time views', async () => {
+    const wrapper = mount(DashboardOverlay, { props: { overview: overviewPayload() } })
+
+    const left = wrapper.find('.dashboard-area-left')
+    const trend = left.find('.dashboard-trend-panel')
+    expect(trend.exists()).toBe(true)
+    // 趋势面板：24 小时 / 日 两个视图
+    expect(trend.findAll('.dc-trend-view').map(button => button.text())).toEqual([
+      '24 小时',
+      '日',
+    ])
+    // 默认是 24 小时视图，标题说清楚看的是哪一段时间
+    expect(trend.find('.dc-panel-title').text()).toBe('24 小时趋势')
+
+    const daily = trend.findAll('.dc-trend-view').find(button => button.text() === '日')
+    await daily!.trigger('click')
+    expect(trend.find('.dc-panel-title').text()).toBe('逐日趋势')
   })
 })

@@ -159,6 +159,38 @@ HISTORY_PAYLOAD = [
 ]
 
 
+# 逐日历史（实测上游给的就是倒序 newest-first，且字段带 _24h 后缀）
+# 这两行是 2026-10-22 实测 cnemc 返回的原值。
+DAILY_HISTORY_PAYLOAD = [
+    {
+        "TimePoint": "/Date(1792598400000)/",
+        "TimePointStr": "22日",
+        "AQI": "50",
+        "PM2_5_24h": "26",
+        "PM10_24h": "50",
+        "O3_8h_24h": "62",
+        "NO2_24h": "31",
+        "SO2_24h": "3",
+        "CO_24h": "0.5",
+        "Quality": "良",
+        "CityCode": 110000,
+    },
+    {
+        "TimePoint": "/Date(1791561600000)/",
+        "TimePointStr": "10日",
+        "AQI": "93",
+        "PM2_5_24h": "46",
+        "PM10_24h": "84",
+        "O3_8h_24h": "151",
+        "NO2_24h": "31",
+        "SO2_24h": "4",
+        "CO_24h": "0.7",
+        "Quality": "良",
+        "CityCode": 110000,
+    },
+]
+
+
 class TestTimePoint:
     def test_parses_dotnet_date_format(self):
         # "/Date(1792558800000)/" —— .NET 的毫秒时间戳
@@ -269,6 +301,88 @@ class TestAirQualityHistory:
         monkeypatch.setattr(air_quality.http, "request_json", lambda url, **kwargs: [])
         with pytest.raises(SourceUnavailable):
             air_quality.fetch_history(110000)
+
+
+class TestAirQualityDailyHistory:
+    """逐日历史（14 天，日均值）。
+
+    字段名与逐小时**不一样**：逐日是 24 小时均值，字段都带 ``_24h``，
+    O3 是 ``O3_8h_24h``（8 小时最大值的日平均）。
+    """
+
+    def test_parse_daily_history_sorts_by_time(self):
+        # 夹具是**倒序**的（上游就是这样给的）→ 解析后必须按时间升序
+        rows = air_quality.parse_daily_history(DAILY_HISTORY_PAYLOAD)
+        assert len(rows) == 2
+        assert rows[0]["t"] < rows[1]["t"]
+        # 污染物是字符串，要转成数字
+        assert rows[1]["pm25"] == 26.0
+        assert rows[1]["co"] == 0.5
+        assert rows[1]["aqi"] == 50.0
+        # O3 的日均值走的是 O3_8h_24h 字段
+        assert rows[1]["o3"] == 62.0
+
+    def test_parse_daily_history_ignores_broken_rows(self):
+        rows = air_quality.parse_daily_history([{"TimePoint": "nope"}, "not a dict"])
+        assert rows == []
+
+    def test_parse_daily_history_accepts_the_iso_time_point(self):
+        # 两种 TimePoint 格式都要能解析（与逐小时历史同一套解析器）
+        rows = air_quality.parse_daily_history(
+            [{"TimePoint": "2026-10-22T00:00:00", "AQI": "50"}]
+        )
+        assert len(rows) == 1
+        assert rows[0]["t"] == "2026-10-21T16:00:00Z"
+
+    def test_fetch_daily_history_uses_post_with_empty_body(self, monkeypatch):
+        calls = []
+
+        def fake_request(url, **kwargs):
+            calls.append((url, kwargs.get("method"), kwargs.get("data"), kwargs.get("headers")))
+            return DAILY_HISTORY_PAYLOAD
+
+        monkeypatch.setattr(air_quality.http, "request_json", fake_request)
+
+        result = air_quality.fetch_daily_history(110000)
+
+        # 逐日接口同样必须 POST 且 body 为空对象；用 GET 会 404
+        assert calls[0][1] == "POST"
+        assert calls[0][2] == b"{}"
+        # cnemc 要求带 Referer
+        assert calls[0][3]["Referer"] == air_quality.BASE_URL + "/"
+        # 这一条只产序列，不产指标（指标带已经有逐小时的浓度了）
+        assert result.metrics == []
+        assert len(result.series) == 1
+        assert result.series[0].key == "aqi_daily"
+        assert len(result.series[0].points) == 2
+
+    def test_fetch_daily_history_points_carry_every_pollutant(self, monkeypatch):
+        monkeypatch.setattr(
+            air_quality.http, "request_json", lambda url, **kwargs: DAILY_HISTORY_PAYLOAD
+        )
+
+        result = air_quality.fetch_daily_history(110000)
+        point = result.series[0].points[-1]
+
+        # AQI 放在 v 里 —— 折线图组件不用改就能画
+        assert point.v == 50.0
+        # 各项污染物的日均值放在 values 里，键与指标 key 一致
+        assert point.values is not None
+        assert point.values["pm25"] == 26.0
+        assert point.values["pm10"] == 50.0
+        assert point.values["o3"] == 62.0
+        assert point.values["no2"] == 31.0
+        assert point.values["so2"] == 3.0
+        assert point.values["co"] == 0.5
+        # 来源标注：实测，不是估算；逐日数据按定义不是实时的
+        assert result.series[0].source.name == air_quality.DAILY_SOURCE_NAME
+        assert result.series[0].source.estimated is False
+        assert result.series[0].source.realtime is False
+
+    def test_empty_daily_history_raises_unavailable(self, monkeypatch):
+        monkeypatch.setattr(air_quality.http, "request_json", lambda url, **kwargs: [])
+        with pytest.raises(SourceUnavailable):
+            air_quality.fetch_daily_history(110000)
 
 
 # ---------------------------------------------------------------------------

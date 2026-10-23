@@ -1,6 +1,7 @@
 import type {
   CityOverview,
   DashboardBar,
+  DashboardLineMetric,
   DashboardMetricCard,
   DashboardSlice,
   DashboardTab,
@@ -55,6 +56,23 @@ const POLLUTANT_METRICS: Array<{ key: string; label: string }> = [
  * 环形图要比较各污染物的相对浓度，必须先统一到 μg/m³ 才能相加。
  */
 const POLLUTANT_UNIT_SCALE: Record<string, number> = { co: 1000 }
+
+/**
+ * 逐日趋势里可切换的指标（键 → 中文名 / 单位）。
+ *
+ * 键与后端逐日序列的点里 `values` 的键**完全一致**，
+ * 也与逐小时污染物的指标 key 一致（`pm25` / `pm10` / …）——
+ * 前端不重新实现任何分类规则，只是把后端给的键翻译成能显示的名字。
+ */
+const DAILY_TREND_METRICS: DashboardLineMetric[] = [
+  { key: 'aqi', label: 'AQI', unit: 'AQI' },
+  { key: 'pm25', label: 'PM2.5', unit: 'μg/m³' },
+  { key: 'pm10', label: 'PM10', unit: 'μg/m³' },
+  { key: 'o3', label: 'O3', unit: 'μg/m³' },
+  { key: 'no2', label: 'NO2', unit: 'μg/m³' },
+  { key: 'so2', label: 'SO2', unit: 'μg/m³' },
+  { key: 'co', label: 'CO', unit: 'mg/m³' },
+]
 
 /**
  * 设施分类的**兜底标题**。
@@ -282,15 +300,28 @@ function facilityDonut(ctx: ResolveContext): TabView['donut'] {
   }
 }
 
-/** 24 小时 AQI 折线。序列取不到时是空数组（界面显示空态）。 */
+/**
+ * 趋势折线：24 小时 AQI + 逐日 AQI（带各项污染物的日均值）。
+ *
+ * 两条序列来自后端的**两条不同序列**（`aqi_24h` / `aqi_daily`），
+ * 各自带自己的来源标注。取不到时是空数组（界面显示空态，不编数字）。
+ */
 function aqiLine(ctx: ResolveContext): TabView['line'] {
   const series = ctx.series.get('aqi_24h')
   const points: SeriesPoint[] = Array.isArray(series?.points) ? series.points : []
+  const dailySeries = ctx.series.get('aqi_daily')
+  const daily: SeriesPoint[] = Array.isArray(dailySeries?.points)
+    ? dailySeries.points
+    : []
   return {
     points,
+    daily,
+    dailyMetrics: DAILY_TREND_METRICS,
     unit: series?.unit,
     source: series?.source ?? null,
     emptyText: '暂无 24 小时 AQI 数据',
+    dailySource: dailySeries?.source ?? null,
+    dailyEmptyText: '暂无逐日 AQI 数据',
   }
 }
 

@@ -104,6 +104,24 @@ const overviewPayload = (): CityOverview => ({
       ],
       source: SOURCE_AIR,
     },
+    {
+      key: 'aqi_daily',
+      label: '逐日 AQI',
+      unit: 'AQI',
+      points: [
+        {
+          t: '2026-10-20T16:00:00Z',
+          v: 27,
+          values: { pm25: 12, pm10: 30, o3: 80, no2: 25, so2: 3, co: 0.4 },
+        },
+        {
+          t: '2026-10-21T16:00:00Z',
+          v: 29,
+          values: { pm25: 18, pm10: 38, o3: 70, no2: 28, so2: 3, co: 0.4 },
+        },
+      ],
+      source: SOURCE_AIR,
+    },
   ],
   facilities: [
     { key: 'medical', label: '医疗设施', count: 24, criteria: ['building=hospital'], source: SOURCE_FACILITIES },
@@ -262,6 +280,55 @@ describe('resolveTabView', () => {
   it('falls back to the overview view for an unknown tab', () => {
     const view = resolveTabView({ key: 'nope', label: '未知' }, overviewPayload())
     expect(view.metrics.map(card => card.key)).toContain('building_count')
+  })
+})
+
+describe('resolveTabView 的趋势序列', () => {
+  it('exposes the daily series next to the 24 hour one', () => {
+    const view = resolveTabViewByKey('overview', overviewPayload())
+
+    // 24 小时视图不变
+    expect(view.line.points).toHaveLength(3)
+    expect(view.line.points[0]?.v).toBe(30)
+    expect(view.line.emptyText).toBe('暂无 24 小时 AQI 数据')
+
+    // 逐日视图：形状与 points 对称，v 是当天 AQI，values 是污染物日均值
+    expect(view.line.daily).toHaveLength(2)
+    expect(view.line.daily[0]?.v).toBe(27)
+    expect(view.line.daily[0]?.values?.pm25).toBe(12)
+    expect(view.line.daily[0]?.values?.co).toBe(0.4)
+    expect(view.line.dailyEmptyText).toBe('暂无逐日 AQI 数据')
+    expect(view.line.dailySource?.name).toBe(SOURCE_AIR.name)
+  })
+
+  it('lists the daily metrics the trend panel can switch between', () => {
+    const view = resolveTabViewByKey('overview', overviewPayload())
+
+    expect(view.line.dailyMetrics.map(metric => metric.key)).toEqual([
+      'aqi',
+      'pm25',
+      'pm10',
+      'o3',
+      'no2',
+      'so2',
+      'co',
+    ])
+    // CO 是 mg/m³，其余是 μg/m³（cnemc 的口径）
+    expect(view.line.dailyMetrics.find(metric => metric.key === 'co')?.unit).toBe('mg/m³')
+    expect(view.line.dailyMetrics.find(metric => metric.key === 'pm25')?.unit).toBe('μg/m³')
+  })
+
+  it('leaves the daily series empty when the source is degraded', () => {
+    const overview = overviewPayload()
+    overview.series = overview.series.filter(series => series.key !== 'aqi_daily')
+
+    const view = resolveTabViewByKey('overview', overview)
+
+    // 空数组，不许编数字，也不许拿 24 小时的数据顶替
+    expect(view.line.daily).toEqual([])
+    expect(view.line.dailySource).toBeNull()
+    // 24 小时视图照常
+    expect(view.line.points).toHaveLength(3)
   })
 })
 
