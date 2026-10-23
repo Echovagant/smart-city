@@ -131,7 +131,9 @@ jobs:
         run: npm ci
 
       - name: 跑两套测试（verify.sh）
-        run: sh verify.sh
+        # 用 bash 跑：verify.sh 用了 `set -o pipefail`（bash 扩展），
+        # 而 Ubuntu 上 /bin/sh 是 dash，不支持这个选项。
+        run: bash verify.sh
 
       - name: 前端 lint
         working-directory: Data-driven-modeling

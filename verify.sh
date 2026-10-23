@@ -9,6 +9,15 @@
 # 并打印失败的是哪一个。脚本不会启动任何服务，也不会安装任何依赖。
 #
 # 用法：./verify.sh
+#
+# **必须用 bash 跑**：下面第 13 行的 `set -o pipefail` 是 bash 扩展，
+# dash（Ubuntu 上的 /bin/sh）不认它，会报 "Illegal option -o pipefail"。
+# 所以这里先自检：不是 bash 就用 bash 重新执行自己，
+# 这样 `sh verify.sh` 这种调用方式也不会炸（CI 里就踩过这个坑）。
+
+if [ -z "${BASH_VERSION:-}" ]; then
+    exec bash "$0" "$@"
+fi
 
 set -uo pipefail
 
