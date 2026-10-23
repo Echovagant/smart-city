@@ -21,7 +21,6 @@ interface ThemeControllerMock {
   overrides: { value: ThemeOverrides }
   theme: { value: ThemeDefinition }
 }
-
 const themeMock = vi.hoisted(() => ({
   setTheme: vi.fn(),
   setOverride: vi.fn(),
@@ -32,32 +31,32 @@ const themeMock = vi.hoisted(() => ({
 vi.mock('@/composables/useTheme', async () => {
   const { computed, ref } = await import('vue')
   const { resolveTheme } = await import('@/theme/themes')
-  return {
-    useTheme: () => {
-      const themeId = ref('deep-space')
-      const overrides = ref<ThemeOverrides>({})
-      const theme = computed(() => resolveTheme(themeId.value, overrides.value))
-      const controller = {
-        themeId,
-        overrides,
-        theme,
-        setTheme: (id: string) => {
-          themeMock.setTheme(id)
-          themeId.value = id
-        },
-        setOverride: (key: keyof ThemeOverrides, value: string | number | undefined) => {
-          themeMock.setOverride(key, value)
-          overrides.value = { ...overrides.value, [key]: value }
-        },
-        resetOverrides: () => {
-          themeMock.resetOverrides()
-          overrides.value = {}
-        },
-      }
-      themeMock.controller = controller as unknown as ThemeControllerMock
-      return controller
+  // **模块级单例**：真实的 useTheme 就是单例 —— 生产里有三个调用点
+  // （SmartCity / useSceneLinkageEffect / useEventMarkers），共用同一份状态。
+  // mock 若每次调用新建一份，测试改到的那份就不是组件在 watch 的那份 →
+  // watcher 收不到通知，断言「换主题后重新换色」会假失败。
+  const themeId = ref('deep-space')
+  const overrides = ref<ThemeOverrides>({})
+  const theme = computed(() => resolveTheme(themeId.value, overrides.value))
+  const controller = {
+    themeId,
+    overrides,
+    theme,
+    setTheme: (id: string) => {
+      themeMock.setTheme(id)
+      themeId.value = id
+    },
+    setOverride: (key: keyof ThemeOverrides, value: string | number | undefined) => {
+      themeMock.setOverride(key, value)
+      overrides.value = { ...overrides.value, [key]: value }
+    },
+    resetOverrides: () => {
+      themeMock.resetOverrides()
+      overrides.value = {}
     },
   }
+  themeMock.controller = controller as unknown as ThemeControllerMock
+  return { useTheme: () => controller }
 })
 
 /** 假场景底座：`applyTheme` 是这次要盯的那根线。 */
@@ -128,7 +127,13 @@ const originalFetch = globalThis.fetch
 
 beforeEach(() => {
   vi.clearAllMocks()
-  themeMock.controller = null
+  // 复位**单例的状态**，而不是把 controller 置空 ——
+  // mock 里只有这一份，置空就等于把测试与组件之间的联系切断了。
+  const controller = themeMock.controller
+  if (controller) {
+    controller.themeId.value = 'deep-space'
+    controller.overrides.value = {}
+  }
   installFetch()
 })
 

@@ -1232,8 +1232,9 @@ describe('深色底座', () => {
 
     const added = mockViewerOf(wrapper).scene.primitives.add.mock.calls.map(([p]) => p)
     // 网格是那条 alpha 0.15 的 PolylineGlow（建筑描边是主强调蓝、alpha 1）
+    // 网格色取 **符号引用**：色板已改成读当前主题，写死十六进制会在换主题后失效。
     const grid = added.find(
-      (p) => p.appearance?.material?.uniforms?.color?.name === '#3b82f6'
+      (p) => p.appearance?.material?.uniforms?.color?.name === DARK_PALETTE.secondary
     )
     expect(grid).toBeDefined()
 
@@ -1269,7 +1270,7 @@ describe('深色底座', () => {
     const flow = added.find((p) => p.appearance?.material?.type === 'PolylineDash')
     expect(flow).toBeDefined()
     expect(flow!.appearance.material.uniforms.dashLength).toBe(24)
-    expect(flow!.appearance.material.uniforms.color?.name).toBe('#22d3ee')
+    expect(flow!.appearance.material.uniforms.color?.name).toBe(DARK_PALETTE.flow)
     // 流动层与道路同宽（主干道 14），盖得住路面
     expect(flow!.geometryInstances[0].geometry.width).toBe(14)
 
@@ -1293,7 +1294,8 @@ describe('深色底座', () => {
     wrapper.vm.roads = { type: 'FeatureCollection', features: [] }
     await wrapper.vm.loadGeoJSONRoads()
 
-    expect(plaza.polygon.material?.name).toBe('#0d1a2e')
+    // 广场材质取**符号引用**：色板随主题变，写死十六进制会在换主题后失效。
+    expect(plaza.polygon.material?.name).toBe(DARK_PALETTE.panel)
 
     wrapper.unmount()
   })

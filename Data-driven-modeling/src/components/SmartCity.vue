@@ -125,7 +125,6 @@ import DashboardOverlay from './DashboardOverlay.vue'
 import ThemePicker from './dashboard/ThemePicker.vue'
 import { applyThemeVariables, resolveTrafficTone } from '@/theme/dark'
 import type { TrafficTone } from '@/theme/dark'
-import type { ThemeDefinition } from '@/theme/themes/types'
 import type { Metric } from '../../types/city'
 
 /**
@@ -199,20 +198,12 @@ const { theme } = useTheme()
 const themePanelOpen = ref(false)
 
 /**
- * 场景底座上的换色入口（`applyTheme`：只改材质 uniform / Property 的值，不重建几何）。
+ * 主题变了就换色。immediate：**首次挂载也要应用一次**（场景刚建好时配色已经是对的）。
  *
- * 这里**按运行时有没有这个方法**判断，而不是把它写死进类型：
- * 底座还没提供换色入口时大屏照常跑，方法到位后自动接管。
+ * `stage.applyTheme` 只改材质 uniform 与 Property 的**值**，不重建任何几何
+ * （3854 栋楼 / 2260 条路的 Primitive 与实体都不动）—— 这是切主题不卡的前提。
  */
-const applyThemeToScene = (next: ThemeDefinition): void => {
-  const target = stage as unknown as Record<string, unknown>
-  const applier = target.applyTheme
-  if (typeof applier !== 'function') return
-  Reflect.apply(applier, target, [next])
-}
-
-// 主题变了就换色。immediate：**首次挂载也要应用一次**（场景刚建好时配色已经是对的）。
-watch(theme, next => applyThemeToScene(next), { immediate: true })
+watch(theme, next => stage.applyTheme(next), { immediate: true })
 
 // 相机机位：自转状态（cameraOrbit）归它管。
 const camera = useCameraRig({ viewer, state, primitives: stage.primitives })
