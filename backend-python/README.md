@@ -627,7 +627,7 @@ node scripts\measure-browser-performance.mjs
 | 指标 | 验收线 | 实测 | 判定 |
 |---|---|---|---|
 | 后端覆盖率（`main.py` + `data_processor.py` + `city_data/`） | > 90% | **95%**（1372 条语句 / 73 条未覆盖；`main.py` 97%、`data_processor.py` 89%） | 达标 |
-| 前端覆盖率（`src/**` 全口径） | > 80% | **97.86%** 语句、95.94% 函数、88.51% 分支 | 达标 |
+| 前端覆盖率（`src/**` 全口径） | > 80% | **97.86%** 语句、95.94% 函数、**88.5%** 分支 | 达标 |
 | `/api/buildings`（全量）P95 | < 200 ms | **25.4 ms**（gzip 24.6 ms；中位数 4.3 ms） | 达标 |
 | `/api/roads`（全量）P95 | < 200 ms | **27.8 ms**（gzip 21.2 ms；中位数 3.4 ms） | 达标 |
 | 带 bbox 的路径 P95 | < 200 ms | **132.1 ms**（gzip 162.7 ms） | 达标 |
