@@ -302,7 +302,14 @@ onMounted(() => {
 .dashboard-bottom-actions {
   flex: 0 0 320px;
   min-width: 0;
-  overflow: hidden;
+  /* 主题面板是浮在控制面板上方的浮层：这里不能裁（overflow: hidden 会把它切掉）。
+     面板自身有 max-height + 内部滚动，不会溢出视口。 */
+  overflow: visible;
+}
+
+/* 底栏卡片的内层容器同理：主题面板要能浮出卡片上沿。 */
+.dashboard-resources-panel :deep(.dc-panel-body) {
+  overflow: visible;
 }
 
 .dashboard-metric-grid {

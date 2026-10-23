@@ -55,35 +55,55 @@
         </div>
       </template>
 
-      <!-- 底栏右侧：控制面板（4 个按钮 + OSM 署名 + 加载/错误横幅）。
+      <!-- 底栏右侧：控制面板（4 个按钮 + 主题入口 + OSM 署名 + 加载/错误横幅）。
            类名与行为都不变，只是位置搬进了通栏底栏。 -->
       <template #bottom-right>
-        <div class="control-panel">
-          <!-- 数据加载状态 / 后端错误提示：后端挂了必须看得见，不能只剩一个空地球。
-               横幅要等「数据到位 **且** 建筑/道路都挂进场景」才消失 ——
-               这一刻才是城市真的画出来了（不只是 API 回来了）。 -->
-          <div v-if="loading || !sceneAssembled" class="status-hint">正在加载城市数据…</div>
-          <div v-if="error" class="status-error">
-            数据加载失败：{{ error.message }}<span v-if="error.status">（状态码 {{ error.status }}）</span>
+        <!-- 外层壳：主题面板浮在它上方（壳是它的定位参照）。
+             主题面板**不在 .control-panel 里** —— 那样它自己的按钮会混进
+             控制面板的按钮集合，DOM 契约就不稳了。 -->
+        <div class="control-panel-shell">
+          <div class="control-panel">
+            <!-- 数据加载状态 / 后端错误提示：后端挂了必须看得见，不能只剩一个空地球。
+                 横幅要等「数据到位 **且** 建筑/道路都挂进场景」才消失 ——
+                 这一刻才是城市真的画出来了（不只是 API 回来了）。 -->
+            <div v-if="loading || !sceneAssembled" class="status-hint">正在加载城市数据…</div>
+            <div v-if="error" class="status-error">
+              数据加载失败：{{ error.message }}<span v-if="error.status">（状态码 {{ error.status }}）</span>
+            </div>
+
+            <div class="control-panel-actions">
+              <button @click="toggleBuildings">
+                {{ state.buildingVisible ? '隐藏建筑' : '显示建筑' }}
+              </button>
+              <button @click="toggleRoads">
+                {{ state.roadVisible ? '隐藏道路' : '显示道路' }}
+              </button>
+              <button @click="toggleTraffic">
+                {{ state.trafficVisible ? '停止交通' : '启动交通' }}
+              </button>
+              <button @click="toggleView">
+                {{ state.viewMode === 'overhead' ? '切换平视' : '切换鸟瞰' }}
+              </button>
+            </div>
+
+            <!-- 主题入口：展开 / 收起主题面板。
+                 当前主题名直接写在按钮上 —— 不点开也知道现在用的是哪一套。 -->
+            <button
+              type="button"
+              class="control-panel-theme"
+              :class="{ 'is-open': themePanelOpen }"
+              :aria-expanded="themePanelOpen"
+              @click="themePanelOpen = !themePanelOpen"
+            >
+              主题 · {{ theme.label }}
+            </button>
+
+            <!-- OSM 数据遵循 ODbL：展示这份数据必须署名。删掉这一行等于违反许可证。 -->
+            <div class="attribution">数据 © OpenStreetMap contributors</div>
           </div>
 
-          <div class="control-panel-actions">
-            <button @click="toggleBuildings">
-              {{ state.buildingVisible ? '隐藏建筑' : '显示建筑' }}
-            </button>
-            <button @click="toggleRoads">
-              {{ state.roadVisible ? '隐藏道路' : '显示道路' }}
-            </button>
-            <button @click="toggleTraffic">
-              {{ state.trafficVisible ? '停止交通' : '启动交通' }}
-            </button>
-            <button @click="toggleView">
-              {{ state.viewMode === 'overhead' ? '切换平视' : '切换鸟瞰' }}
-            </button>
-          </div>
-
-          <!-- OSM 数据遵循 ODbL：展示这份数据必须署名。删掉这一行等于违反许可证。 -->
-          <div class="attribution">数据 © OpenStreetMap contributors</div>
+          <!-- 主题面板：3 套默认主题 + 自选色 / 辉光 / 不透明度 -->
+          <ThemePicker v-if="themePanelOpen" />
         </div>
       </template>
     </DashboardOverlay>
@@ -99,10 +119,13 @@ import { useCameraRig } from '@/composables/useCameraRig'
 import { useEventMarkers } from '@/composables/useEventMarkers'
 import { useSceneLinkageEffect } from '@/composables/useSceneLinkageEffect'
 import { useSceneStage, computeExtent, nextPaint } from '@/composables/useSceneStage'
+import { useTheme } from '@/composables/useTheme'
 import { useTrafficFleet } from '@/composables/useTrafficFleet'
 import DashboardOverlay from './DashboardOverlay.vue'
+import ThemePicker from './dashboard/ThemePicker.vue'
 import { applyThemeVariables, resolveTrafficTone } from '@/theme/dark'
 import type { TrafficTone } from '@/theme/dark'
+import type { ThemeDefinition } from '@/theme/themes/types'
 import type { Metric } from '../../types/city'
 
 /**
@@ -160,6 +183,36 @@ const { activeTabKey } = useDashboardState()
 const stage = useSceneStage({ container: cesiumContainer, buildings, roads })
 const { viewer, state } = stage
 const { toggleBuildings, toggleRoads, loadGeoJSONBuildings, loadGeoJSONRoads } = stage
+
+/* ---------------------------------------------------------------------------
+ * 主题 → 场景换色
+ * ------------------------------------------------------------------------- */
+
+/**
+ * 当前主题（主题 + 用户覆盖的解析结果）。
+ *
+ * 状态是**模块级单例**（`useTheme`），所以大屏面板与 3D 场景看到的是同一份。
+ */
+const { theme } = useTheme()
+
+/** 主题面板是否展开。展开状态是纯界面状态，留在组件里。 */
+const themePanelOpen = ref(false)
+
+/**
+ * 场景底座上的换色入口（`applyTheme`：只改材质 uniform / Property 的值，不重建几何）。
+ *
+ * 这里**按运行时有没有这个方法**判断，而不是把它写死进类型：
+ * 底座还没提供换色入口时大屏照常跑，方法到位后自动接管。
+ */
+const applyThemeToScene = (next: ThemeDefinition): void => {
+  const target = stage as unknown as Record<string, unknown>
+  const applier = target.applyTheme
+  if (typeof applier !== 'function') return
+  Reflect.apply(applier, target, [next])
+}
+
+// 主题变了就换色。immediate：**首次挂载也要应用一次**（场景刚建好时配色已经是对的）。
+watch(theme, next => applyThemeToScene(next), { immediate: true })
 
 // 相机机位：自转状态（cameraOrbit）归它管。
 const camera = useCameraRig({ viewer, state, primitives: stage.primitives })
@@ -528,6 +581,15 @@ onUnmounted(() => {
   height: 100%;
 }
 
+/* 控制面板的外层壳：主题面板浮在它上方（壳是它的定位参照）。
+   壳只是定位与尺寸的容器，不改变面板本身的视觉。 */
+.control-panel-shell {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
 /* 控制面板：现在是**通栏底栏右侧**的一块（不是独立浮层）。
    外框由底栏那张卡片提供，这里只留内容 —— 免得「框里套框」。 */
 .control-panel {
@@ -546,6 +608,13 @@ onUnmounted(() => {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px;
+}
+
+/* 主题入口按钮：和其它控制按钮同一套视觉。
+   展开时加一道左侧标记条 —— 选中态不只靠颜色传达。 */
+.control-panel-theme.is-open {
+  border-color: var(--dc-flow, #0e7490);
+  box-shadow: inset 2px 0 0 var(--dc-flow, #0e7490);
 }
 
 .control-panel button {

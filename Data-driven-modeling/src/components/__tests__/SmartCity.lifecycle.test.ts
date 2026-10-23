@@ -16,6 +16,31 @@ import type {
 } from '../../../types/city'
 import { DEFAULT_TAB_KEY, useDashboardState } from '@/composables/useDashboardState'
 import { BUILDING_GLOW_DIMMED, DARK_PALETTE, FLOW_HIGHLIGHT } from '@/theme/dark'
+import type { ThemeOverrides } from '@/theme/themes/types'
+
+// 主题状态换成假实现：大屏骨架的 DOM 契约只关心「有没有主题入口」，
+// 不该依赖主题模块的具体行为（持久化、CSS 变量写入那些各有各的用例）。
+vi.mock('@/composables/useTheme', async () => {
+  const { computed, ref } = await import('vue')
+  const { resolveTheme } = await import('@/theme/themes')
+  return {
+    useTheme: () => {
+      const themeId = ref('deep-space')
+      const overrides = ref<ThemeOverrides>({})
+      const theme = computed(() => resolveTheme(themeId.value, overrides.value))
+      return {
+        themeId,
+        overrides,
+        theme,
+        setTheme: (id: string) => {
+          themeId.value = id
+        },
+        setOverride: () => undefined,
+        resetOverrides: () => undefined,
+      }
+    },
+  }
+})
 
 // 记录 Cesium mock 的关键调用，供"行为断言"使用。
 // vi.hoisted 让这个对象在 vi.mock 工厂（会被提升到 import 之前）里可用。
@@ -846,7 +871,8 @@ describe('SmartCity behaviour', () => {
   it('drives the toggles from the control-panel buttons', async () => {
     const wrapper = mountSmartCity()
     const buttons = wrapper.findAll('.control-panel button')
-    expect(buttons).toHaveLength(4)
+    // 4 个开关按钮 + 1 个主题入口（主题面板自己的按钮不在这个集合里）
+    expect(buttons).toHaveLength(5)
 
     // 建筑
     expect(buttons[0].text()).toBe('隐藏建筑')
@@ -868,6 +894,14 @@ describe('SmartCity behaviour', () => {
     await buttons[3].trigger('click')
     expect(wrapper.vm.state.viewMode).toBe('street')
     expect(buttons[3].text()).toBe('切换鸟瞰')
+
+    // 主题入口：展开 / 收起主题面板（默认收起）
+    expect(buttons[4].text()).toContain('主题')
+    expect(wrapper.find('.dc-theme-picker').exists()).toBe(false)
+    await buttons[4].trigger('click')
+    expect(wrapper.find('.dc-theme-picker').exists()).toBe(true)
+    // 面板展开后控制面板的按钮集合不变
+    expect(wrapper.findAll('.control-panel button')).toHaveLength(5)
 
     wrapper.unmount()
   })
@@ -1493,7 +1527,7 @@ describe('大屏骨架的 DOM 契约', () => {
       return Promise.resolve(jsonResponse({ type: 'FeatureCollection', features: [] }))
     })
 
-  it('keeps the control panel, its four buttons, the traffic row and the attribution', async () => {
+  it('keeps the control panel, its buttons, the traffic row and the attribution', async () => {
     installFetch(stubWithOverview())
 
     const wrapper = mountSmartCity()
@@ -1501,16 +1535,18 @@ describe('大屏骨架的 DOM 契约', () => {
       expect(wrapper.find('.metric-strip').exists()).toBe(true)
     })
 
-    // 1) 控制面板 + 4 个按钮（位置搬进了通栏底栏，类名与行为不变）
+    // 1) 控制面板 + 4 个开关按钮 + 1 个主题入口（位置搬进了通栏底栏，类名与行为不变）
     const panel = wrapper.find('.control-panel')
     expect(panel.exists()).toBe(true)
     const buttons = panel.findAll('button')
-    expect(buttons).toHaveLength(4)
+    expect(buttons).toHaveLength(5)
     expect(buttons.map(button => button.text())).toEqual([
       '隐藏建筑',
       '隐藏道路',
       '停止交通',
       '切换平视',
+      // 主题入口：按钮上直接写着当前主题名
+      expect.stringContaining('主题'),
     ])
 
     // 2) 实时交通读数
@@ -1538,10 +1574,10 @@ describe('大屏骨架的 DOM 契约', () => {
     expect(top.find('.metric-strip').exists()).toBe(true)
     expect(top.find('.traffic-status').exists()).toBe(true)
 
-    // 控制面板（4 个按钮 + OSM 署名）在通栏底栏右侧
+    // 控制面板（4 个开关按钮 + 1 个主题入口 + OSM 署名）在通栏底栏右侧
     const bottom = wrapper.find('.dashboard-area-bottom')
     expect(bottom.find('.control-panel').exists()).toBe(true)
-    expect(bottom.findAll('.control-panel button')).toHaveLength(4)
+    expect(bottom.findAll('.control-panel button')).toHaveLength(5)
     expect(bottom.text()).toContain('OpenStreetMap contributors')
 
     // 左列只剩「核心指标」+「24 小时趋势」两块（风格板线框的「左列两卡」）
