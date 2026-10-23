@@ -359,15 +359,20 @@ const installFetch = (stub: unknown) => {
   globalThis.fetch = stub as typeof fetch
 }
 
-// 组件源码只用于一处断言：Viewer 构造选项（见 plan 013 Step 2）。
+// 源码文本只用于一处断言：Viewer 构造选项（见 plan 013 Step 2）。
 // 构造函数选项没法从 mock 里观察得到，只能限定在选项块内做文本断言。
+//
+// **断言的对象是场景底座，不是组件**：场景层拆成 composable 之后，
+// `new Cesium.Viewer(...)` 跟着「Cesium 初始化」一起搬进了
+// `src/composables/useSceneStage.ts`（拆分前它在 SmartCity.vue 里）。
+// 断言的内容与强度一个字没变，只是被读的源文件换了。
 //
 // 路径解析不能用 `new URL('../SmartCity.vue', import.meta.url)`：jsdom 的全局 URL
 // 不把 file: 当特殊协议，相对路径会被解析成 http://localhost:3000/...，
 // fileURLToPath 随即抛 "The URL must be of scheme file"。
 // 直接对 import.meta.url 本身做 fileURLToPath 可绕开。
-const componentSource = readFileSync(
-  resolve(dirname(fileURLToPath(import.meta.url)), '../SmartCity.vue'),
+const viewerSource = readFileSync(
+  resolve(dirname(fileURLToPath(import.meta.url)), '../../composables/useSceneStage.ts'),
   'utf-8',
 )
 
@@ -685,7 +690,7 @@ describe('SmartCity behaviour', () => {
 
   it('configures no imagery provider and never touches Cesium.Ion', () => {
     // 构造函数选项从 mock 里观察不到，只能把断言限定在 Viewer 的 options 块内
-    const options = extractViewerOptions(componentSource)
+    const options = extractViewerOptions(viewerSource)
     expect(options).not.toBeNull()
     // baseLayerPicker 不禁用 → 默认构造 BaseLayerPickerViewModel → Bing Maps Aerial
     // → IonImageryProvider.fromAssetId(2) → api.cesium.com 401
@@ -711,7 +716,7 @@ describe('SmartCity behaviour', () => {
   it('disables the Cesium default widgets that clash with the dark board', () => {
     // 深色大屏上，Cesium 默认的浅色圆角按钮（home / 地球 / ?）与 NavigationHelp
     // 说明板是破功的：纯黑背景上尤其扎眼。全部关掉。
-    const options = extractViewerOptions(componentSource)
+    const options = extractViewerOptions(viewerSource)
     expect(options).not.toBeNull()
     expect(options).toMatch(/\bhomeButton:\s*false\b/)
     expect(options).toMatch(/\bsceneModePicker:\s*false\b/)
