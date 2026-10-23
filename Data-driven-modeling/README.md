@@ -45,7 +45,7 @@ npm run dev                             # http://localhost:5173/
 | `npm run lint:fix` | ESLint 修复版（会改文件，按需使用） |
 | `npm run typecheck` | `vue-tsc --noEmit` 类型检查（CI 里是**阻塞门禁**） |
 | `npm run format` | Prettier 格式化 `src/` |
-| `npm test -- --run` | 单次跑完测试（18 个文件 / **232 个用例**，全部是 `.ts`） |
+| `npm test -- --run` | 单次跑完测试（20 个文件 / **279 个用例**，全部是 `.ts`） |
 | `npm run test:run` | 同上，等价写法 |
 | `npm run test:coverage` | 跑测试并出覆盖率报告（v8 provider）；报告默认落在 `coverage/`（已 gitignore），要放到仓库外设 `COVERAGE_DIR` |
 | `npm test` | ⚠️ **watch 模式**，不会自己退出；脚本里不要用 |
@@ -73,22 +73,20 @@ vue-tsc ^3.3.13（实装 3.3.13）、typescript-eslint ^8.72.0（实装 8.72.0�
 
 > 覆盖率 `include` 写在 `vite.config.js` 里（`src/**/*.{js,ts,vue}`），**迁到 TypeScript
 > 之后要记得复查它** —— 原先只写了 `.{js,vue}`，源码全迁成 `.ts` 之后报告里就只剩 `.vue`
-> 了，看着漂亮、实际统计的是子集。当前全口径：语句 **97.86%**、函数 **95.94%**、分支 **88.5%**
+> 了，看着漂亮、实际统计的是子集。当前全口径：语句 **98.03%**、函数 **96.44%**、分支 **89.6%**
 > （含 `src/theme/dark.ts` 与 `src/theme/dashboard.ts`）。
 >
-> 分支率为什么只写一位小数：同一份代码两次实测是 **88.51%** 与 **88.64%** ——
-> 差别全部来自 `src/theme/dark.ts` 里 `flowDashLength()` 的那个三元分支
-> （`phase < 0.5 ? … : …`）：它按 `performance.now()` 取相位，
-> 测到哪一边取决于测试跑的那一刻，所以那一行有时覆盖到、有时没覆盖到。
-> 语句与函数两项是稳定的。
+> 分支率的尾数会轻微浮动：`src/theme/dark.ts` 里 `flowDashLength()` 的那个三元分支
+> （`phase < 0.5 ? … : …`）按 `performance.now()` 取相位，测到哪一边取决于测试跑的那一刻，
+> 所以那一行有时覆盖到、有时没覆盖到。语句与函数两项是稳定的。
 
 ## 关键文件
 
 | 文件 | 作用 |
 |---|---|
 | `src/components/SmartCity.vue` | **装配层**：把场景 composable、数据轮询与大屏骨架接起来（Cesium 逻辑已全部下沉到 `src/composables/`） |
-| `src/components/DashboardOverlay.vue` | **16:9 大屏骨架**：CSS Grid（顶栏 / 左列 / 中心场景 / 右列 / 底栏），面板浮在场景之上；overlay 容器 `pointer-events: none`，只有面板 `auto`；把「点了一条事件」抛给上层 |
-| `src/components/dashboard/` | 大屏面板与图表（**纯 SVG，无图表库**）：`TopBar.vue` / `PanelCard.vue` / `MetricCard.vue` / `LineChart.vue` / `DonutChart.vue` / `BarChart.vue` / `EventStream.vue` / `TrendPanel.vue` |
+| `src/components/DashboardOverlay.vue` | **16:9 大屏骨架**：CSS Grid（顶栏 / 左列 / 中心场景 / 右列 / 底栏），面板浮在场景之上；overlay 容器 `pointer-events: none`，只有面板 `auto`；把「点了一条事件」抛给上层；区域统计要用的场景底座由 `stage` prop **显式传进来** |
+| `src/components/dashboard/` | 大屏面板与图表（**纯 SVG，无图表库**）：`TopBar.vue` / `PanelCard.vue` / `MetricCard.vue` / `LineChart.vue` / `DonutChart.vue` / `BarChart.vue` / `EventStream.vue` / `TrendPanel.vue` / `AreaStats.vue` |
 | `src/composables/useSceneStage.ts` | **场景底座**：Cesium 初始化、深色场景、发光网格、建筑与道路装配、批量描边。**共享可变状态只有这一份**（`viewer` / 场景级批量图元的引用与材质 / 视图状态） |
 | `src/composables/useCameraRig.ts` | 相机：鸟瞰↔平视、环绕自转、交互打断与恢复、相机飞行。自转状态只有这一份，其余通过 `camera.flyTo()` 请求飞行 |
 | `src/composables/useTrafficFleet.ts` | 交通：车辆与路灯（全部用 Cesium 图元画，不引用任何 `.glb` 模型） |
@@ -201,6 +199,35 @@ vue-tsc ^3.3.13（实装 3.3.13）、typescript-eslint ^8.72.0（实装 8.72.0�
 
 趋势面板在左列，**5 个页签下都在**（每页的左列布局一样）。
 
+## 区域统计：在场景里点一下地面
+
+右列第一块是**区域统计**（`AreaStats.vue` 面板 + `useAreaQuery.ts` 取数与拾取）：
+
+```
+在场景里点一下地面 → 命中点的经纬度 → 以它为中心取一个固定半径的矩形范围
+                  → GET /api/city/area?bbox=… → 面板出数
+```
+
+| 项 | 说明 |
+|---|---|
+| 半径 | 200 / 300 / 500 m 三档可切，切换即按新半径重查 |
+| 面板内容 | 范围面积 / 建筑数 / 路网总长 / 建筑密度，另有道路分级与设施分类的分解 |
+| 数据来源 | 后端 `GET /api/city/area`（本地 OSM 快照），面板底部标来源名与观测时间 |
+
+**不抢相机**：只往画布上挂**一个 `LEFT_CLICK` 监听**，一行相机代码都没写。
+Cesium 的 `ScreenSpaceEventHandler` 只在「按下与抬起之间没有位移」时才算一次点击 ——
+拖拽仍然是拖拽（相机照旧旋转、滚轮照旧缩放），拖完松手也不会误触发一次查询。
+
+**场景底座必须显式传下来**：`SmartCity.vue` 用 `:stage="stage"` 把 `useSceneStage()` 的返回值
+交给大屏，**不翻组件实例**。生产构建必然启用 `inlineTemplate`（setup 直接返回渲染函数），
+`<script setup>` 的顶层绑定不会挂到 `setupState` 上 —— 从实例上取绑定在 dev 能用、
+在生产取不到，dev 与生产会变成两套行为。
+
+底座里的 `viewer` 引用要用 `toRaw` 取：底座若经过**深响应式代理**，
+Vue 会**解包 ref**，`stage.viewer` 拿回来是 `null` 而不是那个 `Ref` ——
+拿它去 `watch` 只会得到一句「Invalid watch source」警告，监听根本装不上，
+表现为「点地面没反应」且没有任何报错。
+
 ## 派生事件流与场景联动
 
 右列的「实时事件流」里的每一条，都是后端从**真实指标派生**出来的
@@ -284,8 +311,9 @@ vue-tsc ^3.3.13（实装 3.3.13）、typescript-eslint ^8.72.0（实装 8.72.0�
 
 ```
 ┌──────────── 顶栏：标题 + 5 个页签 ────────────┬── 右侧读数带 ──┐
-│ 左列：核心指标(6)   │                     │ 右列：分类分布 │
-│        趋势面板      │   中心 3D 场景      │        实时事件流 │
+│ 左列：核心指标(6)   │                     │ 右列：区域统计 │
+│        趋势面板      │   中心 3D 场景      │  分类分布     │
+│                    │                     │  实时事件流   │
 ├────────────────────── 通栏底栏：城市资源概览（横向条形）+ 控制按钮/署名 ─┤
 ```
 

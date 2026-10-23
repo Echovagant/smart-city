@@ -91,8 +91,8 @@ CI（`.github/workflows/verify.yml`）在 Windows 与 Ubuntu 两个 job 上跑�
 **带 `bbox` 的响应体不缓存**（参数组合无界）—— 缓存的是第 2 级的过滤结果，不是序列化后的响应。
 
 `GET /api/city/area` 另有一层**聚合结果缓存**（同样是 LRU-8）：范围过滤复用上面第 2 级的
-`bbox` 缓存，聚合结果再缓存一份 `AreaStats`。实测冷启动 143 ms，缓存命中中位 **2.64 ms**
-（P95 5.19 ms）。
+`bbox` 缓存，聚合结果再缓存一份 `AreaStats`。本机实测：进程冷启动首请求 **349 ms**，
+缓存命中中位 **2.8 ms**（最小 1.9 ms）。
 
 ### 传输与安全
 
@@ -110,17 +110,39 @@ CI（`.github/workflows/verify.yml`）在 Windows 与 Ubuntu 两个 job 上跑�
 ### 大屏骨架
 
 界面是 **16:9 大屏**：顶栏（标题 + 页签 + 读数带）、左列（核心指标 + 趋势面板）、
-中心 3D 场景、右列（分类分布 + 实时事件流）、通栏底栏（城市资源概览 + 控制按钮 + 署名）。
+中心 3D 场景、右列（区域统计 + 分类分布 + 实时事件流）、
+通栏底栏（城市资源概览 + 控制按钮 + 署名）。
 
 **面板浮在场景之上，不做左右分栏裁切**：Cesium 容器保持全屏，中心那一格留空，
 3D 城市从面板后面透出来。overlay 容器 `pointer-events: none`，只有面板本身 `auto` ——
 否则中心的 Cesium 交互（拖拽 / 滚轮）会被整块吃掉。
 
+### 区域统计：点一下地面
+
+右列第一块是**区域统计**（`AreaStats.vue` + `useAreaQuery.ts`）：
+在三维场景里单击地面 → 命中点的经纬度 → 以它为中心取一个固定半径的矩形范围 →
+`GET /api/city/area?bbox=…` → 面板给出建筑数、路网总长、道路分级、设施分类与建筑密度。
+半径分 200 / 300 / 500 m 三档，可随时切换（切换即重查）。
+
+**只挂一个 `LEFT_CLICK` 监听，一行相机代码都不写**：
+Cesium 的 `ScreenSpaceEventHandler` 只在「按下与抬起之间没有位移」时才算一次点击，
+所以拖拽仍然是拖拽（相机照旧旋转、滚轮照旧缩放），拖完松手也不会误触发一次查询。
+
+**场景底座要显式传下来**：`SmartCity.vue` 用 `:stage="stage"` 把 `useSceneStage()` 的返回值
+交给大屏，**不翻组件实例** —— 生产构建里 `<script setup>` 的顶层绑定不会挂到
+`setupState` 上（构建必然启用 `inlineTemplate`，setup 直接返回渲染函数），
+从实例上取绑定在 dev 能用、在生产取不到。dev 与生产必须是同一套行为。
+
+同理，底座里的 `viewer` 引用要用 `toRaw` 取：底座若经过**深响应式代理**，
+Vue 会**解包 ref**，`stage.viewer` 拿回来是 `null` 而不是那个 `Ref` ——
+拿它去 `watch` 只会得到一句警告，监听根本装不上。
+
 ### 图表
 
 `src/components/dashboard/` 下的图表**全是手写 SVG**：
 `MetricCard` / `LineChart` / `DonutChart` / `BarChart` / `EventStream`，
-外加趋势面板 `TrendPanel`（24 小时 / 逐日两个视图，复用 `LineChart` 画折线）。
+外加趋势面板 `TrendPanel`（24 小时 / 逐日两个视图，复用 `LineChart` 画折线）
+与区域统计面板 `AreaStats`。
 **不引任何图表库** —— `package.json` 与 `package-lock.json` 至今零改动。
 
 ### 场景
@@ -234,5 +256,5 @@ CI（`.github/workflows/verify.yml`）在 Windows 与 Ubuntu 两个 job 上跑�
 - 城市代码表是静态快照（**368 个代码**，只有代码没有名称），上游新增城市后需要重新抓
 - 天气源只给 `HH:MM`，时间戳可能落在未来，契约里会标 `realtime: false`；
   且**只有北京可用**
-- **区域统计端点目前只有后端，前端交互还没接** —— 大屏上暂时没有可点的区域入口
-- 区域统计的 `facility_categories[].members` **恒为空数组**（只给分类计数，不给成员 id）
+- **区域统计的 `facility_categories[].members` 恒为空数组**（只给分类计数，不给成员 id）——
+  所以「点某个分类，高亮该范围内的建筑」还做不到，目前只回答「范围内有多少」

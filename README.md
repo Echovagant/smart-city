@@ -21,6 +21,10 @@
 逐日视图给出最近 14 天的 AQI 与六项污染物日均值，可逐项切换。
 时间都是本地时间，取不到数据时显示空态，不画一条假的平线。
 
+**点一下地面，查那片范围。** 在三维场景里单击地面，右列立刻给出这一片的建筑数、路网总长、
+道路分级、设施分类与建筑密度。半径可选 200 / 300 / 500 m；点的是哪个位置、范围多大，
+面板上都写着，数字与接口返回逐字一致。
+
 **知道每个数字的来路。** 空气质量与气温来自公开数据源，建筑与道路来自本地 OSM 抽取。
 每张指标卡标着来源名与观测时间；模型估算项单独标注；某个源取不到时显示「数据源暂不可用」，
 不用 0 或旧值顶替。
@@ -45,6 +49,14 @@
 
 切到这个页签，医疗、公共安全与教育设施所在的那几栋楼被点亮，其余建筑的描边压暗 ——
 城市还在，注意力收到了该看的地方。
+
+### 区域统计
+
+![区域统计：右列上方的面板给出选中范围的建筑数、路网总长、道路分级与设施分类](docs/images/dashboard-area-stats.png)
+
+在场景里单击地面，面板给出这一片的范围面积、建筑数、路网总长与建筑密度，
+外加道路分级和设施分类的分解。半径可选 200 / 300 / 500 m；
+面板上标着选中的坐标与数据来源，数字与接口返回逐字一致。
 
 ## 快速开始
 
@@ -98,7 +110,7 @@ cd backend-python      && ./.venv/Scripts/python.exe main.py
 |---|---|---|---|
 | 空气质量（AQI / 分级 / 首要污染物 / 24 小时序列 / 14 天逐日序列） | `https://air.cnemc.cn:18007`（中国环境监测总站） | 免凭据 | 实时（小时级）；逐日序列按定义不是实时 |
 | 气温 / 湿度 | `http://www.weather.com.cn/data/sk/101010100.html`（中国天气网） | 免凭据 | 上游只给 `HH:MM`，时间戳可能落在未来，契约里标 `realtime: false`；仅北京可用 |
-| 建筑 / 道路 / 路网 / 设施分类 | 本地 OpenStreetMap 抽取 | 无 | 静态快照 |
+| 建筑 / 道路 / 路网 / 设施分类 / 区域统计 | 本地 OpenStreetMap 抽取 | 无 | 静态快照 |
 
 - 路网负载指数是**模型估算**（静态几何折算的供给紧张度，不是实测路况），界面上标「（模型估算）」。
 - 端点不会因为某个上游挂了而报错 —— 该源降级，其余指标照常返回。
@@ -125,7 +137,7 @@ cd backend-python      && ./.venv/Scripts/python.exe main.py
 | `Data-driven-modeling/src/components/SmartCity.vue` | 场景装配层：把场景 composable、数据轮询与大屏骨架接起来 |
 | `Data-driven-modeling/src/components/DashboardOverlay.vue` | 16:9 大屏骨架 |
 | `Data-driven-modeling/src/components/dashboard/` | 大屏面板与图表组件 |
-| `Data-driven-modeling/src/composables/` | 场景层（底座 / 相机 / 交通 / 事件标记 / 页签联动）、取数、页签状态与纯函数 |
+| `Data-driven-modeling/src/composables/` | 场景层（底座 / 相机 / 交通 / 事件标记 / 页签联动 / 区域统计）、取数、页签状态与纯函数 |
 | `Data-driven-modeling/src/theme/` | 深色色板与大屏设计 token |
 | `docs/ARCHITECTURE.md` | 架构说明与开发约定 |
 
