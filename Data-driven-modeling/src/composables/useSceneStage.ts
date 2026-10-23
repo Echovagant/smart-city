@@ -803,7 +803,11 @@ export function useSceneStage({ container, buildings, roads }: SceneStageOptions
           new Cesium.GeometryInstance({
             geometry: new Cesium.PolylineGeometry({
               positions,
-              width: Math.max(3, width),
+              // 流动层与道路**同宽**（原来四档都正好等于路宽）。
+              // 之前有个 `Math.max(3, width)` 的下限：路宽砍半后人行道是 2 px，
+              // 那个下限会让流动层（3 px）比路本身还宽 —— 现在直接用路宽，
+              // 保持「流动层正好盖在路面上」这个关系。
+              width,
               vertexFormat: Cesium.PolylineMaterialAppearance.VERTEX_FORMAT,
               arcType: Cesium.ArcType.GEODESIC
             })
@@ -955,16 +959,22 @@ export function useSceneStage({ container, buildings, roads }: SceneStageOptions
   /**
    * 把整套主题应用到场景（面板 CSS 由 `useTheme` 负责，这里只管 3D）。
    *
-   * ## 硬约束：只改值，不换对象
+   * ## 硬约束：道路/描边/光效只改值，不换对象
    *
-   * 这里**绝不**去写 `entity.polygon.material` / `entity.polyline.material` ——
-   * 那是 3854 栋楼 / 2260 条路，换材质对象会打散 Cesium 的批处理 →
+   * 这几类**绝不**去写 `entity.polyline.material` ——
+   * 那是 2260 条路，换材质对象会打散 Cesium 的批处理 →
    * 全量几何重建 → 卡死。所有改动都落在**已有材质实例**上：
    *
    * - Primitive 材质：改 `uniforms.color` / `uniforms.glowPower`；
    * - 实体材质：改它内部那个 CallbackProperty 读到的颜色对象。
    *
    * 两种改法都**不 raise 任何事件**，所以 Cesium 不会重建几何。
+   *
+   * **唯一的例外是建筑本体与广场的面**：它们的颜色是 Cesium 的**逐实例颜色**
+   * （PerInstanceColorAppearance → 写进 batch table 的副本），
+   * 只改回调里的颜色对象，实体不被标脏就永远不重读 → 颜色不变。
+   * 所以这一处要换**一份新的材质属性**（里面还是同一个活颜色回调），
+   * 让这批实体重新读一次颜色 —— 一次性重建，不是每帧。
    */
   const applyTheme = (theme: ThemeDefinition): void => {
     currentTheme = theme
@@ -981,12 +991,29 @@ export function useSceneStage({ container, buildings, roads }: SceneStageOptions
     // 建筑本体（共用一个材质实例）
     if (primitives.buildingMaterial) {
       setLiveColor(primitives.buildingMaterial, theme.palette.building, 1)
+      // **还要让实体重新读一次颜色**：Cesium 的逐实例颜色是**实体更新时烘焙**的
+      // （PerInstanceColorAppearance → 写进 batch table 的副本），
+      // 只改回调里的颜色对象，实体不被标脏就永远不重读 → 建筑面不变色。
+      // 所以这里换**一份新的材质属性**（里面还是同一个活颜色回调）：
+      // 实体被标脏 → 视觉器重新读色 → 新颜色生效。
+      // 代价：这批实体的 primitive 会重建一次（一次性，不是每帧）。
+      const refreshed = new Cesium.ColorMaterialProperty(primitives.buildingMaterial.material!.color)
+      state.buildingEntities.forEach(entity => {
+        const polygon = entity.polygon as WritablePolygonGraphics | undefined
+        if (polygon) polygon.material = refreshed
+      })
     }
     // 广场 / 人造地面（共用一个材质实例）
     // 取 `palette.surface` 而不是 `palette.panel`：广场是**场景里的一部分**，
     // 面板是大屏的 UI 底，两者是两回事。
     if (primitives.surfaceMaterial) {
       setLiveColor(primitives.surfaceMaterial, theme.palette.surface, 0.9)
+      // 同上：逐实例颜色要重新读一次才生效（广场与建筑走的是同一条路）。
+      const refreshed = new Cesium.ColorMaterialProperty(primitives.surfaceMaterial.material!.color)
+      state.roadEntities.forEach(entity => {
+        const polygon = entity.polygon as WritablePolygonGraphics | undefined
+        if (polygon) polygon.material = refreshed
+      })
     }
     // 建筑描边（批量 Primitive 的 uniform）
     setMaterialColor(primitives.buildingGlowMaterial, theme.palette.buildingEdge)

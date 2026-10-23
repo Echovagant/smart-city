@@ -2,7 +2,7 @@
 
 背景：geopandas / pandas 两个包曾被声明为后端依赖，但后端代码
 只 import 了 shapely。它们让 venv 多背了约 127 MB（geopandas 会拖入
-fiona + pyproj + numpy + pandas），而本机到海外 CDN 慢，这几行是新手
+fiona + pyproj + numpy + pandas），而本机到部分源站的链路慢，这几行是新手
 装环境耗时的主要来源。本测试保证「声明了但没人 import」的包不会再回来。
 
 numpy 不算死依赖：shapely 2.0.4 声明 numpy<3,>=1.14，numpy 是它的传递

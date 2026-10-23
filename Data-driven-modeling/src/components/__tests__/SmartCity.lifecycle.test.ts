@@ -161,10 +161,16 @@ vi.mock('cesium', () => {
     // 材质是否「常量」决定了 Cesium 会不会每帧重建贴地几何，
     // 所以 glowPower 必须包成 ConstantProperty（见 theme/dark.ts 的说明）。
     ConstantProperty: vi.fn((value: unknown) => ({ value, isConstant: true })),
+    // 实体的面材质：Cesium 只认 ColorMaterialProperty（塞别的东西会抛
+    // 「Unable to infer material type」，整个图层加载失败）。
+    ColorMaterialProperty: vi.fn((color: unknown) => ({
+      color,
+      isConstant: (color as { isConstant?: boolean } | undefined)?.isConstant === true,
+    })),
     Material: { fromType: vi.fn((type: string, uniforms: unknown) => ({ type, uniforms })) },
-    CallbackProperty: vi.fn((callback: (...args: unknown[]) => unknown) => ({
+    CallbackProperty: vi.fn((callback: (...args: unknown[]) => unknown, isConstant = false) => ({
       callback,
-      isConstant: false,
+      isConstant,
       getValue: (...args: unknown[]) => callback(...args),
     })),
     JulianDate: { now: () => ({}) },
@@ -1295,7 +1301,11 @@ describe('深色底座', () => {
     await wrapper.vm.loadGeoJSONRoads()
 
     // 广场材质取**符号引用**：色板随主题变，写死十六进制会在换主题后失效。
-    expect(plaza.polygon.material?.name).toBe(DARK_PALETTE.panel)
+    // 材质是 ColorMaterialProperty → 颜色在它的常量回调上（每帧重读）。
+    const plazaColor = (plaza.polygon.material as unknown as {
+      color?: { getValue?: () => { name?: string } }
+    })?.color?.getValue?.()
+    expect(plazaColor?.name).toBe(DARK_PALETTE.surface)
 
     wrapper.unmount()
   })

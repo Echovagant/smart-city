@@ -183,28 +183,25 @@ describe('材质工厂', () => {
     expect(handle.material.glowPower?.getValue()).toBeCloseTo(0.2, 5)
   })
 
-  it('createLiveColorMaterial：颜色走**批次级 uniform**（不是逐实例属性）', () => {
+  it('createLiveColorMaterial：ColorMaterialProperty + 常量回调（静态几何 + 实时换色）', () => {
     const handle = createLiveColorMaterial('#0b1526')
     expect(handle.material).not.toBeNull()
-    // 常量材质 → Cesium 不会逐实例跟踪它（零逐帧开销）
-    expect(handle.material!.isConstant).toBe(true)
-    // getType 决定渲染路径：'Color' → MaterialAppearance（颜色是 uniform）
-    expect(handle.material!.getType(undefined as never)).toBe('Color')
-    // Cesium 每帧调 getValue 拿当前颜色
-    const first = handle.material!.getValue(undefined as never, {} as never) as {
-      color: Cesium.Color
+    // 颜色挂在**常量回调**上：isConstant=true → Cesium 认为材质是常量 → 多边形保持静态
+    const colorProperty = handle.material!.color as unknown as {
+      isConstant: boolean
+      getValue: () => { name?: string; red: number }
     }
-    expect(first.color.red).toBeCloseTo(0x0b / 255, 3)
+    expect(colorProperty.isConstant).toBe(true)
+    // Cesium 每帧重读这个值 → 颜色就是当前值
+    expect(colorProperty.getValue().red).toBeCloseTo(0x0b / 255, 3)
 
     // 换色 = 就地改分量，**材质对象不换**
     const materialBefore = handle.material
     setLiveColor(handle, '#15181e', 1)
     expect(handle.material).toBe(materialBefore)
     expect(handle.hex).toBe('#15181e')
-    const second = handle.material!.getValue(undefined as never, {} as never) as {
-      color: Cesium.Color
-    }
-    expect(second.color.red).toBeCloseTo(0x15 / 255, 3)
+    // 同一个回调读到的是新分量
+    expect(colorProperty.getValue().red).toBeCloseTo(0x15 / 255, 3)
   })
 
   it('createPrimitiveGlowMaterial 造出 PolylineGlow 材质（Primitive 用的是 Material 不是 MaterialProperty）', () => {

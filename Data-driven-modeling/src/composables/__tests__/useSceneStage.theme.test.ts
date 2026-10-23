@@ -182,19 +182,33 @@ describe('场景换色 —— 材质是共享的', () => {
   })
 })
 
-describe('场景换色 —— 切主题不碰材质对象的 setter', () => {
-  it('切主题时 polygon.material / polyline.material 的 setter 一次都没被调用', async () => {
-    const { stage, buildings, roads } = await makeLoadedStage()
-    const polygonWritesBefore = buildings.map(item => item.writes.length)
+describe('场景换色 —— 切主题时各层材质的写入边界', () => {
+  it('道路（polyline）的 setter 一次都没被调用：道路只改值不换对象', async () => {
+    const { stage, roads } = await makeLoadedStage()
     const polylineWritesBefore = roads.map(item => item.writes.length)
 
     stage.applyTheme(GRAPHITE)
 
-    expect(buildings.map(item => item.writes.length)).toEqual(polygonWritesBefore)
     expect(roads.map(item => item.writes.length)).toEqual(polylineWritesBefore)
   })
 
-  it('连切三次主题也不碰 setter', async () => {
+  it('建筑面每切一次主题重新赋一次材质（Cesium 的逐实例颜色是更新时烘焙的）', async () => {
+    const { stage, buildings } = await makeLoadedStage()
+    const polygonWritesBefore = buildings.map(item => item.writes.length)
+
+    stage.applyTheme(GRAPHITE)
+
+    buildings.forEach((item, index) => {
+      expect(item.writes.length).toBe(polygonWritesBefore[index] + 1)
+    })
+    // 换上去的是**常量材质属性** → 几何仍是静态的，不是每帧重建
+    const written = buildings[0].writes[buildings[0].writes.length - 1] as unknown as {
+      color?: { isConstant?: boolean }
+    }
+    expect(written.color?.isConstant).toBe(true)
+  })
+
+  it('连切三次主题：道路依然零写入', async () => {
     const { stage, buildings, roads } = await makeLoadedStage()
     const polygonWritesBefore = buildings.map(item => item.writes.length)
     const polylineWritesBefore = roads.map(item => item.writes.length)
@@ -203,7 +217,9 @@ describe('场景换色 —— 切主题不碰材质对象的 setter', () => {
     stage.applyTheme(DEEP_SPACE)
     stage.applyTheme(GRAPHITE)
 
-    expect(buildings.map(item => item.writes.length)).toEqual(polygonWritesBefore)
+    buildings.forEach((item, index) => {
+      expect(item.writes.length).toBe(polygonWritesBefore[index] + 3)
+    })
     expect(roads.map(item => item.writes.length)).toEqual(polylineWritesBefore)
   })
 })
@@ -225,10 +241,11 @@ describe('场景换色 —— 八处颜色都跟着主题走', () => {
     // 建筑本体
     const building = stage.primitives.buildingMaterial
     expect(building?.hex).toBe(GRAPHITE.palette.building)
-    const buildingUniforms = building?.material?.getValue(undefined as never, {} as never) as {
-      color: { name?: string }
+    // 颜色在 ColorMaterialProperty 的常量回调上（每帧重读 → 换色即时生效）
+    const buildingColor = building?.material?.color?.getValue() as unknown as {
+      name?: string
     }
-    expect(buildingUniforms?.color?.name).toBe(GRAPHITE.palette.building)
+    expect(buildingColor?.name).toBe(GRAPHITE.palette.building)
 
     // 建筑描边（Primitive 材质的 uniform）—— 取 buildingEdge，不是界面 accent
     const glow = stage.primitives.buildingGlowMaterial as unknown as {

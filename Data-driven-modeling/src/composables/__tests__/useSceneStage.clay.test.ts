@@ -248,24 +248,40 @@ describe('哑光白模 —— 流动光效层的不透明度跟 flowAlpha 走', 
   })
 })
 
-describe('哑光白模 —— 切主题仍然不碰材质对象的 setter', () => {
-  it('切到白模主题时 polygon.material / polyline.material 的 setter 一次都没被调用', async () => {
-    const { stage, buildings, roads, plaza } = await makeLoadedStage()
-    const polygonWritesBefore = [
-      ...buildings.map(item => item.writes.length),
-      plaza.writes.length,
-    ]
+describe('哑光白模 —— 切主题时各层材质的写入边界', () => {
+  it('道路（polyline）的 setter 一次都没被调用：道路只改值不换对象', async () => {
+    const { stage, roads } = await makeLoadedStage()
     const polylineWritesBefore = roads.map(item => item.writes.length)
 
     stage.applyTheme(CLAY)
 
-    expect([...buildings.map(item => item.writes.length), plaza.writes.length]).toEqual(
-      polygonWritesBefore,
-    )
     expect(roads.map(item => item.writes.length)).toEqual(polylineWritesBefore)
   })
 
-  it('连切三次也不碰 setter', async () => {
+  it('建筑面与广场各重新赋一次材质：Cesium 的逐实例颜色是更新时烘焙的，不重读就不变色', async () => {
+    const { stage, buildings, plaza } = await makeLoadedStage()
+    const polygonWritesBefore = [
+      ...buildings.map(item => item.writes.length),
+      plaza.writes.length,
+    ]
+
+    stage.applyTheme(CLAY)
+
+    const after = [...buildings.map(item => item.writes.length), plaza.writes.length]
+    buildings.forEach((item, index) => {
+      expect(after[index]).toBe(polygonWritesBefore[index] + 1)
+    })
+    expect(after[after.length - 1]).toBe(polygonWritesBefore[polygonWritesBefore.length - 1] + 1)
+
+    // 换上去的是**常量材质属性**（ColorMaterialProperty）→ 几何仍是静态的，不是每帧重建
+    const written = buildings[0].writes[buildings[0].writes.length - 1] as unknown as {
+      color?: { isConstant?: boolean }
+    }
+    expect(written).toBeTruthy()
+    expect(written.color?.isConstant).toBe(true)
+  })
+
+  it('连切三次：道路依然零写入，建筑面每切一次多一次', async () => {
     const { stage, buildings, roads, plaza } = await makeLoadedStage()
     const polygonWritesBefore = [
       ...buildings.map(item => item.writes.length),
@@ -277,9 +293,11 @@ describe('哑光白模 —— 切主题仍然不碰材质对象的 setter', () =
     stage.applyTheme(DEEP_SPACE)
     stage.applyTheme(CLAY)
 
-    expect([...buildings.map(item => item.writes.length), plaza.writes.length]).toEqual(
-      polygonWritesBefore,
-    )
+    const after = [...buildings.map(item => item.writes.length), plaza.writes.length]
+    buildings.forEach((item, index) => {
+      expect(after[index]).toBe(polygonWritesBefore[index] + 3)
+    })
+    expect(after[after.length - 1]).toBe(polygonWritesBefore[polygonWritesBefore.length - 1] + 3)
     expect(roads.map(item => item.writes.length)).toEqual(polylineWritesBefore)
   })
 })

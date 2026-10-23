@@ -6,6 +6,7 @@ import {
   DARK_PALETTE,
   FLOW_HIGHLIGHT,
   createPrimitiveGlowMaterial,
+  getActiveTheme,
   setMaterialColor,
 } from '@/theme/dark'
 import { resolveFocusBuildingIds, resolveSceneLinkage } from './useSceneLinkage'
@@ -84,16 +85,20 @@ export function useSceneLinkageEffect({
     const linkage = resolveSceneLinkage(activeTabKey.value)
 
     // 其余建筑的描边：压暗 / 恢复（只改一个 uniform）
+    // 恢复时取 **buildingEdge**（描边色位），不是 accent（界面强调色）——
+    // 两者在哑光白模里是不同的颜色，用错会把白模的浅灰描边刷成蓝色。
     setMaterialColor(
       primitives.buildingGlowMaterial,
-      linkage.dimBuildings ? BUILDING_GLOW_DIMMED : DARK_PALETTE.accent
+      linkage.dimBuildings ? BUILDING_GLOW_DIMMED : DARK_PALETTE.buildingEdge
     )
 
     // 流动光效层：提亮 / 恢复
+    // 不透明度取主题的 `glow.flowAlpha`（常态 0.95，哑光白模 0.12）——
+    // 写死 0.95 会把白模那一笔压暗效果直接抹掉。
     setMaterialColor(
       primitives.flowMaterial,
       linkage.brightenFlow ? FLOW_HIGHLIGHT : DARK_PALETTE.flow,
-      0.95
+      getActiveTheme().glow.flowAlpha
     )
 
     // 焦点描边：重建（建筑集合很小，重建成本可忽略）

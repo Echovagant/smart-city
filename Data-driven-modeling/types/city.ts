@@ -672,7 +672,7 @@ export type WritablePolygonGraphics = Omit<
   height: Cesium.Property | number | undefined
   extrudedHeight: Cesium.Property | number | undefined
   fill: Cesium.Property | boolean | undefined
-  material: Cesium.MaterialProperty | Cesium.Color | undefined
+  material: Cesium.MaterialProperty | Cesium.Material | Cesium.Color | undefined
   outline: Cesium.Property | boolean | undefined
   outlineColor: Cesium.Property | Cesium.Color | undefined
   outlineWidth: Cesium.Property | number | undefined
@@ -684,7 +684,7 @@ export type WritablePolylineGraphics = Omit<
 > & {
   show: Cesium.Property | boolean | undefined
   width: Cesium.Property | number | undefined
-  material: Cesium.MaterialProperty | Cesium.Color | undefined
+  material: Cesium.MaterialProperty | Cesium.Material | Cesium.Color | undefined
   clampToGround: Cesium.Property | boolean | undefined
   outline: Cesium.Property | boolean | undefined
   outlineColor: Cesium.Property | Cesium.Color | undefined

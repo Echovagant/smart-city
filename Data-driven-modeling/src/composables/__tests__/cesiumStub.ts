@@ -72,6 +72,7 @@ export interface CesiumStub {
   Cartesian3: unknown
   Color: unknown
   Material: { fromType: Mock<(type: string, uniforms: unknown) => { type: string; uniforms: unknown }> }
+  MaterialProperty: Mock<(material: unknown) => { material: unknown; getValue: () => unknown; isConstant: boolean }>
   PolylineGlowMaterialProperty: Mock<(options: Record<string, unknown>) => Record<string, unknown>>
   ColorMaterialProperty: Mock<(color: unknown) => { color: unknown; isConstant: boolean }>
   PolylineDashMaterialProperty: Mock<(options: Record<string, unknown>) => Record<string, unknown>>
@@ -87,7 +88,7 @@ export interface CesiumStub {
   >
   ScreenSpaceEventType: Record<string, number>
   CallbackProperty: Mock<
-    (callback: (...args: unknown[]) => unknown) => {
+    (callback: (...args: unknown[]) => unknown, isConstant?: boolean) => {
       callback: (...args: unknown[]) => unknown
       isConstant: boolean
       getValue: (...args: unknown[]) => unknown
@@ -195,6 +196,12 @@ export const createCesiumStub = (): CesiumStub => {
     Material: {
       fromType: vi.fn((type: string, uniforms: unknown) => ({ type, uniforms })),
     },
+    // 材质属性：Cesium 只认真正的 Property 实例（别的会抛「Unable to infer material type」）
+    MaterialProperty: vi.fn((material: unknown) => ({
+      material,
+      getValue: () => material,
+      isConstant: true,
+    })),
     PolylineGlowMaterialProperty: vi.fn((options: Record<string, unknown>) => ({
       color: options?.color,
       glowPower: options?.glowPower,
@@ -202,8 +209,8 @@ export const createCesiumStub = (): CesiumStub => {
     ColorMaterialProperty: vi.fn((color: unknown) => ({
       color,
       // 真 Cesium 里：color 是 ConstantProperty 时材质才是常量；
-      // 传进来的若带 getValue（CallbackProperty），就保持非常量。
-      isConstant: false,
+      // 传进来的若带 isConstant（CallbackProperty），就按它算。
+      isConstant: (color as { isConstant?: boolean } | undefined)?.isConstant === true,
     })),
     PolylineDashMaterialProperty: vi.fn((options: Record<string, unknown>) => ({ ...options })),
     ConstantProperty: vi.fn((value: unknown) => ({ value, isConstant: true })),
@@ -232,9 +239,9 @@ export const createCesiumStub = (): CesiumStub => {
       WHEEL: 10,
       PINCH: 11,
     },
-    CallbackProperty: vi.fn((callback: (...args: unknown[]) => unknown) => ({
+    CallbackProperty: vi.fn((callback: (...args: unknown[]) => unknown, isConstant = false) => ({
       callback,
-      isConstant: false,
+      isConstant,
       getValue: (...args: unknown[]) => callback(...args),
     })),
     GeoJsonDataSource: {

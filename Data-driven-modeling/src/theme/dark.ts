@@ -104,7 +104,8 @@ export const DARK_PALETTE: ThemePalette = {
 /**
  * 道路分级配色：主干道最亮，人行道最暗。
  *
- * 宽度沿用原来的 14 / 10 / 7 / 4（像素），颜色全部换成深色科技色。
+ * 颜色随主题变；**线宽不在这里** —— 宽度是几何属性，只能在装载时定，
+ * 它是 `useSceneStage.ts` 里分级表上的全局默认（7 / 5 / 3 / 2 像素）。
  */
 export const ROAD_COLORS: ThemeRoadColors = {
   get main() {
@@ -350,27 +351,17 @@ export const setLiveGlow = (
  * 与本项目「建筑不透明 / 广场半透明」的用法正好一致。
  */
 export interface LiveColorMaterial {
-  /** 交给 `entity.polygon.material` 的材质属性（全场共用同一个实例）。 */
-  material: Cesium.MaterialProperty | null
+  /**
+   * 交给 `entity.polygon.material` 的材质属性（全场共用同一个实例）。
+   *
+   * 是**真正的 `Cesium.ColorMaterialProperty`**：Cesium 的 `createMaterialProperty`
+   * 只认 `Color` 与图片，塞别的东西会抛「Unable to infer material type」。
+   */
+  material: Cesium.ColorMaterialProperty | null
   /** 当前颜色：材质每帧读它（**就地改分量**，不要换对象）。 */
   color: Cesium.Color
   /** 当前颜色的十六进制值（材质属性上以 `name` 暴露）。 */
   hex: string
-}
-
-/** 材质属性的 `definitionChanged`：材质对象从不替换，所以永远不触发。 */
-const createMaterialEvent = (): { addEventListener: (...args: unknown[]) => () => void } => {
-  try {
-    const EventCtor = (
-      Cesium as unknown as {
-        Event?: new () => { addEventListener: (...args: unknown[]) => () => void }
-      }
-    ).Event
-    if (EventCtor) return new EventCtor()
-  } catch {
-    /* 精简运行时没有 Event：下面用空实现兜底 */
-  }
-  return { addEventListener: () => () => {} }
 }
 
 /** 造一份可原地改值的颜色材质。 */
@@ -380,31 +371,21 @@ export const createLiveColorMaterial = (hex: string, alpha = 1): LiveColorMateri
     hex,
     material: null,
   }
-  const property = {
-    /** 常量：Cesium 每帧重算一次材质 uniform 就行，不必逐实例跟踪。 */
-    isConstant: true,
-    /** 决定走哪条渲染路径：`'Color'` → `MaterialAppearance` 的颜色材质。 */
-    getType: () => 'Color',
-    /** Cesium 每帧调一次：把当前颜色写进材质的 uniforms。 */
-    getValue: (_time: unknown, result?: Record<string, unknown>) => {
-      const uniforms = result ?? {}
-      uniforms.color = handle.color
-      return uniforms
-    },
-    /** 批次分组用（同一个实例 → 同一批）。 */
-    equals: (other: unknown) => other === property,
-    /** 材质属性变化事件。 */
-    definitionChanged: createMaterialEvent(),
-  }
-  // Cesium 只要求材质属性带 getValue；这里按它的鸭子类型实现。
-  const withName = property as unknown as Record<string, unknown>
-  withName.name = hex
-  Object.defineProperty(withName, 'name', {
-    get: () => handle.hex,
-    configurable: true,
-    enumerable: false,
-  })
-  handle.material = property as unknown as Cesium.MaterialProperty
+  // **`ColorMaterialProperty` + 常量回调**（这里踩过三次坑）：
+  //
+  // 1. 材质属性必须是 `Property` 实例 —— Cesium 的 `createMaterialProperty` 只认
+  //    `Color` 与图片，塞别的东西直接抛「Unable to infer material type」，**整个图层加载失败**。
+  // 2. 不能自己造材质属性对象：`MaterialProperty` 在 Cesium 里是**抽象类**
+  //    （构造即抛错），`MaterialAppearance` 那条路对实体多边形走不通。
+  // 3. 颜色的回调用 `CallbackProperty(cb, /* isConstant */ true)`：
+  //    - `isConstant === true` → Cesium 认为材质是常量 → **多边形保持静态，不逐帧重建几何**
+  //      （Cesium 的 `_isDynamic` 里含 `!Property.isConstant(this._materialProperty)`）；
+  //    - 但 Cesium **每帧**都会重读逐实例颜色 → 改颜色**下一帧就生效**，
+  //      且不触发任何事件 → 不重建几何。
+  const property = new Cesium.ColorMaterialProperty(
+    new Cesium.CallbackProperty(() => handle.color, true),
+  )
+  handle.material = property
   return handle
 }
 
