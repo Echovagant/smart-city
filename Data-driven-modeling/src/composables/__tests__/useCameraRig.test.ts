@@ -17,7 +17,7 @@ import {
 } from '../useCameraRig'
 import { FLOW_DASH_LENGTH, cityConfig } from '../useSceneStage'
 import type { ScenePrimitives, SmartCityState } from '../useSceneStage'
-import { getCesiumStub } from './cesiumStub'
+import { getCesiumStub, makeScenePrimitives } from './cesiumStub'
 import type { StubViewer } from './cesiumStub'
 
 const stub = () => getCesiumStub()
@@ -39,11 +39,8 @@ const makeRig = () => {
     trafficEntities: [],
   })
   const primitives: ScenePrimitives = {
-    buildingGlow: null,
-    buildingGlowMaterial: null,
-    flow: null,
+    ...makeScenePrimitives(),
     flowMaterial: { uniforms: { dashLength: FLOW_DASH_LENGTH } } as never,
-    focusGlow: null,
   }
   const rig = useCameraRig({
     viewer: viewer as Ref<never>,

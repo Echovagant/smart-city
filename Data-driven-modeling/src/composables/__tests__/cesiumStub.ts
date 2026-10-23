@@ -1,5 +1,6 @@
 import { vi } from 'vitest'
 import type { Mock } from 'vitest'
+import type { ScenePrimitives } from '../useSceneStage'
 
 /**
  * Cesium 的测试桩（**只在测试里用**）。
@@ -72,6 +73,7 @@ export interface CesiumStub {
   Color: unknown
   Material: { fromType: Mock<(type: string, uniforms: unknown) => { type: string; uniforms: unknown }> }
   PolylineGlowMaterialProperty: Mock<(options: Record<string, unknown>) => Record<string, unknown>>
+  ColorMaterialProperty: Mock<(color: unknown) => { color: unknown; isConstant: boolean }>
   PolylineDashMaterialProperty: Mock<(options: Record<string, unknown>) => Record<string, unknown>>
   ConstantProperty: Mock<(value: unknown) => { value: unknown; isConstant: boolean }>
   Primitive: Mock<(options: Record<string, unknown>) => Record<string, unknown> & { show: boolean }>
@@ -99,6 +101,24 @@ export interface CesiumStub {
 
 /** 当前这份桩（测试里用 `getCesiumStub()` 取）。 */
 let active: CesiumStub | null = null
+
+/**
+ * 造一份空的场景材质登记表（测试里用）。
+ *
+ * 场景底座把「所有会被换色的材质」都挂在这一份上，
+ * 所以测试里造一份空的就行 —— 需要哪一样再自己填。
+ */
+export const makeScenePrimitives = (): ScenePrimitives => ({
+  buildingGlow: null,
+  buildingGlowMaterial: null,
+  flow: null,
+  flowMaterial: null,
+  focusGlow: null,
+  gridMaterial: null,
+  buildingMaterial: null,
+  surfaceMaterial: null,
+  roadMaterials: new Map(),
+})
 
 /** 取当前这份 Cesium 桩。 */
 export const getCesiumStub = (): CesiumStub => {
@@ -178,6 +198,12 @@ export const createCesiumStub = (): CesiumStub => {
     PolylineGlowMaterialProperty: vi.fn((options: Record<string, unknown>) => ({
       color: options?.color,
       glowPower: options?.glowPower,
+    })),
+    ColorMaterialProperty: vi.fn((color: unknown) => ({
+      color,
+      // 真 Cesium 里：color 是 ConstantProperty 时材质才是常量；
+      // 传进来的若带 getValue（CallbackProperty），就保持非常量。
+      isConstant: false,
     })),
     PolylineDashMaterialProperty: vi.fn((options: Record<string, unknown>) => ({ ...options })),
     ConstantProperty: vi.fn((value: unknown) => ({ value, isConstant: true })),

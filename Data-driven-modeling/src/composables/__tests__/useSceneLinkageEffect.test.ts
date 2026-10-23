@@ -11,7 +11,7 @@ import { useSceneLinkageEffect, FOCUS_GLOW_POWER } from '../useSceneLinkageEffec
 import { useDashboardState, DEFAULT_TAB_KEY } from '../useDashboardState'
 import { BUILDING_GLOW_DIMMED, DARK_PALETTE, FLOW_HIGHLIGHT } from '@/theme/dark'
 import type { ScenePrimitives } from '../useSceneStage'
-import { getCesiumStub } from './cesiumStub'
+import { getCesiumStub, makeScenePrimitives } from './cesiumStub'
 import type { StubViewer } from './cesiumStub'
 import type { BuildingsResponse, CityOverview, Position } from '../../../types/city'
 
@@ -69,11 +69,9 @@ const makeLinkage = (options: { members?: string[] } = {}) => {
   })
   const cityOverview = shallowRef<CityOverview | null>(overviewWith(options.members ?? ['relation/1']))
   const primitives: ScenePrimitives = {
-    buildingGlow: null,
+    ...makeScenePrimitives(),
     buildingGlowMaterial: { uniforms: { color: { name: DARK_PALETTE.accent } } } as never,
-    flow: null,
     flowMaterial: { uniforms: { color: { name: DARK_PALETTE.flow } } } as never,
-    focusGlow: null,
   }
   const linkage = useSceneLinkageEffect({
     viewer: viewer as Ref<never>,

@@ -1,4 +1,5 @@
-import { DARK_PALETTE } from './dark'
+import { getActiveTheme } from './dark'
+import type { ThemeDefinition } from './themes/types'
 
 /**
  * 大屏（16:9 骨架）的**设计 token**。
@@ -6,7 +7,7 @@ import { DARK_PALETTE } from './dark'
  * 这个文件只放**尺寸与排版**：圆角、描边宽度、内边距、列宽、行高、
  * 字号阶梯、间距刻度。
  *
- * **颜色不在这里**：颜色一律从 `theme/dark.ts` 的 `DARK_PALETTE` 取
+ * **颜色不在这里**：颜色一律从 `theme/dark.ts` 的色板取
  * （大屏的颜色是「视觉的唯一事实来源」这条约定的一部分）。
  * 组件与样式表都不许就地写颜色。
  */
@@ -58,7 +59,7 @@ export const DASHBOARD_TOKENS = {
 } as const
 
 /**
- * 图表色序 —— **只从 `DARK_PALETTE.chartSeries` 里取**（蓝青系 6 档）。
+ * 图表色序 —— **随当前主题变**。
  *
  * 这条色序背后的约定（与 `dark.ts` 一致）：
  * **蓝色只做强调与辉光，橙色只做预警，红色只做告警。**
@@ -68,8 +69,26 @@ export const DASHBOARD_TOKENS = {
  * 橙与红只留给 severity：拥堵徽标、事件流的严重度、S3 的告警脉冲环。
  *
  * 6 段正好够用（空气质量页的环形图有 6 项污染物），不需要循环复用。
+ *
+ * ## 它是「活数组」，不是写死的常量
+ *
+ * 换主题时**就地改写内容**（不换对象），于是
+ * `import { CHART_COLORS }` 的老调用点不用改也能拿到当前主题的色序；
+ * 同时它仍然反映当前主题 —— 不是模块加载那一刻定死的快照。
  */
-export const CHART_COLORS: readonly string[] = DARK_PALETTE.chartSeries
+export const CHART_COLORS: string[] = [...getActiveTheme().palette.chartSeries]
+
+/** 把活数组同步到给定主题（`useTheme` 在主题变化时调）。 */
+export const syncChartColors = (theme: ThemeDefinition): void => {
+  const next = theme.palette.chartSeries
+  CHART_COLORS.length = next.length
+  next.forEach((color, index) => {
+    CHART_COLORS[index] = color
+  })
+}
+
+/** 取当前主题的图表色序（函数形式 —— 不依赖导入时的快照）。 */
+export const chartColors = (): readonly string[] => CHART_COLORS
 
 /** 取第 n 段的颜色（按色序循环）。 */
 export const chartColor = (index: number): string =>
@@ -82,7 +101,7 @@ export const chartColor = (index: number): string =>
  * 组件样式表里写的是 `var(--dc-xxx, 兜底值)` —— JS 没跑起来时也有兜底值，
  * 不会因为缺变量而整块塌掉。
  *
- * 颜色**不在这里**：颜色由 `applyThemeVariables` 从 `DARK_PALETTE` 写进
+ * 颜色**不在这里**：颜色由 `applyThemeVariables` 从主题写进
  * `--dc-*`，两边的变量名不重叠。
  */
 export const applyDashboardVariables = (target?: HTMLElement): void => {
@@ -109,4 +128,3 @@ export const applyDashboardVariables = (target?: HTMLElement): void => {
   style.setProperty('--dc-chart-bar-height', `${t.chart.barHeight}px`)
   style.setProperty('--dc-chart-bar-gap', `${t.chart.barGap}px`)
 }
-

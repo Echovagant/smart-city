@@ -1,4 +1,4 @@
-import { computed } from 'vue'
+import { computed, watch } from 'vue'
 import type { ComputedRef, Ref } from 'vue'
 import * as Cesium from 'cesium'
 import { EVENT_COLORS, createPrimitiveGlowMaterial, createPulseGlowMaterial, cssColor } from '@/theme/dark'
@@ -7,6 +7,7 @@ import { dedupeEvents, resolveEventLocation } from './useEventStream'
 import { CAMERA_FLIGHT_GUARD_MS } from './useCameraRig'
 import type { CameraRig } from './useCameraRig'
 import { METERS_PER_DEGREE_LAT, cityConfig } from './useSceneStage'
+import { useTheme } from './useTheme'
 import type { CityEvent, CityOverview, EventLocation } from '../../types/city'
 
 /**
@@ -127,6 +128,10 @@ export function useEventMarkers({ viewer, camera, cityOverview }: EventMarkersOp
 
   /** 事件标记的签名（用来判断要不要重建）。 */
   let eventMarkerSignature = ''
+
+  // 主题状态是模块级单例：标记的颜色取自当前主题
+  // （橙 / 红是语义色，三套主题一致；「提示级」的强调色随主题变）。
+  const { theme } = useTheme()
 
   /**
    * 派生事件（按 id 去重，新的在前）。
@@ -271,9 +276,11 @@ export function useEventMarkers({ viewer, camera, cityOverview }: EventMarkersOp
     if (!activeViewer) return
     // 用**已解析落点**的事件：全市级事件落在城心，几何事件用真实坐标。
     const list = resolvedEvents.value.slice(0, MAX_EVENT_MARKERS)
-    const signature = list
+    // 签名里带上主题 id：换主题后标记要按新配色重建
+    // （标记是「一次性」的 Primitive / 实体，不是可原地改色的 uniform）。
+    const signature = `${theme.value.id}@${list
       .map(event => `${event.id}@${event.location?.lng ?? ''},${event.location?.lat ?? ''}`)
-      .join('|')
+      .join('|')}`
     if (signature === eventMarkerSignature) return
     eventMarkerSignature = signature
 
@@ -322,6 +329,20 @@ export function useEventMarkers({ viewer, camera, cityOverview }: EventMarkersOp
       resync: true,
     })
   }
+
+  /**
+   * 换主题 → 重建标记（颜色变了）。
+   *
+   * 事件标记是「一次性」的 Primitive / 实体（不是可原地改色的 uniform），
+   * 所以换主题只能重建 —— 数量很少（最多 8 个），代价可忽略。
+   */
+  watch(
+    theme,
+    () => {
+      syncEventMarkers()
+    },
+    { flush: 'post' }
+  )
 
   return {
     events,

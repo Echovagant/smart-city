@@ -1,3 +1,4 @@
+import { watch } from 'vue'
 import type { Ref } from 'vue'
 import * as Cesium from 'cesium'
 import {
@@ -9,6 +10,7 @@ import {
 } from '@/theme/dark'
 import { resolveFocusBuildingIds, resolveSceneLinkage } from './useSceneLinkage'
 import { useDashboardState } from './useDashboardState'
+import { useTheme } from './useTheme'
 import { collectBuildingOutlines } from './useSceneStage'
 import type { ScenePrimitives } from './useSceneStage'
 import type { BuildingsResponse, CityOverview } from '../../types/city'
@@ -61,6 +63,8 @@ export function useSceneLinkageEffect({
   // 大屏页签状态是**模块级单例**（S2 做的）：大屏与 3D 场景共用同一份 ——
   // 「页签切换 → 场景联动」就靠它。
   const { activeTabKey } = useDashboardState()
+  // 主题状态同样是模块级单例：联动用的颜色取自当前主题。
+  const { theme } = useTheme()
 
   /** 拆掉焦点描边。 */
   const removeFocusGlow = () => {
@@ -118,6 +122,25 @@ export function useSceneLinkageEffect({
     activeViewer.scene.primitives.add(primitive)
     primitives.focusGlow = primitive
   }
+
+  /**
+   * 换主题后要**重新应用一次联动**。
+   *
+   * 原因：`stage.applyTheme()` 把建筑描边统一刷成主题的强调色，
+   * 但当前页签可能正处在「压暗」状态（城市文旅 / 公共安全）——
+   * 不重刷一遍，压暗就没了。
+   *
+   * 用 `flush: 'post'`：它在 `SmartCity.vue` 里那个
+   * `watch(theme, t => stage.applyTheme(t))` **之后**跑，
+   * 所以最终颜色由联动说了算（压暗态就是压暗色）。
+   */
+  watch(
+    theme,
+    () => {
+      applySceneLinkage()
+    },
+    { flush: 'post' }
+  )
 
   return {
     applySceneLinkage,

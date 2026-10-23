@@ -2,14 +2,20 @@ import { markRaw, reactive, ref } from 'vue'
 import type { Ref } from 'vue'
 import * as Cesium from 'cesium'
 import {
-  DARK_PALETTE,
-  GRID_COLOR,
-  ROAD_COLORS,
   createFlowDashMaterial,
-  createGlowMaterial,
+  createLiveColorMaterial,
+  createLiveGlowMaterial,
   createPrimitiveGlowMaterial,
   cssColor,
+  getActiveTheme,
+  gridColor,
+  setActiveTheme,
+  setLiveColor,
+  setLiveGlow,
+  setMaterialColor,
 } from '@/theme/dark'
+import type { LiveColorMaterial, LiveGlowMaterial } from '@/theme/dark'
+import type { ThemeDefinition, ThemeRoadColors } from '@/theme/themes/types'
 import type {
   BuildingsResponse,
   CityViewState,
@@ -40,9 +46,23 @@ import type {
  * 城市配置
  * ------------------------------------------------------------------------- */
 
+/** 道路分级在主题道路色里的键。 */
+export type RoadColorKey = keyof ThemeRoadColors
+
+/** 全部道路分级的配色键（主干道 / 次干道 / 支路 / 人行道 / 兜底）。 */
+export const ROAD_COLOR_KEYS: RoadColorKey[] = [
+  'main',
+  'secondary',
+  'local',
+  'footway',
+  'fallback',
+]
+
 /** 道路分级 + 渲染参数（颜色是色板里的 CSS 值，材质在装载时按分级现造）。 */
 export interface RenderedRoadTier extends RoadTier {
-  /** 该档的线色。 */
+  /** 该档在主题道路色里的键（换主题时按它取色）。 */
+  roadKey: RoadColorKey
+  /** 该档的线色 —— **随主题变**（读当前主题的同键颜色）。 */
   color: string
   /** 是否叠一层流动光效（只给 1~2 级道路，全加会糊）。 */
   flowing: boolean
@@ -87,30 +107,42 @@ export const cityConfig: CityConfig = {
     {
       name: '主干道',
       highway: ['motorway', 'trunk', 'primary'],
-      color: ROAD_COLORS.main,
+      roadKey: 'main',
       flowing: true,
-      width: 14
+      width: 14,
+      get color() {
+        return getActiveTheme().roadColors.main
+      },
     },
     {
       name: '次干道',
       highway: ['secondary', 'tertiary'],
-      color: ROAD_COLORS.secondary,
+      roadKey: 'secondary',
       flowing: true,
-      width: 10
+      width: 10,
+      get color() {
+        return getActiveTheme().roadColors.secondary
+      },
     },
     {
       name: '支路',
       highway: ['residential', 'unclassified', 'service'],
-      color: ROAD_COLORS.local,
+      roadKey: 'local',
       flowing: true,
-      width: 7
+      width: 7,
+      get color() {
+        return getActiveTheme().roadColors.local
+      },
     },
     {
       name: '人行道/步行区',
       highway: ['footway', 'pedestrian', 'steps', 'path', 'cycleway'],
-      color: ROAD_COLORS.footway,
+      roadKey: 'footway',
       flowing: true,
-      width: 4
+      width: 4,
+      get color() {
+        return getActiveTheme().roadColors.footway
+      },
     }
   ],
   // 兜底分级：highway 标签缺失、或取值不在上表里时用它。
@@ -119,9 +151,12 @@ export const cityConfig: CityConfig = {
   // 宽度取最低等级（4m，与人行道同级），避免把未知道路画得比主干道还宽。
   roadFallbackTier: {
     name: '其他道路',
-    color: ROAD_COLORS.fallback,
+    roadKey: 'fallback',
     flowing: false,
-    width: 4
+    width: 4,
+    get color() {
+      return getActiveTheme().roadColors.fallback
+    },
   }
 }
 
@@ -202,31 +237,14 @@ export const GRID_SPACING_M = 200
 /** 网格线离地面的高度（米）：抬一点点，避免与地面 z-fighting。 */
 export const GRID_ALTITUDE_M = 1.5
 
-/** 网格线的透明度：只要一点点存在感。 */
-export const GRID_ALPHA = 0.15
-
 /** 网格线的辉光强度。 */
 export const GRID_GLOW_POWER = 0.3
-
-/** 建筑描边的辉光强度。 */
-export const BUILDING_GLOW_POWER = 0.25
 
 /** 建筑描边的线宽（像素）。 */
 export const BUILDING_GLOW_WIDTH = 2
 
 /** 描边相对顶面的抬高（米）：避免与顶面 z-fighting。 */
 export const BUILDING_OUTLINE_LIFT_M = 0.5
-
-/**
- * 道路辉光强度。
- *
- * 别调大：辉光材质的饱和白芯宽度正比于 glowPower，
- * 0.3 会把 14px 的主干道烧成一条白带，四级分级的配色就全看不见了。
- */
-export const ROAD_GLOW_POWER = 0.12
-
-/** 道路线的不透明度：留一点点通透，别像油漆。 */
-export const ROAD_ALPHA = 0.95
 
 /** 流动光效的虚线基准长度（米）。 */
 export const FLOW_DASH_LENGTH = 24
@@ -250,6 +268,11 @@ export interface SmartCityState extends CityViewState {
  *
  * 建筑描边与流动光效层由本模块创建；焦点描边由页签联动创建，
  * 但也挂在这里：它同样是「场景级」的引用，卸载时要在同一个地方清掉。
+ *
+ * ## 材质为什么都存在这里
+ *
+ * 换主题时只允许「改值」，所以每一个会被换色的材质都必须**留一份引用**：
+ * 网格材质以前是内联创建的（换主题拿不到手），现在补上了。
  */
 export interface ScenePrimitives {
   /** 全量建筑描边（一个绘制调用管全部建筑）。 */
@@ -262,6 +285,14 @@ export interface ScenePrimitives {
   flowMaterial: Cesium.Material | null
   /** 焦点描边（页签联动用）。 */
   focusGlow: Cesium.Primitive | null
+  /** 地面网格的材质（换主题改它的 color uniform）。 */
+  gridMaterial: Cesium.Material | null
+  /** 建筑本体材质 —— **全场共用这一个实例**（3854 栋楼不再各包一个）。 */
+  buildingMaterial: LiveColorMaterial | null
+  /** 广场 / 人造地面材质 —— 全场共用一个实例。 */
+  surfaceMaterial: LiveColorMaterial | null
+  /** 道路分级材质 —— 按分级共用（五档各一个实例）。 */
+  roadMaterials: Map<RoadColorKey, LiveGlowMaterial>
 }
 
 /** 数据的经纬度范围。 */
@@ -459,6 +490,13 @@ export interface SceneStage {
   toggleBuildings(): void
   /** 道路图层显隐。 */
   toggleRoads(): void
+  /**
+   * 把整套主题应用到场景（面板 CSS 由 `useTheme` 负责，这里只管 3D）。
+   *
+   * **只改值，不换对象**：材质实例全部保持原样，
+   * 所以 Cesium 不会重建任何几何（3854 栋楼 / 2260 条路都不动）。
+   */
+  applyTheme(theme: ThemeDefinition): void
   /** 销毁 Viewer 并把引用置空。 */
   destroyViewer(): void
 }
@@ -483,7 +521,20 @@ export function useSceneStage({ container, buildings, roads }: SceneStageOptions
     flow: null,
     flowMaterial: null,
     focusGlow: null,
+    gridMaterial: null,
+    buildingMaterial: null,
+    surfaceMaterial: null,
+    roadMaterials: new Map<RoadColorKey, LiveGlowMaterial>(),
   }
+
+  /**
+   * 当前生效的主题。
+   *
+   * 材质在**装载时**按它创建；`applyTheme` 会换掉它并就地改色。
+   * 初值取模块里的当前主题（`useTheme` 写的），所以界面先换主题、
+   * 场景后装载时，颜色也是对的。
+   */
+  let currentTheme: ThemeDefinition = getActiveTheme()
 
   /**
    * 深色底座：把 Cesium 默认的「灰蓝地球 + 蓝天」换成大屏配色。
@@ -495,11 +546,11 @@ export function useSceneStage({ container, buildings, roads }: SceneStageOptions
    */
   const applyDarkScene = (activeViewer: Cesium.Viewer) => {
     const scene = activeViewer.scene
-    scene.globe.baseColor = cssColor(DARK_PALETTE.screen)
+    scene.globe.baseColor = cssColor(currentTheme.palette.screen)
     scene.globe.enableLighting = false
     scene.globe.showGroundAtmosphere = false
     if (scene.skyAtmosphere) scene.skyAtmosphere.show = false
-    scene.backgroundColor = cssColor(DARK_PALETTE.screen)
+    scene.backgroundColor = cssColor(currentTheme.palette.screen)
   }
 
   /**
@@ -527,10 +578,18 @@ export function useSceneStage({ container, buildings, roads }: SceneStageOptions
     // asynchronous: false —— 同步在主线程建几何。
     // 异步会走 worker，而本项目的 Cesium 运行时是**剪过枝**的，
     // 不确定那条 worker 还在不在（不在就是一次 404，回归脚本会红）。
+    //
+    // 材质单独存一份：换主题时要改它的 color uniform（改 uniform 不重建几何）。
+    const material = createPrimitiveGlowMaterial(
+      gridColor(),
+      GRID_GLOW_POWER,
+      currentTheme.glow.gridAlpha
+    )
+    primitives.gridMaterial = material
     const primitive = new Cesium.Primitive({
       geometryInstances: instances,
       appearance: new Cesium.PolylineMaterialAppearance({
-        material: createPrimitiveGlowMaterial(GRID_COLOR, GRID_GLOW_POWER, GRID_ALPHA)
+        material
       }),
       asynchronous: false
     })
@@ -553,8 +612,11 @@ export function useSceneStage({ container, buildings, roads }: SceneStageOptions
     if (instances.length === 0) return
 
     // 材质单独存一份：页签联动时要改它的 color uniform（压暗 / 恢复），
-    // 改 uniform 不重建几何 —— 这是最省的一刀。
-    primitives.buildingGlowMaterial = createPrimitiveGlowMaterial(DARK_PALETTE.accent, BUILDING_GLOW_POWER)
+    // 换主题时也要改它 —— 改 uniform 不重建几何，这是最省的一刀。
+    primitives.buildingGlowMaterial = createPrimitiveGlowMaterial(
+      currentTheme.palette.accent,
+      currentTheme.glow.buildingPower
+    )
 
     // asynchronous: false —— 同步建几何，不去动剪过枝的 worker（见 createBaseGrid 的说明）。
     const primitive = new Cesium.Primitive({
@@ -579,6 +641,16 @@ export function useSceneStage({ container, buildings, roads }: SceneStageOptions
       if (!mounted.value) return
 
       const entities = dataSource.entities.values
+      // 建筑本体材质 —— **全场共用这一个实例**。
+      //
+      // 以前是 `polygon.material = cssColor(...)`：Cesium 会给每栋楼各包一个
+      // ColorMaterialProperty（3854 个），换色就得逐个改；整体换材质对象则
+      // 会打散批处理 → 全量几何重建 → 卡死。
+      //
+      // 现在全部共用一个实例，颜色挂在它的 CallbackProperty 上：
+      // 换主题 = 换一份颜色对象的分量 → 下一帧生效，**不重建任何几何**。
+      primitives.buildingMaterial = createLiveColorMaterial(currentTheme.palette.building)
+      const buildingMaterial = primitives.buildingMaterial
       entities.forEach(entity => {
         if (!mounted.value) return
         // OSM 数据里可能混进非 Polygon 的要素（Point/LineString 等），
@@ -600,7 +672,10 @@ export function useSceneStage({ container, buildings, roads }: SceneStageOptions
         // 统一的深色本体（顶面/侧面同色）。
         // 顶面亮一档需要 PerInstanceColorAppearance + 自定义材质，代价与收益不成比例，
         // 这里走「统一深色面 + 批量描边」这条路。
-        polygon.material = cssColor(DARK_PALETTE.building)
+        //
+        // 材质**只在这里设置一次**：换主题改的是共用实例里的颜色值，
+        // 绝不回到这里重设（重设 = 换材质对象 = 重建几何）。
+        polygon.material = buildingMaterial.material ?? cssColor(currentTheme.palette.building)
         // 不画 1px 描边：描边由下面的批量 Primitive 负责（带辉光）。
         // 留着 outline 会让每栋楼多一次绘制调用（3854 → 7708 次）。
         polygon.outline = false
@@ -622,6 +697,24 @@ export function useSceneStage({ container, buildings, roads }: SceneStageOptions
     }
   }
 
+  /**
+   * 取（必要时建）某档道路的**共享**材质。
+   *
+   * 五档各一个实例：换主题时每档改一次颜色与辉光强度，
+   * 而不是逐条改 2260 个材质对象。
+   */
+  const roadMaterialFor = (key: RoadColorKey): LiveGlowMaterial => {
+    const existing = primitives.roadMaterials.get(key)
+    if (existing) return existing
+    const created = createLiveGlowMaterial(
+      currentTheme.roadColors[key],
+      currentTheme.glow.roadPower,
+      currentTheme.glow.roadAlpha
+    )
+    primitives.roadMaterials.set(key, created)
+    return created
+  }
+
   /** 加载真实GeoJSON道路数据 */
   const loadGeoJSONRoads = async () => {
     if (!roads.value) return
@@ -633,6 +726,9 @@ export function useSceneStage({ container, buildings, roads }: SceneStageOptions
       if (!mounted.value) return
 
       const entities = dataSource.entities.values
+      // 广场 / 人造地面材质 —— 全场共用一个实例（305 个地面多边形不再各包一个）。
+      primitives.surfaceMaterial = createLiveColorMaterial(currentTheme.palette.panel, 0.9)
+      const surfaceMaterial = primitives.surfaceMaterial
       entities.forEach(entity => {
         if (!mounted.value) return
         // OSM 道路数据里混着 Polygon/MultiPolygon（广场、人造地面等，实测 305 个）。
@@ -645,7 +741,7 @@ export function useSceneStage({ container, buildings, roads }: SceneStageOptions
         if (!entity.polyline) {
           if (entity.polygon) {
             const surface = entity.polygon as WritablePolygonGraphics
-            surface.material = cssColor(DARK_PALETTE.panel, 0.9)
+            surface.material = surfaceMaterial.material ?? cssColor(currentTheme.palette.panel, 0.9)
             surface.outline = false
             state.roadEntities.push(markRaw(entity))
           }
@@ -661,7 +757,9 @@ export function useSceneStage({ container, buildings, roads }: SceneStageOptions
         // 配置道路样式（同样是运行时可写视图，见 types/city.ts）
         const polyline = entity.polyline as WritablePolylineGraphics
         polyline.width = width // 道路宽度（始终是数字）
-        polyline.material = createGlowMaterial(tier.color, ROAD_GLOW_POWER, ROAD_ALPHA)
+        // 道路材质**按分级共用**（五档各一个实例）：换主题时每档改一次颜色与辉光，
+        // 而不是逐条改 2260 个材质。
+        polyline.material = roadMaterialFor(tier.roadKey).material
         polyline.clampToGround = true // 贴地显示
 
         // 存入状态管理，用于控制显示/隐藏
@@ -701,7 +799,7 @@ export function useSceneStage({ container, buildings, roads }: SceneStageOptions
         )
       }
       if (flowInstances.length > 0) {
-        primitives.flowMaterial = createFlowDashMaterial(DARK_PALETTE.flow, FLOW_DASH_LENGTH)
+        primitives.flowMaterial = createFlowDashMaterial(currentTheme.palette.flow, FLOW_DASH_LENGTH)
         const flowPrimitive = new Cesium.Primitive({
           geometryInstances: flowInstances,
           appearance: new Cesium.PolylineMaterialAppearance({ material: primitives.flowMaterial }),
@@ -832,13 +930,62 @@ export function useSceneStage({ container, buildings, roads }: SceneStageOptions
     if (primitives.flow) primitives.flow.show = state.roadVisible
   }
 
+  /**
+   * 把整套主题应用到场景（面板 CSS 由 `useTheme` 负责，这里只管 3D）。
+   *
+   * ## 硬约束：只改值，不换对象
+   *
+   * 这里**绝不**去写 `entity.polygon.material` / `entity.polyline.material` ——
+   * 那是 3854 栋楼 / 2260 条路，换材质对象会打散 Cesium 的批处理 →
+   * 全量几何重建 → 卡死。所有改动都落在**已有材质实例**上：
+   *
+   * - Primitive 材质：改 `uniforms.color` / `uniforms.glowPower`；
+   * - 实体材质：改它内部那个 CallbackProperty 读到的颜色对象。
+   *
+   * 两种改法都**不 raise 任何事件**，所以 Cesium 不会重建几何。
+   */
+  const applyTheme = (theme: ThemeDefinition): void => {
+    currentTheme = theme
+    // 模块镜像同步一份：道路分级的颜色 getter 读的是它。
+    setActiveTheme(theme)
+
+    // 地面与背景
+    const activeViewer = viewer.value
+    if (activeViewer) {
+      activeViewer.scene.globe.baseColor = cssColor(theme.palette.screen)
+      activeViewer.scene.backgroundColor = cssColor(theme.palette.screen)
+    }
+
+    // 建筑本体（共用一个材质实例）
+    if (primitives.buildingMaterial) {
+      setLiveColor(primitives.buildingMaterial, theme.palette.building, 1)
+    }
+    // 广场 / 人造地面（共用一个材质实例）
+    if (primitives.surfaceMaterial) {
+      setLiveColor(primitives.surfaceMaterial, theme.palette.panel, 0.9)
+    }
+    // 建筑描边（批量 Primitive 的 uniform）
+    setMaterialColor(primitives.buildingGlowMaterial, theme.palette.accent)
+    if (primitives.buildingGlowMaterial) {
+      primitives.buildingGlowMaterial.uniforms.glowPower = theme.glow.buildingPower
+    }
+    // 道路（五档各改一次）
+    primitives.roadMaterials.forEach((material, key) => {
+      setLiveGlow(material, theme.roadColors[key], theme.glow.roadAlpha, theme.glow.roadPower)
+    })
+    // 流动光效
+    setMaterialColor(primitives.flowMaterial, theme.palette.flow, 0.95)
+    // 地面网格
+    setMaterialColor(primitives.gridMaterial, theme.palette.secondary, theme.glow.gridAlpha)
+  }
+
   const destroyViewer = () => {
     if (!viewer.value) return
     viewer.value.destroy()
     viewer.value = null
   }
 
-  return {
+  const stage: SceneStage = {
     viewer,
     state,
     primitives,
@@ -850,6 +997,8 @@ export function useSceneStage({ container, buildings, roads }: SceneStageOptions
     createBaseGrid,
     toggleBuildings,
     toggleRoads,
+    applyTheme,
     destroyViewer,
   }
+  return stage
 }
