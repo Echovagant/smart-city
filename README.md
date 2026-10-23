@@ -17,6 +17,10 @@
 **按页签切换关注点。** 顶栏 5 个页签 —— 区域概览、空气质量、公共安全、城市文旅、路网运行。
 每个页签给出对应的指标卡、分类构成与趋势图；切页签时场景同步高亮该类别的建筑，其余压暗。
 
+**看趋势，不只看当下。** 左列的趋势面板支持 **24 小时**与**逐日**两个视图：
+逐日视图给出最近 14 天的 AQI 与六项污染物日均值，可逐项切换。
+时间都是本地时间，取不到数据时显示空态，不画一条假的平线。
+
 **知道每个数字的来路。** 空气质量与气温来自公开数据源，建筑与道路来自本地 OSM 抽取。
 每张指标卡标着来源名与观测时间；模型估算项单独标注；某个源取不到时显示「数据源暂不可用」，
 不用 0 或旧值顶替。
@@ -92,7 +96,7 @@ cd backend-python      && ./.venv/Scripts/python.exe main.py
 
 | 数据 | 地址 | 凭据 | 实时性 |
 |---|---|---|---|
-| 空气质量（AQI / 分级 / 首要污染物 / 24 小时序列） | `https://air.cnemc.cn:18007`（中国环境监测总站） | 免凭据 | 实时（小时级） |
+| 空气质量（AQI / 分级 / 首要污染物 / 24 小时序列 / 14 天逐日序列） | `https://air.cnemc.cn:18007`（中国环境监测总站） | 免凭据 | 实时（小时级）；逐日序列按定义不是实时 |
 | 气温 / 湿度 | `http://www.weather.com.cn/data/sk/101010100.html`（中国天气网） | 免凭据 | 上游只给 `HH:MM`，时间戳可能落在未来，契约里标 `realtime: false`；仅北京可用 |
 | 建筑 / 道路 / 路网 / 设施分类 | 本地 OpenStreetMap 抽取 | 无 | 静态快照 |
 
@@ -118,10 +122,10 @@ cd backend-python      && ./.venv/Scripts/python.exe main.py
 | `backend-python/data_processor.py` | GeoJSON 加载与 bbox 过滤 |
 | `backend-python/city_data/` | 运行指标数据层：契约、聚合、公开数据源、派生事件 |
 | `backend-python/scripts/` | OpenStreetMap 数据抓取 |
-| `Data-driven-modeling/src/components/SmartCity.vue` | 三维场景、事件标记、页签联动 |
+| `Data-driven-modeling/src/components/SmartCity.vue` | 场景装配层：把场景 composable、数据轮询与大屏骨架接起来 |
 | `Data-driven-modeling/src/components/DashboardOverlay.vue` | 16:9 大屏骨架 |
 | `Data-driven-modeling/src/components/dashboard/` | 大屏面板与图表组件 |
-| `Data-driven-modeling/src/composables/` | 取数、页签状态、图表数据模型、事件与联动的纯函数 |
+| `Data-driven-modeling/src/composables/` | 场景层（底座 / 相机 / 交通 / 事件标记 / 页签联动）、取数、页签状态与纯函数 |
 | `Data-driven-modeling/src/theme/` | 深色色板与大屏设计 token |
 | `docs/ARCHITECTURE.md` | 架构说明与开发约定 |
 

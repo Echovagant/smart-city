@@ -16,11 +16,12 @@ backend-python/
 │   ├── http.py        #   只用标准库的 JSON 取数封装
 │   ├── city_codes.py  #   cnemc 城市/省份代码表静态快照（只有代码，参数校验用）
 │   ├── aggregator.py  #   并发取数 + 缓存 + 降级
-│   └── sources/       #   一个源一个模块（空气质量 / 天气 / 本地路网）
+│   ├── events.py      #   纯函数：从真实指标派生事件流
+│   └── sources/       #   一个源一个模块（空气质量 / 天气 / 本地路网 / 设施 / 区域统计）
 ├── scripts/
 │   ├── fetch_osm_data.py  # 从 Overpass API 抓 OSM 数据转 GeoJSON
 │   └── README.md          # 抓取脚本的用法与注意事项
-├── tests/             # pytest 测试（14 个 `test_*.py` 用例文件 + `conftest.py`）
+├── tests/             # pytest 测试（17 个 `test_*.py` 用例文件 + `conftest.py`）
 ├── pyproject.toml     # pytest 配置
 ├── requirements.txt   # 运行时依赖
 ├── requirements-dev.txt # 测试依赖（pytest、httpx、pytest-cov）
@@ -46,7 +47,13 @@ backend-python/
 - `/api/city/overview` 接入**免凭据的公开数据源**（中国环境监测总站 / 中国天气网）与本地 OSM 数据，
   **每个指标都带来源标注与时间戳**，模型估算项标 `estimated: true`，
   取不到的源进 `degraded`（**端点永不 500**），零新增依赖；
-  另有一段 `facilities`（设施分类计数，同样带来源标注），既有字段零改动
+  另有一段 `facilities`（设施分类计数，同样带来源标注），既有字段零改动。
+  指标带之外还产出**两条序列**：24 小时逐小时 AQI 与 **14 天逐日 AQI**
+  （逐日带各项污染物的日均值），单指标序列的点形状**一个字节都没变**
+- `/api/city/area` 按**矩形范围**聚合空间统计（`bbox` 必填）：面积、建筑数、道路数、
+  路网总长与分级长度、设施分类计数、建筑密度。口径全部复用现成实现，
+  每个数字都配一段 `method` 说明算法、精度与各数据文件的观测时间；
+  只读本地 OSM 快照，数据缺失返回 503（**绝不返回编出来的 0**）
 
 ## 快速开始
 
@@ -272,6 +279,7 @@ font-src 'self' data:
 - `GET /api/roads` —— 获取道路数据
 - `GET /api/traffic-status` —— 获取交通状态（**值由时间确定性推导，随时间变化**，不再是写死的固定值）
 - `GET /api/city/overview?cityCode=110000` —— **城市运行指标聚合**（空气质量 / 天气 / 路网静态指标 / 设施分类），每个指标都带来源标注与时间戳
+- `GET /api/city/area?bbox=min_lon,min_lat,max_lon,max_lat` —— **矩形范围的空间统计**（`bbox` 必填）
 
 `/api/traffic-status` 不校验 API key（前端不携带 key，这个端点必须始终可访问）。
 响应体 5 个键，120 字节左右：
@@ -324,7 +332,7 @@ font-src 'self' data:
 | `city` | object | `{code, name, latitude, longitude}`（取不到经纬度时为 `null`） |
 | `generated_at` | str | 本次响应生成的时间，ISO8601 UTC |
 | `metrics` | array | 指标列表，**每个都带 `source`** |
-| `series` | array | 时间序列（如 24 小时 AQI） |
+| `series` | array | 时间序列（24 小时 AQI + 14 天逐日 AQI） |
 | `facilities` | array | **设施分类计数**（本地 OSM 快照；取不到时是**空数组**，不编数字） |
 | `degraded` | array | **取不到的源的名字**（前端据此显示「数据源暂不可用」） |
 
@@ -357,6 +365,7 @@ font-src 'self' data:
 |---|---|---|---|---|
 | 空气质量（AQI / 分级 / 首要污染物） | `https://air.cnemc.cn:18007/CityData/GetAllCityRealTimeAQIModels`（GET） | 免凭据，**必须带 `Referer: https://air.cnemc.cn:18007/`** | 实时（小时级） | 取不到 → 进 `degraded`，指标值 `null` |
 | 污染物浓度 + 24 小时序列 | `https://air.cnemc.cn:18007/HourChangesPublish/GetCityRealTimeAqiHistoryByCondition?citycode=<code>`（**POST，body 为 `{}`**） | 同上 | 实时 | 同上 |
+| 逐日序列（14 天，AQI + 六项污染物日均值） | `https://air.cnemc.cn:18007/HourChangesPublish/GetCityDayAqiHistoryByCondition?citycode=<code>`（**POST，body 为 `{}`**） | 同上 | 按定义不是实时（最旧的一条是 14 天前） | 同上；**只产出序列**，不产出指标 |
 | 气温 / 湿度 | `http://www.weather.com.cn/data/sk/101010100.html` | 免凭据 | **不新鲜**（见下） | 同上 |
 | 建筑 / 道路数量、路网总长、覆盖面积、各等级道路条数 | 本地 `geojson/*.geojson` | 无 | 静态快照 | 文件读不到 → 进 `degraded` |
 | 路网负载指数 | 上面那份本地数据**自己算** | 无 | —— | **模型估算**（`estimated: true`） |
@@ -387,14 +396,90 @@ font-src 'self' data:
 
 #### 缓存与超时
 
-- 四个源**并发**取数（`asyncio.gather` + `asyncio.wait_for`），
+- 六个源**并发**取数（`asyncio.gather` + `asyncio.wait_for`），
   **每个源独立 5 秒预算**：慢源只拖慢自己。
-- 缓存：空气质量 30 分钟、天气 10 分钟、静态路网指标进程内常驻。
+- 缓存：空气质量 30 分钟、**逐日历史 60 分钟**、天气 10 分钟、静态路网指标进程内常驻。
 - **缓存命中时 `fetched_at` 仍是首次取数的时间** —— 那才是真实的数据年龄。
 - 取数失败**不写缓存**（否则坏数据会被缓存住 30 分钟）。
 
-实测（2026-10-22，本机）：冷缓存首次 1125 ms（两个外部源的真实往返 + 本地 GeoJSON
+实测（2026-10-22，本机）：冷缓存首次 1125 ms（外部源的真实往返 + 本地 GeoJSON
 统计），第二次起 0–16 ms（走缓存）。
+
+#### 逐日序列
+
+`aqi_daily` 序列是**第 6 个源**（中国环境监测总站 · 逐日历史）产出的：
+**14 天**逐日的 24 小时均值（AQI / PM2.5 / PM10 / O3 / NO2 / SO2 / CO）。
+序列点的结构是 `{t, v, values}`：`v` 是当天的 AQI，`values` 是六项污染物的日均值。
+
+**向后兼容**：单指标序列（`aqi_24h`）的点仍然是 `{"t": …, "v": …}` ——
+空的 `values` 键被 `SeriesPoint` 上的 `@model_serializer(mode="wrap")` **整个省掉**，
+所以既有序列的点形状**一个字节都没变**。
+
+上游路径是 `POST` + **空 body** + `Referer` 头，控制器是 **`HourChangesPublish`**
+（站点上没有 `DayChangesPublish` 那个控制器）。逐日与逐小时是**两个源**，
+逐日挂了不影响 24 小时曲线。
+
+### `GET /api/city/area` —— 矩形范围的空间统计
+
+回答一个问题：**「这一片范围里有多少栋楼？路网有多长？有哪些设施？」**
+
+```
+GET /api/city/area?bbox=116.390,39.905,116.405,39.915
+```
+
+- `bbox` **必填**，格式 `min_lon,min_lat,max_lon,max_lat`（经度在前）。
+  非法输入一律 **400**，原因文案与 `/api/buildings` 的同类错误**逐字相同**
+  （复用同一个 `_parse_bbox`）。
+- 只读**本地 OSM 快照**：不走 `/api/city/overview` 那套「多源并发 + 降级」的聚合器。
+  数据文件读不到时返回 **503**，**绝不返回编出来的 0**。
+- 范围里一个要素都没有是**正常结果**：200 + 数字 0（空范围，不是故障）。
+- 不校验 API key（前端不携带 key，这个端点必须始终可访问）。
+- 响应带 `Cache-Control: public, max-age=30` 与 `X-Data-Generated-At`。
+
+契约 `AreaStats`（`city_data/models.py`）：
+
+| 键 | 类型 | 含义 |
+|---|---|---|
+| `bbox` | array | 回显规范化后的四个数 |
+| `area_km2` | float | 该范围的近似面积（km²） |
+| `building_count` | int | 范围内的建筑要素数 |
+| `road_count` | int | 道路要素数（**含**广场、人造地面这类面要素） |
+| `road_length_km` | float | 路网总长（km）—— **只有线要素计入长度** |
+| `road_length_by_tier_km` | object | 按等级分解：`main` / `secondary` / `local` / `footway` / `other` |
+| `facility_counts` | object | 设施分类计数（医疗 / 公共安全 / 教育 / 历史建筑 / 商业与办公） |
+| `facility_categories` | array | 同一份计数的带标签版本（分类名 + 判定依据 + 来源） |
+| `building_density_per_km2` | float | 建筑密度（栋 / km²） |
+| `source` | object | **来源标注**：本地快照、`estimated: false`、各文件的观测时间 |
+| `method` | object | **算法口径**：每条数怎么算出来的（见下） |
+
+**算法全部复用现成实现**，一个项目里不出现两套口径：
+面积 → `road_network.area_km2`；路网长度 → `road_network.polyline_length_m`；
+分级 → `road_network.tier_of` + `ROAD_TIERS`；设施分类 → `facilities.count_by_category`
+（分类规则仍然只有 `facilities.py` 一处）。实现在 `city_data/sources/area.py`，
+**纯函数、不联网**。
+
+实测（`bbox=116.390,39.905,116.405,39.915`）：
+
+| 项 | 值 |
+|---|---|
+| 面积 | 1.4226 km² |
+| 建筑 | 1039 栋 |
+| 道路 | 661 条（含面要素） |
+| 路网总长 | 54.4386 km |
+| 分级长度 | 主干道 3.0294 / 次干道 6.5506 / 支路 17.3231 / 人行道 27.3563 / 其他 0.1792（km） |
+| 设施 | 医疗 0 / 公共安全 6 / 教育 2 / 历史建筑 9 / 商业与办公 4 |
+| 建筑密度 | 730.353 栋 / km² |
+
+**`method` 字段是「每个数字都能追到来源」那条铁律的落地**：路网长度与面积的算法说明
+（等距圆柱近似）、保留精度、范围内线要素与面要素各多少、以及**建筑与道路两份文件
+各自的观测时间**都写在里面。总额由各分解项四舍五入后相加得到，所以前端画分解图时
+各段之和与总额必然对得上账。
+
+缓存：范围过滤复用按 `bbox` 的过滤结果 LRU（上限 8），聚合结果**另加一层 LRU-8**。
+实测冷启动 143 ms，缓存命中中位 **2.64 ms**（P95 5.19 ms）。
+
+> **这个端点目前只有后端**：大屏上的前端交互还没接，界面上暂时没有可点的区域入口。
+> 另外 `facility_categories[].members` **恒为空数组**（只给计数，不给成员 id）。
 
 ### `bbox` 查询参数
 
@@ -470,7 +555,7 @@ cd backend-python
 ./.venv/Scripts/python.exe -m pytest -q
 ```
 
-**当前 186 passed**（15 个 `test_*.py` 用例文件 + `conftest.py`）。
+**当前 282 passed**（17 个 `test_*.py` 用例文件 + `conftest.py`）。
 
 测试配置在 `pyproject.toml`（`testpaths = ["tests"]`），用例在 `tests/` 下。
 需要真实 OSM 数据的用例在没有数据文件时会自动跳过，不会伪装成通过。
@@ -535,17 +620,20 @@ node scripts\measure-browser-performance.mjs
   第一个请求单独标成「冷启动」不计入 P95，并额外给一列 `min` —— 共享开发机上跑时，
   `min` 比 `P95` 更能说明「应用本身有多快」。
 
-**实测基线**（2026-10-22，16 核 i7-13620H；延迟用真实 uvicorn 进程 + `urllib` 打 30 次取 P95，
+**实测基线**（覆盖率 2026-10-23 复测，延迟 2026-10-22 测；16 核 i7-13620H；
+延迟用真实 uvicorn 进程 + `urllib` 打 30 次取 P95，
 覆盖率是 `--cov=main --cov=data_processor --cov=city_data` 的结果）：
 
 | 指标 | 验收线 | 实测 | 判定 |
 |---|---|---|---|
-| 后端覆盖率（`main.py` + `data_processor.py` + `city_data/`） | > 90% | **94%**（1247 条语句 / 75 条未覆盖；`main.py` 97%、`data_processor.py` 89%） | 达标 |
-| 前端覆盖率（`src/**` 全口径） | > 80% | **96.53%** 语句、94.77% 函数、83.98% 分支 | 达标 |
+| 后端覆盖率（`main.py` + `data_processor.py` + `city_data/`） | > 90% | **95%**（1372 条语句 / 73 条未覆盖；`main.py` 97%、`data_processor.py` 89%） | 达标 |
+| 前端覆盖率（`src/**` 全口径） | > 80% | **97.86%** 语句、95.94% 函数、88.51% 分支 | 达标 |
 | `/api/buildings`（全量）P95 | < 200 ms | **25.4 ms**（gzip 24.6 ms；中位数 4.3 ms） | 达标 |
 | `/api/roads`（全量）P95 | < 200 ms | **27.8 ms**（gzip 21.2 ms；中位数 3.4 ms） | 达标 |
 | 带 bbox 的路径 P95 | < 200 ms | **132.1 ms**（gzip 162.7 ms） | 达标 |
 | `/api/city/overview`（缓存命中）P95 | 参考 | **17.5 ms** | 参考 |
+| `/api/city/overview`（冷启动，含外部源往返） | 参考 | **约 1150 ms** | 参考 |
+| `/api/city/area`（缓存命中） | 参考 | 中位 **2.64 ms**（P95 5.19 ms；冷启动 143 ms） | 参考 |
 | Vite 产物体积（不含 Cesium 运行时） | < 5 MB | **3.97 MB**（5 个文件） | 达标 |
 | `dist/` 总体积 | < 5 MB（含 3.75 MB 自托管 Cesium 运行时） | **7.72 MB**（104 个文件） | **口径差异**（不判达标/不达标） |
 | 首屏外部请求 | 0 | **0 个** | 达标 |
@@ -586,6 +674,17 @@ stats = processor.calculate_building_statistics(data)
 
 `DataProcessor` 的方法失败时抛 `DataProcessorError`（`data_processor.py:73`），
 上层把它映射成 503，而不是让文件系统 / JSON / GEOS 的原始异常漏成 500。
+
+## 已知限制
+
+- **区域统计端点目前只有后端** —— `GET /api/city/area` 的前端交互还没接，
+  大屏上暂时没有可点的区域入口
+- 区域统计的 `facility_categories[].members` **恒为空数组**（只给分类计数，不给成员 id）
+- 天气源**只有北京可用**（`101010100`），且上游只给 `HH:MM`，时间戳可能落在未来
+  —— 契约里标 `realtime: false`，**不新鲜就说不新鲜**
+- 城市代码表是**静态快照**（**368 个代码**，只有代码没有名称），上游新增城市要重新抓
+- `Dockerfile` / `docker-compose.yml` / `deploy/nginx.conf` **未经过 `docker build` /
+  `nginx -t` 验证**（本机没有 Docker 与 nginx）
 
 ## 注意事项
 
