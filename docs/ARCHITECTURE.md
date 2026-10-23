@@ -175,8 +175,33 @@ Vue 会**解包 ref**，`stage.viewer` 拿回来是 `null` 而不是那个 `Ref`
 
 ### 主题
 
-`src/theme/dark.ts` 是**视觉的唯一事实来源** —— 组件与样式表都不就地写颜色。
-`src/theme/dashboard.ts` 只放**尺寸与排版**（间距、圆角、字号阶梯、列宽）。
+`src/theme/themes/` 是**配色的事实来源**：3 套预设主题（深空蓝 / 石墨灰 / 深海青），
+每套 = 一整套色板（面板 / 场景 / 道路 / 图表 6 档）+ 一组辉光参数。
+
+| 文件 | 职责 |
+|---|---|
+| `src/theme/themes/types.ts` | 类型：`ThemeDefinition` / `ThemePalette` / `ThemeRoadColors` / `ThemeGlow` / `ThemeOverrides` |
+| `src/theme/themes/index.ts` | 三套色值 + `themeById()` / `resolveTheme(id, overrides)` |
+| `src/theme/dark.ts` | 材质工厂与**活材质**；`applyThemeVariables()` 把当前主题写进 `--dc-*` |
+| `src/theme/dashboard.ts` | 尺寸排版 token；图表色序 `CHART_COLORS` 是**活数组**，随主题就地改写 |
+| `src/composables/useTheme.ts` | 模块级单例：主题 id + 用户覆盖 + `localStorage` 持久化（`smart-city:theme:v1`） |
+
+**换主题的代价**：只改材质 uniform 与 Property 的值，**不重建任何几何**。
+
+这不是想当然：Cesium 的 `GeometryUpdater._onEntityPropertyChanged` 无论静态还是动态
+都会 raise `_geometryChanged` → 视觉器拆掉并重建 updater → 几何重建。
+所以「整体换材质对象」和「调 `ConstantProperty.setValue()`」这两条路都会让
+3854 栋楼重新建批处理（卡死）。
+
+这里的做法是「**共享材质实例 + 回调式活颜色**」：
+
+- 建筑本体**全场共用一个**材质实例（以前是每栋各包一个 `ColorMaterialProperty`，3854 个）；
+- 道路按五档分级**各共用一个**材质实例（以前是每条一个，2260 个）；
+- 颜色挂在材质的回调上，换主题只改这几份颜色对象的分量 → 不产生任何事件。
+
+实测（真实 OSM 数据、生产构建、浏览器里点主题卡）：**切换的同步耗时 0.2 ~ 0.3 ms**，
+逐帧 CPU 与旧实现持平；场景区域亮度 p90 由 171.7 降到 118.8（**−30.8%**），
+流动光效层的发光像素数量减少 84.7%。
 
 ## 不能破的约定
 
@@ -200,10 +225,18 @@ Vue 会**解包 ref**，`stage.viewer` 拿回来是 `null` 而不是那个 `Ref`
 
 **蓝色只做强调与辉光，橙色只做预警，红色只做告警。**
 
-- 分类图表（环形图 / 条形图）用 `DARK_PALETTE.chartSeries`（蓝青系 6 档）。
+- 分类图表（环形图 / 条形图）用 `CHART_COLORS`（蓝青系 6 档，随主题变）。
   普通分类画成橙色，看图的人会读成一条告警 —— 那是语义级错误
 - 橙与红只留给 severity：拥堵徽标、事件流的严重度、告警脉冲环
 - 6 档是因为空气质量页的环形图有 6 项污染物，5 档会让第 6 段循环回第 1 段
+- **主题只改配色，不改语义**：橙（预警）与红（告警）在三套主题里完全一致，
+  用户自选层**不开放**这两个色；图表 6 档也不开放逐档取色
+  （逐档乱调会让 6 档失去可区分性）
+- **组件里不许写死色值**：一律走 `var(--dc-*)` 或
+  `color-mix(in srgb, var(--dc-*) N%, ...)`。
+  ⚠️ 半透明白**要与底色混合**（`color-mix(in srgb, var(--dc-text) 72%, var(--dc-panel))`），
+  与 `transparent` 混合会把文字洗淡 —— 叠在面板底上时对比度比原来更低，可能掉到 WCAG AA 以下。
+  只有边框、背景遮罩、网格线这类「叠在别的背景上」的零件才与 `transparent` 混合。
 
 ### Cesium
 

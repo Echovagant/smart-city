@@ -215,7 +215,9 @@ const onRoadAlpha = (event: Event): void => {
   /* 视口不够高时内部滚动：面板不许顶出屏幕 */
   max-height: calc(100vh - var(--dc-topbar-height, 96px) - 16px);
   overflow-y: auto;
-  background: var(--dc-panel-bg, color-mix(in srgb, var(--dc-panel, #0b1526) 88%, transparent));
+  /* **不透明**：这个面板会盖在右列（区域统计/分类分布）上面，
+     用半透明底色会把底下的文字透上来叠成一团。用面板本色的实底。 */
+  background: var(--dc-panel, #0b1526);
   border: var(--dc-panel-border-width, 1px) solid
     color-mix(in srgb, var(--dc-accent, #1e40af) 35%, transparent);
   border-radius: var(--dc-panel-radius, 2px);
@@ -242,7 +244,7 @@ const onRoadAlpha = (event: Event): void => {
 .dc-theme-picker-current {
   font-size: var(--dc-panel-small-size, 10px);
   letter-spacing: 0.08em;
-  color: color-mix(in srgb, var(--dc-text, #cbd5e1) 60%, transparent);
+  color: color-mix(in srgb, var(--dc-text, #cbd5e1) 60%, var(--dc-panel, #0b1526));
 }
 
 /* 主题卡：整卡可点 */
@@ -305,7 +307,7 @@ const onRoadAlpha = (event: Event): void => {
 .dc-theme-card-desc {
   font-size: var(--dc-panel-small-size, 10px);
   line-height: 1.4;
-  color: color-mix(in srgb, var(--dc-text, #cbd5e1) 55%, transparent);
+  color: color-mix(in srgb, var(--dc-text, #cbd5e1) 55%, var(--dc-panel, #0b1526));
 }
 
 /* 色板预览：颜色来自主题对象（内联样式），组件里不写死 */
@@ -318,7 +320,7 @@ const onRoadAlpha = (event: Event): void => {
 .dc-theme-swatch {
   width: 22px;
   height: 8px;
-  border: 1px solid color-mix(in srgb, var(--dc-text, #cbd5e1) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--dc-text, #cbd5e1) 16%, var(--dc-panel, #0b1526));
   border-radius: 1px;
 }
 
@@ -337,7 +339,7 @@ const onRoadAlpha = (event: Event): void => {
   align-items: center;
   gap: 6px;
   font-size: var(--dc-panel-small-size, 10px);
-  color: color-mix(in srgb, var(--dc-text, #cbd5e1) 72%, transparent);
+  color: color-mix(in srgb, var(--dc-text, #cbd5e1) 72%, var(--dc-panel, #0b1526));
 }
 
 .dc-theme-field-label {
@@ -354,7 +356,7 @@ const onRoadAlpha = (event: Event): void => {
   border: 1px solid color-mix(in srgb, var(--dc-accent, #1e40af) 50%, transparent);
   border-radius: var(--dc-panel-radius, 2px);
   font-size: 9px;
-  color: color-mix(in srgb, var(--dc-text, #cbd5e1) 60%, transparent);
+  color: color-mix(in srgb, var(--dc-text, #cbd5e1) 60%, var(--dc-panel, #0b1526));
 }
 
 .dc-theme-color {
@@ -377,7 +379,7 @@ const onRoadAlpha = (event: Event): void => {
 .dc-theme-field-value {
   font-family: Consolas, 'SF Mono', ui-monospace, monospace;
   font-size: 10px;
-  color: color-mix(in srgb, var(--dc-text, #cbd5e1) 55%, transparent);
+  color: color-mix(in srgb, var(--dc-text, #cbd5e1) 55%, var(--dc-panel, #0b1526));
   text-align: right;
 }
 
@@ -393,7 +395,7 @@ const onRoadAlpha = (event: Event): void => {
 
 .dc-theme-status {
   font-size: var(--dc-panel-small-size, 10px);
-  color: color-mix(in srgb, var(--dc-text, #cbd5e1) 50%, transparent);
+  color: color-mix(in srgb, var(--dc-text, #cbd5e1) 50%, var(--dc-panel, #0b1526));
 }
 
 .dc-theme-reset {
@@ -404,7 +406,7 @@ const onRoadAlpha = (event: Event): void => {
   font-family: inherit;
   font-size: var(--dc-panel-small-size, 10px);
   letter-spacing: 0.08em;
-  color: color-mix(in srgb, var(--dc-text, #cbd5e1) 72%, transparent);
+  color: color-mix(in srgb, var(--dc-text, #cbd5e1) 72%, var(--dc-panel, #0b1526));
   cursor: pointer;
   transition: border-color 0.2s ease, color 0.2s ease;
 }
@@ -418,7 +420,7 @@ const onRoadAlpha = (event: Event): void => {
   margin: 0;
   font-size: 9px;
   line-height: 1.5;
-  color: color-mix(in srgb, var(--dc-text, #cbd5e1) 42%, transparent);
+  color: color-mix(in srgb, var(--dc-text, #cbd5e1) 42%, var(--dc-panel, #0b1526));
 }
 
 /* 窄屏（1280 宽）：面板跟着右列一起收窄，不越到中间场景上 */

@@ -85,7 +85,8 @@ const legend = computed(() =>
           :cy="CENTER"
           :r="RADIUS"
           fill="none"
-          stroke="color-mix(in srgb, var(--dc-secondary, #24507f) 16%, transparent)"
+          class="dc-donut-track"
+          stroke="var(--dc-donut-track, #16375f)"
           :stroke-width="STROKE"
         />
         <circle
@@ -137,6 +138,12 @@ const legend = computed(() =>
   font-size: 15px;
   font-weight: 600;
   text-anchor: middle;
+}
+
+/* 环形轨道：底色描边。颜色放进 CSS 规则而不是 SVG 表现属性 ——
+   表现属性里用 color-mix() 的支持度不如 CSS 属性稳。 */
+.dc-donut-track {
+  stroke: color-mix(in srgb, var(--dc-secondary, #24507f) 16%, transparent);
 }
 
 .dc-donut-label {
