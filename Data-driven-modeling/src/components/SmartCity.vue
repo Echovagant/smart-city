@@ -9,6 +9,7 @@
     <DashboardOverlay
       :overview="cityOverview"
       :events="resolvedEvents"
+      :stage="stage"
       @select-event="flyToEvent"
     >
       <!-- 顶栏右侧读数带：S1 的城市运行指标带 + 实时交通读数。

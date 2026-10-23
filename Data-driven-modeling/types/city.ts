@@ -325,6 +325,52 @@ export interface FacilityCategory {
 }
 
 /* -------------------------------------------------------------------------
+ * 区域统计契约（GET /api/city/area）
+ * ---------------------------------------------------------------------- */
+
+/**
+ * `GET /api/city/area?bbox=min_lon,min_lat,max_lon,max_lat` 的响应：
+ * 一片矩形范围内的空间统计（后端 `city_data/sources/area.py`）。
+ *
+ * **每个数字都来自本地 OSM 快照**（`source.estimated === false`），
+ * 口径写在 `method` 里（路网长度、面积、密度的折算方式）。
+ *
+ * 空范围（bbox 里没有任何要素）是**正常结果**：数字是 0，不是故障。
+ */
+export interface AreaStats {
+  /** 回显规范化后的范围（min_lon, min_lat, max_lon, max_lat）。 */
+  bbox: number[]
+  /** 范围面积（km²）。 */
+  area_km2: number
+  /** 范围内的建筑要素数。 */
+  building_count: number
+  /** 范围内的道路要素数（**含**广场、人造地面这类面要素）。 */
+  road_count: number
+  /** 路网总长（km）—— **只有线要素计入长度**。 */
+  road_length_km: number
+  /** 按等级分解的路网长度（km）：main / secondary / local / footway / other。 */
+  road_length_by_tier_km: Record<string, number>
+  /** 设施分类计数（键与 `/api/city/overview` 的 `facilities` 一致）。 */
+  facility_counts: Record<string, number>
+  /** 同一份计数的带标签版本（分类名 + 判定依据 + 各自来源）。 */
+  facility_categories: FacilityCategory[]
+  /** 建筑密度（栋 / km²）。 */
+  building_density_per_km2: number
+  /** 所有数字的来源。 */
+  source: SourceInfo
+  /** 算法口径（路网长度、面积、密度分别怎么算出来的）。 */
+  method: Record<string, unknown>
+}
+
+/** 场景里选中的一片范围：一个中心点 + 一个半径。 */
+export interface AreaSelection {
+  /** 中心点（点选命中的地面位置）。 */
+  center: LngLat
+  /** 半径（米）。 */
+  radiusM: number
+}
+
+/* -------------------------------------------------------------------------
  * 大屏（16:9 骨架）的类型
  * ---------------------------------------------------------------------- */
 

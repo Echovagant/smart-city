@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, watch } from 'vue'
+import AreaStats from './dashboard/AreaStats.vue'
 import BarChart from './dashboard/BarChart.vue'
 import DonutChart from './dashboard/DonutChart.vue'
 import EventStream from './dashboard/EventStream.vue'
@@ -11,7 +12,9 @@ import { useDashboardState } from '@/composables/useDashboardState'
 import { resolveTabView } from '@/composables/useDashboardData'
 import { explainEmptyEvents } from '@/composables/useEventStream'
 import { resolveSceneLinkage } from '@/composables/useSceneLinkage'
+import { AREA_EMPTY_TEXT, AREA_STAGE_NOT_READY_TEXT, useAreaQuery } from '@/composables/useAreaQuery'
 import { applyDashboardVariables } from '@/theme/dashboard'
+import type { SceneStage } from '@/composables/useSceneStage'
 import type { CityEvent, CityOverview, DashboardTab } from '../../types/city'
 
 /**
@@ -37,11 +40,20 @@ const props = withDefaults(
      * 派生不出来就是空数组 —— 空事件流是数据现实，不是故障。
      */
     events?: CityEvent[]
+    /**
+     * 场景底座（`useSceneStage` 的返回值）。
+     *
+     * 区域统计要**在 3D 场景里拾取**，所以要拿到场景里的那份 viewer。
+     * 由 `SmartCity.vue` 显式传进来（`:stage="stage"`）。
+     * 没有底座就没有拾取 —— 面板会直说「场景底座未就绪，无法拾取」。
+     */
+    stage?: SceneStage | null
   }>(),
   {
     overview: null,
     title: '智慧城市运行管理中心',
     events: () => [],
+    stage: null,
   },
 )
 
@@ -76,6 +88,35 @@ const onSelect = (tab: DashboardTab) => setTab(tab.key)
 
 /** 点了事件：抛给上层（上层负责把相机飞过去）。 */
 const onSelectEvent = (event: CityEvent) => emit('select-event', event)
+
+/* ---------------------------------------------------------------------------
+ * 区域统计（点选地面 → 那片范围的统计）
+ * ------------------------------------------------------------------------- */
+
+/**
+ * 场景底座由 `SmartCity.vue` **显式传进来**（`:stage="stage"`）。
+ *
+ * 生产构建里 `<script setup>` 的顶层绑定不会挂到 `setupState` 上，
+ * 所以这里不翻组件实例 —— 接线只有这一条路，dev 与生产行为一致。
+ */
+const areaQuery = useAreaQuery({ stage: props.stage })
+const { radiusM, center, stats, loading, error, errorDetail, hint } = areaQuery
+
+/** 场景底座在不在：不在就没有拾取，面板要**直说**，不装成「在场景里点一下地面」。 */
+const sceneReady = computed(() => Boolean(props.stage))
+
+/** 空态文案：两种情况分开说。 */
+const areaEmptyText = computed(() =>
+  sceneReady.value ? AREA_EMPTY_TEXT : AREA_STAGE_NOT_READY_TEXT,
+)
+
+// 场景底座换掉时（比如热更新后重新挂载），拾取监听要跟着换。
+watch(
+  () => props.stage,
+  stage => {
+    areaQuery.attachStage(stage)
+  },
+)
 
 onMounted(() => {
   // 大屏的尺寸 token 写进 CSS 自定义属性（颜色由 dark.ts 的 applyThemeVariables 写）。
@@ -119,8 +160,24 @@ onMounted(() => {
       <!-- 中心：留空，3D 场景从后面透出来 -->
       <div class="dashboard-area-scene" aria-hidden="true"></div>
 
-      <!-- 右列：分类分布 + 实时事件流 -->
+      <!-- 右列：区域统计（点选地面）+ 分类分布 + 实时事件流 -->
       <div class="dashboard-area-right">
+        <!-- 区域统计：点一下地面就查那片范围。放在右列最上面 ——
+             选完之后数字立刻出现在视线里，不用滚动去找。 -->
+        <AreaStats
+          class="dashboard-area-stats"
+          :stats="stats"
+          :center="center"
+          :radius-m="radiusM"
+          :loading="loading"
+          :error="error"
+          :error-detail="errorDetail"
+          :hint="hint"
+          :empty-text="areaEmptyText"
+          :scene-ready="sceneReady"
+          @update:radius="areaQuery.setRadius"
+          @clear="areaQuery.clear"
+        />
         <PanelCard
           title="分类分布"
           :badge="view.donut.source?.name"
@@ -267,6 +324,11 @@ onMounted(() => {
 }
 
 .dashboard-distribution-panel {
+  flex: 0 0 auto;
+}
+
+/* 区域统计：按内容高度起步（不抢事件流的高度） */
+.dashboard-area-stats {
   flex: 0 0 auto;
 }
 
