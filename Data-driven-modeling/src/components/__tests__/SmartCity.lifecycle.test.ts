@@ -1271,8 +1271,8 @@ describe('深色底座', () => {
     expect(flow).toBeDefined()
     expect(flow!.appearance.material.uniforms.dashLength).toBe(24)
     expect(flow!.appearance.material.uniforms.color?.name).toBe(DARK_PALETTE.flow)
-    // 流动层与道路同宽（主干道 14），盖得住路面
-    expect(flow!.geometryInstances[0].geometry.width).toBe(14)
+    // 流动层与道路同宽（主干道 7），盖得住路面
+    expect(flow!.geometryInstances[0].geometry.width).toBe(7)
 
     wrapper.unmount()
   })

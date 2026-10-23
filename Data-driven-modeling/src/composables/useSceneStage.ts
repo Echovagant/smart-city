@@ -101,15 +101,20 @@ export const cityConfig: CityConfig = {
   //   tertiary 47、primary 40、unclassified 27、path 26、secondary 21、……
   // 分级就是照这个分布定的：人行道/步行区占了一半，所以给它们最细最浅的线。
   //
-  // 宽度沿用原来的 14/10/7/4（Cesium 里是像素），颜色全部换成深色科技色：
-  // 主干道最亮，人行道最暗 —— 越细的路越暗，层级一眼可辨。
+  // 宽度是**几何属性**，只能在装载时定：运行时改宽度会触发 2260 条路的几何重建
+  // （与「换材质对象」同源的禁忌，见 applyTheme 的说明）。所以宽度**不做成主题项** ——
+  // 全局默认一份、所有主题共享，否则切主题会出现「颜色变了、宽度没变」的割裂。
+  //
+  // 这组宽度是原来的**一半**（14 / 10 / 7 / 4 → 7 / 5 / 3 / 2）：
+  // 实测原来主干道 14 px ≈ 21 m 的地面线宽，比 30 m 高的建筑的竖向体量还大 ——
+  // 「建筑小道路大」的根因之一。砍半之后道路退成底纹，建筑体块自己说话。
   roadTiers: [
     {
       name: '主干道',
       highway: ['motorway', 'trunk', 'primary'],
       roadKey: 'main',
       flowing: true,
-      width: 14,
+      width: 7,
       get color() {
         return getActiveTheme().roadColors.main
       },
@@ -119,7 +124,7 @@ export const cityConfig: CityConfig = {
       highway: ['secondary', 'tertiary'],
       roadKey: 'secondary',
       flowing: true,
-      width: 10,
+      width: 5,
       get color() {
         return getActiveTheme().roadColors.secondary
       },
@@ -129,7 +134,7 @@ export const cityConfig: CityConfig = {
       highway: ['residential', 'unclassified', 'service'],
       roadKey: 'local',
       flowing: true,
-      width: 7,
+      width: 3,
       get color() {
         return getActiveTheme().roadColors.local
       },
@@ -139,7 +144,7 @@ export const cityConfig: CityConfig = {
       highway: ['footway', 'pedestrian', 'steps', 'path', 'cycleway'],
       roadKey: 'footway',
       flowing: true,
-      width: 4,
+      width: 2,
       get color() {
         return getActiveTheme().roadColors.footway
       },
@@ -148,12 +153,12 @@ export const cityConfig: CityConfig = {
   // 兜底分级：highway 标签缺失、或取值不在上表里时用它。
   // OSM 的 highway 取值比上表多（motorway_link / living_street / track 等都在表外），
   // 没有兜底的话这些道路会没有样式。
-  // 宽度取最低等级（4m，与人行道同级），避免把未知道路画得比主干道还宽。
+  // 宽度取最低等级（2 px，与人行道同级），避免把未知道路画得比主干道还宽。
   roadFallbackTier: {
     name: '其他道路',
     roadKey: 'fallback',
     flowing: false,
-    width: 4,
+    width: 2,
     get color() {
       return getActiveTheme().roadColors.fallback
     },
@@ -613,8 +618,13 @@ export function useSceneStage({ container, buildings, roads }: SceneStageOptions
 
     // 材质单独存一份：页签联动时要改它的 color uniform（压暗 / 恢复），
     // 换主题时也要改它 —— 改 uniform 不重建几何，这是最省的一刀。
+    //
+    // 描边取 `palette.buildingEdge` 而不是 `palette.accent`：
+    // **描边是场景里的物体，accent 是界面里的强调**。哑光白模要浅灰细边
+    // （像建模软件里的棱线），而界面强调色必须仍是可辨认的蓝 ——
+    // 用同一个色位会让界面的选中态变成灰色，看着像禁用态。
     primitives.buildingGlowMaterial = createPrimitiveGlowMaterial(
-      currentTheme.palette.accent,
+      currentTheme.palette.buildingEdge,
       currentTheme.glow.buildingPower
     )
 
@@ -727,7 +737,9 @@ export function useSceneStage({ container, buildings, roads }: SceneStageOptions
 
       const entities = dataSource.entities.values
       // 广场 / 人造地面材质 —— 全场共用一个实例（305 个地面多边形不再各包一个）。
-      primitives.surfaceMaterial = createLiveColorMaterial(currentTheme.palette.panel, 0.9)
+      // 取 `palette.surface` 而不是 `palette.panel`：广场是**场景里的一部分**，
+      // 面板是大屏的 UI 底，两者是两回事。
+      primitives.surfaceMaterial = createLiveColorMaterial(currentTheme.palette.surface, 0.9)
       const surfaceMaterial = primitives.surfaceMaterial
       entities.forEach(entity => {
         if (!mounted.value) return
@@ -741,7 +753,7 @@ export function useSceneStage({ container, buildings, roads }: SceneStageOptions
         if (!entity.polyline) {
           if (entity.polygon) {
             const surface = entity.polygon as WritablePolygonGraphics
-            surface.material = surfaceMaterial.material ?? cssColor(currentTheme.palette.panel, 0.9)
+            surface.material = surfaceMaterial.material ?? cssColor(currentTheme.palette.surface, 0.9)
             surface.outline = false
             state.roadEntities.push(markRaw(entity))
           }
@@ -800,6 +812,16 @@ export function useSceneStage({ container, buildings, roads }: SceneStageOptions
       }
       if (flowInstances.length > 0) {
         primitives.flowMaterial = createFlowDashMaterial(currentTheme.palette.flow, FLOW_DASH_LENGTH)
+        // 不透明度取主题的 `glow.flowAlpha`（工厂里的 0.95 是硬编码的默认值）：
+        // 这一层是**全场最刺眼的元素**（实测对底色 10.96 : 1，比主干道还亮），
+        // 哑光白模主题把它压到 0.12 —— 保留一点「数据在流动」的提示，
+        // 但不再抢建筑主体的注意力。
+        // 改 uniform（换颜色对象的分量），不换材质对象。
+        setMaterialColor(
+          primitives.flowMaterial,
+          currentTheme.palette.flow,
+          currentTheme.glow.flowAlpha
+        )
         const flowPrimitive = new Cesium.Primitive({
           geometryInstances: flowInstances,
           appearance: new Cesium.PolylineMaterialAppearance({ material: primitives.flowMaterial }),
@@ -961,11 +983,13 @@ export function useSceneStage({ container, buildings, roads }: SceneStageOptions
       setLiveColor(primitives.buildingMaterial, theme.palette.building, 1)
     }
     // 广场 / 人造地面（共用一个材质实例）
+    // 取 `palette.surface` 而不是 `palette.panel`：广场是**场景里的一部分**，
+    // 面板是大屏的 UI 底，两者是两回事。
     if (primitives.surfaceMaterial) {
-      setLiveColor(primitives.surfaceMaterial, theme.palette.panel, 0.9)
+      setLiveColor(primitives.surfaceMaterial, theme.palette.surface, 0.9)
     }
     // 建筑描边（批量 Primitive 的 uniform）
-    setMaterialColor(primitives.buildingGlowMaterial, theme.palette.accent)
+    setMaterialColor(primitives.buildingGlowMaterial, theme.palette.buildingEdge)
     if (primitives.buildingGlowMaterial) {
       primitives.buildingGlowMaterial.uniforms.glowPower = theme.glow.buildingPower
     }
@@ -973,8 +997,8 @@ export function useSceneStage({ container, buildings, roads }: SceneStageOptions
     primitives.roadMaterials.forEach((material, key) => {
       setLiveGlow(material, theme.roadColors[key], theme.glow.roadAlpha, theme.glow.roadPower)
     })
-    // 流动光效
-    setMaterialColor(primitives.flowMaterial, theme.palette.flow, 0.95)
+    // 流动光效（不透明度跟着主题的 flowAlpha 走）
+    setMaterialColor(primitives.flowMaterial, theme.palette.flow, theme.glow.flowAlpha)
     // 地面网格
     setMaterialColor(primitives.gridMaterial, theme.palette.secondary, theme.glow.gridAlpha)
   }

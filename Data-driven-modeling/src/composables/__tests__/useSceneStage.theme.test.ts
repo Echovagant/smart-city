@@ -230,11 +230,11 @@ describe('场景换色 —— 八处颜色都跟着主题走', () => {
     }
     expect(buildingUniforms?.color?.name).toBe(GRAPHITE.palette.building)
 
-    // 建筑描边（Primitive 材质的 uniform）
+    // 建筑描边（Primitive 材质的 uniform）—— 取 buildingEdge，不是界面 accent
     const glow = stage.primitives.buildingGlowMaterial as unknown as {
       uniforms: { color: { name?: string }; glowPower: number }
     }
-    expect(glow.uniforms.color.name).toBe(GRAPHITE.palette.accent)
+    expect(glow.uniforms.color.name).toBe(GRAPHITE.palette.buildingEdge)
     expect(glow.uniforms.glowPower).toBe(GRAPHITE.glow.buildingPower)
 
     // 道路（五档）
@@ -243,11 +243,12 @@ describe('场景换色 —— 八处颜色都跟着主题走', () => {
       expect(material.glowPower).toBe(GRAPHITE.glow.roadPower)
     })
 
-    // 流动光效
+    // 流动光效（颜色 + 不透明度：不透明度跟主题的 flowAlpha 走）
     const flow = stage.primitives.flowMaterial as unknown as {
-      uniforms: { color: { name?: string } }
+      uniforms: { color: { name?: string; alpha: number } }
     }
     expect(flow.uniforms.color.name).toBe(GRAPHITE.palette.flow)
+    expect(flow.uniforms.color.alpha).toBe(GRAPHITE.glow.flowAlpha)
 
     // 地面网格
     const grid = stage.primitives.gridMaterial as unknown as {
@@ -264,7 +265,7 @@ describe('场景换色 —— 八处颜色都跟着主题走', () => {
     const glow = stage.primitives.buildingGlowMaterial as unknown as {
       uniforms: { color: { name?: string } }
     }
-    expect(glow.uniforms.color.name).toBe(DEEP_SPACE.palette.accent)
+    expect(glow.uniforms.color.name).toBe(DEEP_SPACE.palette.buildingEdge)
   })
 
   it('没有场景时切主题也不炸（界面层先换主题、场景后起来）', () => {

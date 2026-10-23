@@ -84,12 +84,24 @@ describe('useSceneStage 的纯函数', () => {
     expect(resolveRoadTier('motorway_link').name).toBe('其他道路')
     expect(resolveRoadTier(undefined).name).toBe('其他道路')
     expect(resolveRoadTier(42).name).toBe('其他道路')
-    expect(ROAD_TIER_BY_HIGHWAY.get('footway')?.width).toBe(4)
+    expect(ROAD_TIER_BY_HIGHWAY.get('footway')?.width).toBe(2)
+  })
+
+  it('道路分级宽度是砍半后的 7/5/3/2，兜底分级也是 2', () => {
+    // 宽度是**几何属性**：全局一份默认，所有主题共享（不做成主题项）
+    expect(cityConfig.roadTiers.map(tier => tier.width)).toEqual([7, 5, 3, 2])
+    expect(cityConfig.roadFallbackTier.width).toBe(2)
+    expect(ROAD_TIER_BY_HIGHWAY.get('primary')?.width).toBe(7)
+    expect(ROAD_TIER_BY_HIGHWAY.get('secondary')?.width).toBe(5)
+    expect(ROAD_TIER_BY_HIGHWAY.get('residential')?.width).toBe(3)
+    expect(ROAD_TIER_BY_HIGHWAY.get('footway')?.width).toBe(2)
   })
 
   it('resolveRoadWidth 只在「正数且不超纲」时采用标签值', () => {
     const tier = resolveRoadTier('primary')
-    expect(resolveRoadWidth(tier, '8')).toBe(8)
+    expect(resolveRoadWidth(tier, '5')).toBe(5)
+    // 超纲（标签宽度大于该分级默认宽度）一律回落默认宽度
+    expect(resolveRoadWidth(tier, '8')).toBe(tier.width)
     expect(resolveRoadWidth(tier, '30')).toBe(tier.width)
     expect(resolveRoadWidth(tier, '0')).toBe(tier.width)
     expect(resolveRoadWidth(tier, '-4')).toBe(tier.width)
@@ -330,7 +342,7 @@ describe('useSceneStage', () => {
     await stage.initCesium(camera)
     await stage.loadGeoJSONRoads()
 
-    expect(primary.polyline.width).toBe(14)
+    expect(primary.polyline.width).toBe(7)
     expect(primary.polyline.clampToGround).toBe(true)
     expect(stage.state.roadEntities).toContain(primary)
     expect(stage.state.roadEntities).toContain(plaza)
