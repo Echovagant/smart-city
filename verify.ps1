@@ -5,8 +5,9 @@
 .DESCRIPTION
     - 后端：backend-python\.venv\Scripts\python.exe -m pytest -q
     - 前端：npm run test:run（vitest --run，非 watch 模式）
+    - 工具链：python scripts/tests/test_measure_acceptance.py（度量脚本的回归测试）
 
-    两个套件都会执行（一个失败不跳过另一个）；任一失败，脚本以非零码退出，
+    三个套件都会执行（一个失败不跳过另一个）；任一失败，脚本以非零码退出，
     并打印失败的是哪一个。脚本不会启动任何服务，也不会安装任何依赖。
 
 .EXAMPLE
@@ -64,13 +65,31 @@ if ($frontendExit -ne 0) {
 }
 
 Write-Host ''
-if ($backendExit -ne 0 -or $frontendExit -ne 0) {
+Write-Host '=== 工具链测试 (scripts/tests) ===' -ForegroundColor Cyan
+Write-Host "    工作目录: $repoRoot"
+Push-Location $repoRoot
+try {
+    & $pythonExe scripts/tests/test_measure_acceptance.py
+    $scriptsExit = $LASTEXITCODE
+} finally {
+    Pop-Location
+}
+if ($null -eq $scriptsExit) { $scriptsExit = 0 }
+if ($scriptsExit -ne 0) {
+    Write-Host "[FAIL] 工具链测试失败 (退出码 $scriptsExit)" -ForegroundColor Red
+} else {
+    Write-Host '[OK]   工具链测试通过' -ForegroundColor Green
+}
+
+Write-Host ''
+if ($backendExit -ne 0 -or $frontendExit -ne 0 -or $scriptsExit -ne 0) {
     $failed = @()
     if ($backendExit -ne 0) { $failed += '后端 pytest' }
     if ($frontendExit -ne 0) { $failed += '前端 vitest' }
+    if ($scriptsExit -ne 0) { $failed += '工具链 unittest' }
     Write-Host "验证失败: $($failed -join ', ')" -ForegroundColor Red
     exit 1
 }
 
-Write-Host '验证通过: 后端与前端测试全部成功。' -ForegroundColor Green
+Write-Host '验证通过: 后端、前端与工具链测试全部成功。' -ForegroundColor Green
 exit 0

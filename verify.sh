@@ -3,8 +3,9 @@
 #
 #   - 后端：backend-python/.venv 下的解释器执行 -m pytest -q
 #   - 前端：npm run test:run（vitest --run，非 watch 模式）
+#   - 工具链：python scripts/tests/test_measure_acceptance.py（度量脚本的回归测试）
 #
-# 两个套件都会执行（一个失败不跳过另一个）；任一失败，脚本以非零码退出，
+# 三个套件都会执行（一个失败不跳过另一个）；任一失败，脚本以非零码退出，
 # 并打印失败的是哪一个。脚本不会启动任何服务，也不会安装任何依赖。
 #
 # 用法：./verify.sh
@@ -52,13 +53,25 @@ else
 fi
 
 echo ''
-if [ "$backend_exit" -ne 0 ] || [ "$frontend_exit" -ne 0 ]; then
+echo '=== 工具链测试 (scripts/tests) ==='
+echo "    工作目录: $repo_root"
+scripts_exit=0
+(cd "$repo_root" && "$python_bin" scripts/tests/test_measure_acceptance.py) || scripts_exit=$?
+if [ "$scripts_exit" -ne 0 ]; then
+    echo "[FAIL] 工具链测试失败 (退出码 $scripts_exit)"
+else
+    echo '[OK]   工具链测试通过'
+fi
+
+echo ''
+if [ "$backend_exit" -ne 0 ] || [ "$frontend_exit" -ne 0 ] || [ "$scripts_exit" -ne 0 ]; then
     failed=''
     [ "$backend_exit" -ne 0 ] && failed="${failed}后端 pytest, "
     [ "$frontend_exit" -ne 0 ] && failed="${failed}前端 vitest, "
+    [ "$scripts_exit" -ne 0 ] && failed="${failed}工具链 unittest, "
     echo "验证失败: ${failed%, }" >&2
     exit 1
 fi
 
-echo '验证通过: 后端与前端测试全部成功。'
+echo '验证通过: 后端、前端与工具链测试全部成功。'
 exit 0
