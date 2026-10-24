@@ -269,10 +269,13 @@ export interface Series {
 export interface CityOverview {
   /** 城市信息。取不到经纬度时是 null。 */
   city: {
-    code?: number | string
+    /** 城市 id（slug），例如 'barcelona'。 */
+    id?: string
     name?: string | null
     latitude?: number | null
     longitude?: number | null
+    /** IANA 时区名，例如 'Europe/Madrid'。 */
+    timezone?: string
   }
   /** 本次响应生成的时间（ISO8601）。 */
   generated_at: string
@@ -423,7 +426,7 @@ export interface CityEvent {
    * 这个事件**有没有具体空间位置**。
    *
    * - `'city'`：**全市级**事件（空气质量、天气）—— 全市指标没有空间位置，
-   *   前端把它落在**城心**（天安门，也是相机的绕行中心），因此默认视角下永远在屏幕中心。
+   *   前端把它落在**城心**（`cityConfig.center`，也是相机的绕行中心），因此默认视角下永远在屏幕中心。
    * - `'geometry'`：**几何锚定**事件（路网负载）—— `location` 是真实几何上的点。
    *
    * 缺省按 `'geometry'` 处理（沿用 `location` 原坐标）。

@@ -84,10 +84,10 @@ const buildingFeature = (height: string): BuildingsResponse['features'][number] 
     type: 'Polygon',
     coordinates: [
       [
-        [116.4, 39.9],
-        [116.401, 39.9],
-        [116.401, 39.901],
-        [116.4, 39.9],
+        [2.1674, 41.3895],
+        [2.1684, 41.3895],
+        [2.1684, 41.3905],
+        [2.1674, 41.3895],
       ],
     ] as Position[][],
   },
@@ -99,8 +99,8 @@ const roadFeature = (highway: string): RoadsResponse['features'][number] => ({
   geometry: {
     type: 'LineString',
     coordinates: [
-      [116.39, 39.9],
-      [116.42, 39.9],
+      [2.1574, 41.3895],
+      [2.1874, 41.3895],
     ] as Position[],
   },
 })
@@ -177,7 +177,7 @@ describe('场景换色 —— 材质是共享的', () => {
 
   it('网格材质被存下来了（换主题拿得到引用）', async () => {
     const { stage } = await makeLoadedStage()
-    stage.createBaseGrid({ west: 116.39, south: 39.9, east: 116.42, north: 39.92 })
+    stage.createBaseGrid({ west: 2.1574, south: 41.3895, east: 2.1874, north: 41.4095 })
     expect(stage.primitives.gridMaterial).not.toBeNull()
   })
 })
@@ -227,7 +227,7 @@ describe('场景换色 —— 切主题时各层材质的写入边界', () => {
 describe('场景换色 —— 八处颜色都跟着主题走', () => {
   it('地面 / 背景 / 建筑本体 / 描边 / 道路 / 流动光效 / 网格 全部换成新主题的值', async () => {
     const { stage } = await makeLoadedStage()
-    stage.createBaseGrid({ west: 116.39, south: 39.9, east: 116.42, north: 39.92 })
+    stage.createBaseGrid({ west: 2.1574, south: 41.3895, east: 2.1874, north: 41.4095 })
     const viewer = stage.viewer.value as unknown as StubViewer
 
     stage.applyTheme(GRAPHITE)

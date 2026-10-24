@@ -36,7 +36,7 @@ const event = (overrides: Partial<CityEvent> = {}): CityEvent => ({
 })
 
 const overview = (overrides: Partial<CityOverview> = {}): CityOverview => ({
-  city: { code: 110000, name: '北京市', latitude: 40.05, longitude: 116.4 },
+  city: { id: 'barcelona', name: '巴塞罗那', latitude: 41.395, longitude: 2.165, timezone: 'Europe/Madrid' },
   generated_at: '2026-10-22T04:00:00Z',
   metrics: [],
   series: [],
@@ -117,14 +117,14 @@ describe('formatEventTime', () => {
 })
 
 describe('resolveEventLocation', () => {
-  const CITY_CENTER = { lng: 116.3976, lat: 39.9055 }
+  const CITY_CENTER = { lng: 2.165, lat: 41.395 }
 
   it('puts a city-level event on the city centre', () => {
-    // 全市级事件没有空间位置 → 落在城心（天安门 = 相机的绕行中心）
+    // 全市级事件没有空间位置 → 落在城心（`cityConfig.center`，也是相机的绕行中心）
     const location = resolveEventLocation(
       event({
         location_kind: 'city',
-        location: { lng: 116.4020155, lat: 39.9153679, label: '数据范围中心' },
+        location: { lng: 2.1694155, lat: 41.4048679, label: '数据范围中心' },
       }),
       CITY_CENTER,
     )
@@ -140,8 +140,8 @@ describe('resolveEventLocation', () => {
 
   it('keeps the real geometry of an anchored event', () => {
     const anchored = {
-      lng: 116.41,
-      lat: 39.92,
+      lng: 2.1774,
+      lat: 41.4095,
       label: '主路段（OSM way/12345）',
     }
     const location = resolveEventLocation(
@@ -152,7 +152,7 @@ describe('resolveEventLocation', () => {
   })
 
   it('treats a missing kind as geometry', () => {
-    const anchored = { lng: 116.41, lat: 39.92, label: '主路段（OSM way/12345）' }
+    const anchored = { lng: 2.1774, lat: 41.4095, label: '主路段（OSM way/12345）' }
     const location = resolveEventLocation(event({ location: anchored }), CITY_CENTER)
     expect(location).toEqual(anchored)
   })

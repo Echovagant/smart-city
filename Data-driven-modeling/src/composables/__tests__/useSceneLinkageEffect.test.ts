@@ -40,16 +40,16 @@ const buildingFeature = (id: string) => ({
   geometry: {
     type: 'Polygon' as const,
     coordinates: [[
-      [116.4, 39.91],
-      [116.401, 39.91],
-      [116.401, 39.911],
-      [116.4, 39.91],
+      [2.1674, 41.3995],
+      [2.1684, 41.3995],
+      [2.1684, 41.4005],
+      [2.1674, 41.3995],
     ]] as Position[][],
   },
 })
 
 const overviewWith = (members: string[]): CityOverview => ({
-  city: { code: 110000, name: '北京市', latitude: 40.05, longitude: 116.4 },
+  city: { id: 'barcelona', name: '巴塞罗那', latitude: 41.395, longitude: 2.165, timezone: 'Europe/Madrid' },
   generated_at: '2026-10-22T04:00:00Z',
   metrics: [],
   series: [],

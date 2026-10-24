@@ -71,6 +71,12 @@ export interface RenderedRoadTier extends RoadTier {
 /** 城市配置参数。 */
 export interface CityConfig {
   center: LngLat
+  /**
+   * 平视模式的落点。
+   *
+   * 缺省时回落到 `center`。
+   */
+  streetPosition?: LngLat
   zoomLevel: number
   streetLevel: { height: number; heading: number }
   defaultBuildingHeight: number
@@ -79,14 +85,15 @@ export interface CityConfig {
 }
 
 export const cityConfig: CityConfig = {
-  // 天安门广场中央：开阔地带，平视模式不会穿模；朝北（heading=0）能看到天安门城楼
-  //
-  // **全项目只有一个「城心」** —— 就是这里的 `center`：
+  // Eixample 街区腹地：全项目只有一个「城心」—— 就是这里的 `center`，
   // 相机的绕行中心、全市级事件标记的落点都指向它。
-  // 后端那个「数据范围中心」（OSM 围盒中心）比它偏北约 1.1 km，
+  // 后端那个「数据范围中心」（OSM 围盒中心）与它**不是同一个点**，
   // **不能**拿来放标记（默认鸟瞰视角下会落在屏幕之外）。
-  center: { lng: 116.3976, lat: 39.9055 },
+  center: { lng: 2.165, lat: 41.395 },
   zoomLevel: 1500,
+  // 平视模式的落点**单独给一个**：城心在街区内部，1.7 m 的相机停在那里会钻进建筑里。
+  // 这里取圣家堂南侧的开放广场，正南朝北（heading=0）能看见圣家堂的塔尖。
+  streetPosition: { lng: 2.1744, lat: 41.4005 },
   // 平视视角：1.7m 是人眼高度，朝向正北（heading=0）
   streetLevel: { height: 1.7, heading: 0 },
   // 建筑没有任何高度标签时的兜底高度（米）

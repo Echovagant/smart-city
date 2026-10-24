@@ -106,7 +106,7 @@ const jsonResponse = (payload: unknown) =>
   })
 
 const OVERVIEW = {
-  city: { code: 110000, name: '北京市', latitude: 40.05, longitude: 116.4 },
+  city: { id: 'barcelona', name: '巴塞罗那', latitude: 41.395, longitude: 2.165, timezone: 'Europe/Madrid' },
   generated_at: '2026-10-22T04:00:00Z',
   metrics: [],
   series: [],

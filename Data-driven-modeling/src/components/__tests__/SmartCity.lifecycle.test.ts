@@ -15,6 +15,7 @@ import type {
   TrafficStatus,
 } from '../../../types/city'
 import { DEFAULT_TAB_KEY, useDashboardState } from '@/composables/useDashboardState'
+import { cityConfig } from '@/composables/useSceneStage'
 import { BUILDING_GLOW_DIMMED, DARK_PALETTE, FLOW_HIGHLIGHT } from '@/theme/dark'
 import type { ThemeOverrides } from '@/theme/themes/types'
 
@@ -1075,8 +1076,8 @@ describe('深色底座', () => {
   }
 
   /** 城心坐标（弧度），与组件里的 cityConfig.center 一致。 */
-  const CENTER_LNG = 116.3976
-  const CENTER_LAT = 39.9055
+  const CENTER_LNG = 2.165
+  const CENTER_LAT = 41.395
 
   /** 一条主干的原始 GeoJSON 要素（1~2 级 → 会叠流动光效）。 */
   const primaryRoadFeature = {
@@ -1084,8 +1085,8 @@ describe('深色底座', () => {
     geometry: {
       type: 'LineString',
       coordinates: [
-        [116.39, 39.9],
-        [116.42, 39.9]
+        [2.1574, 41.3895],
+        [2.1874, 41.3895]
       ]
     },
     properties: { highway: 'primary' }
@@ -1098,11 +1099,11 @@ describe('深色底座', () => {
       type: 'Polygon',
       coordinates: [
         [
-          [116.39, 39.9],
-          [116.395, 39.9],
-          [116.395, 39.905],
-          [116.39, 39.905],
-          [116.39, 39.9]
+          [2.1574, 41.3895],
+          [2.1624, 41.3895],
+          [2.1624, 41.3945],
+          [2.1574, 41.3945],
+          [2.1574, 41.3895]
         ]
       ]
     },
@@ -1257,9 +1258,9 @@ describe('深色底座', () => {
       (xs[1] - xs[0]) * 111320 * Math.cos((CENTER_LAT * Math.PI) / 180)
     expect(Math.abs(spacingMeters - 200)).toBeLessThan(5)
 
-    // 网格要盖住数据范围（116.39 ~ 116.42）
-    expect(Math.min(...xs)).toBeGreaterThanOrEqual(116.389)
-    expect(Math.max(...xs)).toBeLessThanOrEqual(116.421)
+    // 网格要盖住数据范围（2.1574 ~ 2.1874）
+    expect(Math.min(...xs)).toBeGreaterThanOrEqual(2.1564)
+    expect(Math.max(...xs)).toBeLessThanOrEqual(2.1884)
 
     wrapper.unmount()
   })
@@ -1353,7 +1354,7 @@ describe('SmartCity city metrics strip', () => {
     const tempValue = degrade.includes('weather_temp') ? null : 18
     const loadValue = degrade.includes('road_load_index') ? null : 63.5
     return {
-      city: { code: 110000, name: '北京市', latitude: 40.05, longitude: 116.4 },
+      city: { id: 'barcelona', name: '巴塞罗那', latitude: 41.395, longitude: 2.165, timezone: 'Europe/Madrid' },
       generated_at: '2026-10-22T04:00:00Z',
       metrics: [
         {
@@ -1499,7 +1500,7 @@ describe('SmartCity city metrics strip', () => {
 // ---------------------------------------------------------------------------
 describe('大屏骨架的 DOM 契约', () => {
   const overviewStub = {
-    city: { code: 110000, name: '北京市', latitude: 40.05, longitude: 116.4 },
+    city: { id: 'barcelona', name: '巴塞罗那', latitude: 41.395, longitude: 2.165, timezone: 'Europe/Madrid' },
     generated_at: '2026-10-22T04:00:00Z',
     metrics: [
       {
@@ -1646,7 +1647,7 @@ const S3_CITY_EVENT: CityEvent = {
   detail: '按 AQI 分级标准换算',
   time: '2026-10-22T03:00:00Z',
   location_kind: 'city',
-  location: { lng: 116.4020155, lat: 39.9153679, label: '数据范围中心' },
+  location: { lng: 2.1694155, lat: 41.4048679, label: '数据范围中心' },
   metric_key: 'aqi_24h',
   source: S3_SOURCE,
   estimated: false,
@@ -1661,7 +1662,7 @@ const S3_GEOMETRY_EVENT: CityEvent = {
   detail: '静态几何折算的供给紧张度（模型估算）',
   time: '2026-10-22T09:00:00Z',
   location_kind: 'geometry',
-  location: { lng: 116.41, lat: 39.92, label: '主路段（OSM way/41662973）' },
+  location: { lng: 2.1774, lat: 41.4095, label: '主路段（OSM way/41662973）' },
   metric_key: 'road_load_index',
   source: S3_SOURCE,
   estimated: true,
@@ -1676,11 +1677,11 @@ const s3BuildingFeature = (id: string) => ({
     type: 'Polygon',
     coordinates: [
       [
-        [116.4, 39.91],
-        [116.401, 39.91],
-        [116.401, 39.911],
-        [116.4, 39.911],
-        [116.4, 39.91],
+        [2.1674, 41.3995],
+        [2.1684, 41.3995],
+        [2.1684, 41.4005],
+        [2.1674, 41.4005],
+        [2.1674, 41.3995],
       ],
     ],
   },
@@ -1694,14 +1695,14 @@ const s3RoadFeature = {
   geometry: {
     type: 'LineString',
     coordinates: [
-      [116.39, 39.9],
-      [116.42, 39.9],
+      [2.1574, 41.3895],
+      [2.1874, 41.3895],
     ],
   },
 }
 
 const s3Overview = (events: CityEvent[]): CityOverview => ({
-  city: { code: 110000, name: '北京市', latitude: 40.05, longitude: 116.4 },
+  city: { id: 'barcelona', name: '巴塞罗那', latitude: 41.395, longitude: 2.165, timezone: 'Europe/Madrid' },
   generated_at: '2026-10-22T04:00:00Z',
   metrics: [
     {
@@ -1853,7 +1854,7 @@ describe('派生事件流与场景联动', () => {
     }
     expect(call.destination.z).toBe(800)
     // 落点是**城心**（= 相机的绕行中心），不是后端给的数据范围中心
-    expect(call.destination.x).toBe(116.3976)
+    expect(call.destination.x).toBe(cityConfig.center.lng)
     expect(call.orientation.pitch).toBeCloseTo(-Math.PI / 4)
     expect(call.orientation.heading).toBe(0)
     expect(call.duration).toBe(1.2)
@@ -1882,8 +1883,8 @@ describe('派生事件流与场景联动', () => {
       destination: { x: number; y: number; z: number }
     }
     // 落点是真实几何上的点，**不是**城心
-    expect(call.destination.x).toBe(116.41)
-    expect(call.destination.x).not.toBe(116.3976)
+    expect(call.destination.x).toBe(2.1774)
+    expect(call.destination.x).not.toBe(cityConfig.center.lng)
 
     wrapper.unmount()
   })
@@ -2120,8 +2121,8 @@ describe('事件标记的屏幕位置', () => {
     // 回归对照：后端的「数据范围中心」（OSM 围盒中心）比城心偏北约 1.1 km。
     // 用它当标记落点，相机转到某些方位角时它会掉到屏幕下方之外 ——
     // 这正是修掉的缺陷，所以这条断言钉住「不能退回那个位置」。
-    const CITY_CENTER = { lng: 116.3976, lat: 39.9055 }
-    const DATA_EXTENT_CENTER = { lng: 116.4020155, lat: 39.9153679 }
+    const CITY_CENTER = { lng: 2.165, lat: 41.395 }
+    const DATA_EXTENT_CENTER = { lng: 2.1694155, lat: 41.4048679 }
     const altitude = 1500
     const distance = 1500
     const metersPerDegreeLng = METERS_PER_DEGREE_LAT * Math.cos((CITY_CENTER.lat * Math.PI) / 180)

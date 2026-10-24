@@ -11,7 +11,7 @@ import type { AreaStats as AreaStatsPayload } from '../../../../types/city'
 
 /** 一份区域统计载荷（数字与后端 `/api/city/area` 的实测返回一致）。 */
 const payload = (): AreaStatsPayload => ({
-  bbox: [116.39, 39.905, 116.405, 39.915],
+  bbox: [2.1574, 41.3945, 2.1724, 41.4045],
   area_km2: 1.4226,
   building_count: 1039,
   road_count: 661,
@@ -48,7 +48,7 @@ function payloadSource() {
   }
 }
 
-const CENTER = { lng: 116.3976, lat: 39.9055 }
+const CENTER = { lng: 2.165, lat: 41.395 }
 
 describe('AreaStats', () => {
   it('还没选区域时给出空态与半径档位', () => {
@@ -110,7 +110,7 @@ describe('AreaStats', () => {
     expect(text).toContain('历史建筑 9')
 
     // 选中范围与来源
-    expect(wrapper.find('.dc-area-selection').text()).toBe('116.397600, 39.905500 · 半径 300 m')
+    expect(wrapper.find('.dc-area-selection').text()).toBe('2.165000, 41.395000 · 半径 300 m')
     expect(wrapper.find('.dc-area-source').text()).toContain('OpenStreetMap 本地快照')
     // 本地快照不是实时数据，要照实标
     expect(wrapper.find('.dc-area-source').text()).toContain('（非实时）')

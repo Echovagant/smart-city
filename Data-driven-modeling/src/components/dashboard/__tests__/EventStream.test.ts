@@ -28,7 +28,7 @@ const event = (overrides: Partial<CityEvent> = {}): CityEvent => ({
   title: '空气质量由优转为良',
   detail: '按 AQI 分级标准换算',
   time: '2026-10-22T03:00:00Z',
-  location: { lng: 116.4, lat: 39.915, label: '城心（数据范围中心）' },
+  location: { lng: 2.1674, lat: 41.4045, label: '城心（数据范围中心）' },
   metric_key: 'aqi_24h',
   source: SOURCE,
   estimated: false,

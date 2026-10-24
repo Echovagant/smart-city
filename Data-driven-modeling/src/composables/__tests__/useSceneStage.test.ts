@@ -112,17 +112,17 @@ describe('useSceneStage 的纯函数', () => {
     const extent = computeExtent([
       {
         features: [
-          { geometry: { type: 'Polygon', coordinates: [[[116.39, 39.9], [116.42, 39.9], [116.42, 39.92]]] } },
-          { geometry: { type: 'MultiPolygon', coordinates: [[[[116.40, 39.91], [116.41, 39.91], [116.41, 39.93]]]] } },
-          { geometry: { type: 'LineString', coordinates: [[116.38, 39.89], [116.43, 39.94]] } },
+          { geometry: { type: 'Polygon', coordinates: [[[2.1574, 41.3895], [2.1874, 41.3895], [2.1874, 41.4095]]] } },
+          { geometry: { type: 'MultiPolygon', coordinates: [[[[2.1674, 41.3995], [2.1774, 41.3995], [2.1774, 41.4195]]]] } },
+          { geometry: { type: 'LineString', coordinates: [[2.1474, 41.3795], [2.1974, 41.4295]] } },
         ],
       },
     ])
     expect(extent).not.toBeNull()
-    expect(extent!.west).toBeCloseTo(116.38)
-    expect(extent!.east).toBeCloseTo(116.43)
-    expect(extent!.south).toBeCloseTo(39.89)
-    expect(extent!.north).toBeCloseTo(39.94)
+    expect(extent!.west).toBeCloseTo(2.1474)
+    expect(extent!.east).toBeCloseTo(2.1974)
+    expect(extent!.south).toBeCloseTo(41.3795)
+    expect(extent!.north).toBeCloseTo(41.4295)
 
     expect(computeExtent([])).toBeNull()
     expect(computeExtent([{ features: [] }])).toBeNull()
@@ -133,20 +133,20 @@ describe('useSceneStage 的纯函数', () => {
       {
         geometry: {
           type: 'Polygon',
-          coordinates: [[[116.4, 39.9], [116.401, 39.9], [116.401, 39.901], [116.4, 39.9]]],
+          coordinates: [[[2.1674, 41.3895], [2.1684, 41.3895], [2.1684, 41.3905], [2.1674, 41.3895]]],
         },
         properties: { height: '10' },
       },
       {
         geometry: {
           type: 'MultiPolygon',
-          coordinates: [[[[116.4, 39.9], [116.401, 39.9], [116.401, 39.901]]]],
+          coordinates: [[[[2.1674, 41.3895], [2.1684, 41.3895], [2.1684, 41.3905]]]],
         },
       },
       // 点不到三个点的环：几何退化，跳过
-      { geometry: { type: 'Polygon', coordinates: [[[116.4, 39.9], [116.401, 39.9]]] } },
+      { geometry: { type: 'Polygon', coordinates: [[[2.1674, 41.3895], [2.1684, 41.3895]]] } },
       // 不是面：没有轮廓
-      { geometry: { type: 'LineString', coordinates: [[116.4, 39.9], [116.401, 39.9]] } },
+      { geometry: { type: 'LineString', coordinates: [[2.1674, 41.3895], [2.1684, 41.3895]] } },
     ])
     // Polygon 1 条 + MultiPolygon 1 条
     expect(instances).toHaveLength(2)
@@ -257,7 +257,7 @@ describe('useSceneStage', () => {
             properties: { height: '24' },
             geometry: {
               type: 'Polygon',
-              coordinates: [[[116.4, 39.9], [116.401, 39.9], [116.401, 39.901], [116.4, 39.9]]],
+              coordinates: [[[2.1674, 41.3895], [2.1684, 41.3895], [2.1684, 41.3905], [2.1674, 41.3895]]],
             },
           },
         ],
@@ -334,7 +334,7 @@ describe('useSceneStage', () => {
           {
             type: 'Feature',
             properties: { highway: 'primary' },
-            geometry: { type: 'LineString', coordinates: [[116.39, 39.9], [116.42, 39.9]] },
+            geometry: { type: 'LineString', coordinates: [[2.1574, 41.3895], [2.1874, 41.3895]] },
           },
         ],
       },
@@ -358,7 +358,7 @@ describe('useSceneStage', () => {
           {
             type: 'Feature',
             properties: { highway: 'primary' },
-            geometry: { type: 'LineString', coordinates: [[116.39, 39.9], [116.42, 39.9]] },
+            geometry: { type: 'LineString', coordinates: [[2.1574, 41.3895], [2.1874, 41.3895]] },
           },
         ],
       },
@@ -379,7 +379,7 @@ describe('useSceneStage', () => {
   it('createBaseGrid 在数据范围上铺一层发光网格', async () => {
     const { stage, camera } = makeStage()
     await stage.initCesium(camera)
-    stage.createBaseGrid({ west: 116.39, south: 39.9, east: 116.42, north: 39.92 })
+    stage.createBaseGrid({ west: 2.1574, south: 41.3895, east: 2.1874, north: 41.4095 })
     const viewer = stage.viewer.value as unknown as StubViewer
     expect(viewer.scene.primitives.add).toHaveBeenCalledTimes(1)
     const primitive = viewer.scene.primitives.add.mock.calls[0][0] as GridPrimitive
@@ -407,7 +407,7 @@ describe('useSceneStage', () => {
             properties: { height: '24' },
             geometry: {
               type: 'Polygon',
-              coordinates: [[[116.4, 39.9], [116.401, 39.9], [116.401, 39.901], [116.4, 39.9]]],
+              coordinates: [[[2.1674, 41.3895], [2.1684, 41.3895], [2.1684, 41.3905], [2.1674, 41.3895]]],
             },
           },
         ],
@@ -418,7 +418,7 @@ describe('useSceneStage', () => {
           {
             type: 'Feature',
             properties: { highway: 'primary' },
-            geometry: { type: 'LineString', coordinates: [[116.39, 39.9], [116.42, 39.9]] },
+            geometry: { type: 'LineString', coordinates: [[2.1574, 41.3895], [2.1874, 41.3895]] },
           },
         ],
       },
@@ -465,7 +465,8 @@ describe('useSceneStage', () => {
   })
 
   it('城心与网格间距是约定的常量', () => {
-    expect(cityConfig.center).toEqual({ lng: 116.3976, lat: 39.9055 })
+    expect(cityConfig.center).toEqual({ lng: 2.165, lat: 41.395 })
+    expect(cityConfig.streetPosition).toEqual({ lng: 2.1744, lat: 41.4005 })
     expect(cityConfig.zoomLevel).toBe(1500)
     expect(cityConfig.streetLevel).toEqual({ height: 1.7, heading: 0 })
     expect(GRID_SPACING_M).toBe(200)

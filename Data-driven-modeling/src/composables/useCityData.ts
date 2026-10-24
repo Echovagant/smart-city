@@ -9,10 +9,20 @@ import type {
 } from '../../types/city'
 
 // 默认不传 bbox：后端直接返回完整集合。
-// 之前默认带的 bbox（116.380,39.905,116.420,39.925）与 OSM 提取范围完全一致，
-// 过滤等于把全部要素原样返回——每次请求白白多付一遍几何过滤的 CPU，
+// 带 bbox 反而要把全部要素原样过滤一遍——每次请求白白多付一遍几何过滤的 CPU，
 // 看起来像在做空间裁剪，其实没有。
 // 需要按范围取数时仍然可以显式传 bbox。
+
+/**
+ * 当前城市的 id（slug）。
+ *
+ * 后端按它选数据源与城市表条目；换城市只改这一处。
+ */
+export const CITY_ID = 'barcelona'
+
+/** 城市运行指标端点（带城市 id）。 */
+export const CITY_OVERVIEW_PATH = `/api/city/overview?city=${CITY_ID}`
+
 export function useCityData() {
   // buildings / roads 是几 MB 的 GeoJSON（几万个坐标）。
   // 用 shallowRef：载荷是整体替换的，模板只需要知道「数据到了」，
@@ -76,7 +86,7 @@ export function useCityData() {
     cityOverviewLoading.value = true
     cityOverviewError.value = null
     try {
-      const overview = await apiGet<CityOverview>('/api/city/overview')
+      const overview = await apiGet<CityOverview>(CITY_OVERVIEW_PATH)
       if (cancelled.value) return
       cityOverview.value = overview
     } catch (e) {
@@ -96,7 +106,7 @@ export function useCityData() {
    */
   const refreshCityOverview = async () => {
     try {
-      const overview = await apiGet<CityOverview>('/api/city/overview')
+      const overview = await apiGet<CityOverview>(CITY_OVERVIEW_PATH)
       if (cancelled.value) return
       cityOverview.value = overview
     } catch {

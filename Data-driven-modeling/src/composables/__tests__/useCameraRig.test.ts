@@ -186,6 +186,10 @@ describe('useCameraRig', () => {
     expect(call.orientation.pitch).toBe(0)
     expect(call.orientation.heading).toBe(cityConfig.streetLevel.heading)
     expect(call.duration).toBe(2)
+    // 落点是 `streetPosition`（城心在街区内部，平视停在那里会钻进建筑）
+    expect(call.destination.x).toBe(cityConfig.streetPosition?.lng)
+    expect(call.destination.y).toBe(cityConfig.streetPosition?.lat)
+    expect(call.destination.x).not.toBe(cityConfig.center.lng)
   })
 
   it('flyToOverhead 飞到城心上空 1500 m，俯角 45°', () => {

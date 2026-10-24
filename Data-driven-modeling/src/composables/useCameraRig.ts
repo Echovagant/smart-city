@@ -248,15 +248,18 @@ export function useCameraRig({ viewer, state, primitives }: CameraRigOptions): C
     })
   }
 
-  // 飞到平视视角：贴近地面（1.7m），pitch=0 水平看出去
+  // 飞到平视视角：贴近地面（1.7m），pitch=0 水平看出去。
+  // 落点用 `streetPosition`（缺省回落到城心）—— 城心在街区内部，
+  // 1.7 m 的相机停在那里会钻进建筑。
   const flyToStreetLevel = () => {
     const activeViewer = viewer.value
     if (!activeViewer) return
+    const streetPosition = cityConfig.streetPosition ?? cityConfig.center
     cameraFlightUntil = performance.now() + CAMERA_FLIGHT_GUARD_MS
     activeViewer.camera.flyTo({
       destination: Cesium.Cartesian3.fromDegrees(
-        cityConfig.center.lng,
-        cityConfig.center.lat,
+        streetPosition.lng,
+        streetPosition.lat,
         cityConfig.streetLevel.height
       ),
       orientation: {

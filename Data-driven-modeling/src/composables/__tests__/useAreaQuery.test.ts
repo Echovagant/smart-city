@@ -53,7 +53,7 @@ afterEach(() => {
 
 /** 一份区域统计载荷（形状与后端 `/api/city/area` 一致）。 */
 const areaPayload = (): AreaStats => ({
-  bbox: [116.39, 39.905, 116.405, 39.915],
+  bbox: [2.1574, 41.3945, 2.1724, 41.4045],
   area_km2: 1.4226,
   building_count: 1039,
   road_count: 661,
@@ -147,8 +147,8 @@ const lastPickAction = (): ((movement: { position: unknown }) => void) | undefin
 }
 
 /** 命中点（度 → 弧度，Cesium 的经纬度是弧度）。 */
-const PICKED_LNG_DEG = 116.3976
-const PICKED_LAT_DEG = 39.9055
+const PICKED_LNG_DEG = 2.165
+const PICKED_LAT_DEG = 41.395
 const toRadians = (degrees: number): number => (degrees * Math.PI) / 180
 const pickedCartesian = () => ({
   lng: toRadians(PICKED_LNG_DEG),
@@ -161,34 +161,34 @@ const pickedCartesian = () => ({
 
 describe('buildAreaBBox / formatAreaBBox', () => {
   it('以中心点为对称中心，纬向跨度按 111 320 m/度换算', () => {
-    const bbox = buildAreaBBox({ lng: 116.4, lat: 39.9 }, 300)!
+    const bbox = buildAreaBBox({ lng: 2.1674, lat: 41.3895 }, 300)!
     expect(bbox).not.toBeNull()
     const halfLat = 300 / 111320
-    expect(bbox.north - 39.9).toBeCloseTo(halfLat, 9)
-    expect(bbox.south).toBeCloseTo(39.9 - halfLat, 9)
+    expect(bbox.north - 41.3895).toBeCloseTo(halfLat, 9)
+    expect(bbox.south).toBeCloseTo(41.3895 - halfLat, 9)
     // 中心点落在范围正中
-    expect((bbox.north + bbox.south) / 2).toBeCloseTo(39.9, 9)
-    expect((bbox.east + bbox.west) / 2).toBeCloseTo(116.4, 9)
+    expect((bbox.north + bbox.south) / 2).toBeCloseTo(41.3895, 9)
+    expect((bbox.east + bbox.west) / 2).toBeCloseTo(2.1674, 9)
   })
 
-  it('经向跨度按 cos(纬度) 修正：北京的经度一度比纬度一度短', () => {
-    const bbox = buildAreaBBox({ lng: 116.4, lat: 39.9 }, 300)!
-    const halfLng = 300 / (111320 * Math.cos((39.9 * Math.PI) / 180))
-    expect(bbox.east - 116.4).toBeCloseTo(halfLng, 9)
+  it('经向跨度按 cos(纬度) 修正：高纬度处经度一度比纬度一度短', () => {
+    const bbox = buildAreaBBox({ lng: 2.1674, lat: 41.3895 }, 300)!
+    const halfLng = 300 / (111320 * Math.cos((41.3895 * Math.PI) / 180))
+    expect(bbox.east - 2.1674).toBeCloseTo(halfLng, 9)
     // 经度跨度比纬度跨度大（同样的米数，经度方向要多走一点）
     expect(bbox.east - bbox.west).toBeGreaterThan(bbox.north - bbox.south)
   })
 
   it('中心点或半径不合法时返回 null', () => {
-    expect(buildAreaBBox({ lng: Number.NaN, lat: 39.9 }, 300)).toBeNull()
-    expect(buildAreaBBox({ lng: 116.4, lat: Number.POSITIVE_INFINITY }, 300)).toBeNull()
-    expect(buildAreaBBox({ lng: 116.4, lat: 39.9 }, 0)).toBeNull()
-    expect(buildAreaBBox({ lng: 116.4, lat: 39.9 }, -100)).toBeNull()
+    expect(buildAreaBBox({ lng: Number.NaN, lat: 41.3895 }, 300)).toBeNull()
+    expect(buildAreaBBox({ lng: 2.1674, lat: Number.POSITIVE_INFINITY }, 300)).toBeNull()
+    expect(buildAreaBBox({ lng: 2.1674, lat: 41.3895 }, 0)).toBeNull()
+    expect(buildAreaBBox({ lng: 2.1674, lat: 41.3895 }, -100)).toBeNull()
   })
 
   it('查询串是四个数、保留 6 位小数', () => {
-    const text = formatAreaBBox({ west: 116.4, south: 39.9, east: 116.41, north: 39.91 })
-    expect(text).toBe('116.400000,39.900000,116.410000,39.910000')
+    const text = formatAreaBBox({ west: 2.1674, south: 41.3895, east: 2.1774, north: 41.3995 })
+    expect(text).toBe('2.167400,41.389500,2.177400,41.399500')
     expect(text.split(',')).toHaveLength(4)
   })
 })
@@ -210,7 +210,7 @@ describe('useAreaQuery', () => {
     const { center, stats, loading, error, pickAt } = withSetup(() => useAreaQuery())
 
     expect(loading.value).toBe(false)
-    const pending = pickAt(116.3976, 39.9055)
+    const pending = pickAt(2.165, 41.395)
     expect(loading.value).toBe(true)
     await pending
     await flushPromises()
@@ -220,12 +220,12 @@ describe('useAreaQuery', () => {
     expect(url.startsWith('/api/city/area?bbox=')).toBe(true)
     const bbox = decodeURIComponent(url.split('bbox=')[1]!).split(',').map(Number)
     expect(bbox).toHaveLength(4)
-    expect(bbox[0]).toBeLessThan(116.3976)
-    expect(bbox[1]).toBeLessThan(39.9055)
-    expect(bbox[2]).toBeGreaterThan(116.3976)
-    expect(bbox[3]).toBeGreaterThan(39.9055)
+    expect(bbox[0]).toBeLessThan(2.165)
+    expect(bbox[1]).toBeLessThan(41.395)
+    expect(bbox[2]).toBeGreaterThan(2.165)
+    expect(bbox[3]).toBeGreaterThan(41.395)
 
-    expect(center.value).toEqual({ lng: 116.3976, lat: 39.9055 })
+    expect(center.value).toEqual({ lng: 2.165, lat: 41.395 })
     expect(stats.value?.building_count).toBe(1039)
     expect(stats.value?.road_length_km).toBe(54.4386)
     expect(loading.value).toBe(false)
@@ -235,7 +235,7 @@ describe('useAreaQuery', () => {
   it('取数失败时显示「数据源暂不可用」，不显示 0', async () => {
     respondWithStatus(503, '城市数据暂时不可用，请稍后重试')
     const { stats, error, errorDetail, pickAt } = withSetup(() => useAreaQuery())
-    await pickAt(116.4, 39.9)
+    await pickAt(2.1674, 41.3895)
     await flushPromises()
 
     expect(stats.value).toBeNull()
@@ -246,13 +246,13 @@ describe('useAreaQuery', () => {
   it('网络错误与非法范围各有各的说法', async () => {
     fetchMock.mockRejectedValueOnce(new TypeError('network down'))
     const { error, pickAt } = withSetup(() => useAreaQuery())
-    await pickAt(116.4, 39.9)
+    await pickAt(2.1674, 41.3895)
     await flushPromises()
     expect(error.value).toBe('数据源暂不可用')
 
     respondWithStatus(400, 'bbox 参数不合法')
     const second = withSetup(() => useAreaQuery())
-    await second.pickAt(116.4, 39.9)
+    await second.pickAt(2.1674, 41.3895)
     await flushPromises()
     expect(second.error.value).toBe('范围参数无效')
   })
@@ -260,7 +260,7 @@ describe('useAreaQuery', () => {
   it('换半径会按新半径重查同一片范围', async () => {
     respondWith()
     const { radiusM, setRadius, pickAt } = withSetup(() => useAreaQuery())
-    await pickAt(116.4, 39.9)
+    await pickAt(2.1674, 41.3895)
     await flushPromises()
     expect(fetchMock).toHaveBeenCalledTimes(1)
     const first = decodeURIComponent(String(fetchMock.mock.calls[0]?.[0]))
@@ -293,7 +293,7 @@ describe('useAreaQuery', () => {
   it('clear 会清掉选区与结果', async () => {
     respondWith()
     const { center, stats, clear, pickAt } = withSetup(() => useAreaQuery())
-    await pickAt(116.4, 39.9)
+    await pickAt(2.1674, 41.3895)
     await flushPromises()
     expect(stats.value).not.toBeNull()
 
@@ -314,8 +314,8 @@ describe('useAreaQuery', () => {
       .mockResolvedValueOnce(new Response(JSON.stringify(areaPayload()), { status: 200 }))
 
     const { stats, pickAt } = withSetup(() => useAreaQuery())
-    const first = pickAt(116.4, 39.9)
-    const second = pickAt(116.5, 39.95)
+    const first = pickAt(2.1674, 41.3895)
+    const second = pickAt(2.2674, 41.4395)
     await second
     await flushPromises()
     // 第一个请求这时才回来 —— 结果必须被丢掉
@@ -381,7 +381,7 @@ describe('useAreaQuery 的拾取', () => {
       useAreaQuery({ stage: makeStage(viewer) }),
     )
 
-    await pickAt(116.4, 39.9)
+    await pickAt(2.1674, 41.3895)
     await flushPromises()
     expect(stats.value).not.toBeNull()
 
@@ -396,7 +396,7 @@ describe('useAreaQuery 的拾取', () => {
   it('Esc 收起当前选区', async () => {
     respondWith()
     const { center, stats, pickAt } = withSetup(() => useAreaQuery())
-    await pickAt(116.4, 39.9)
+    await pickAt(2.1674, 41.3895)
     await flushPromises()
     expect(stats.value).not.toBeNull()
 
@@ -432,7 +432,7 @@ describe('useAreaQuery 的拾取', () => {
     respondWith()
     const viewer = makeViewer(pickedCartesian())
     const { wrapper, pickAt } = withSetup(() => useAreaQuery({ stage: makeStage(viewer) }))
-    await pickAt(116.4, 39.9)
+    await pickAt(2.1674, 41.3895)
     await flushPromises()
     wrapper.unmount()
     const handler = stub().ScreenSpaceEventHandler.mock.results[0]?.value as {
@@ -450,7 +450,7 @@ describe('useAreaQuery 的拾取', () => {
         }),
     )
     const { wrapper, stats, error, pickAt } = withSetup(() => useAreaQuery())
-    const pending = pickAt(116.4, 39.9)
+    const pending = pickAt(2.1674, 41.3895)
     wrapper.unmount()
     resolvePending?.(new Response(JSON.stringify(areaPayload()), { status: 200 }))
     await pending
@@ -461,7 +461,7 @@ describe('useAreaQuery 的拾取', () => {
     // 报错的那一路同样不再写状态
     fetchMock.mockImplementationOnce(() => Promise.reject(new TypeError('network down')))
     const second = withSetup(() => useAreaQuery())
-    const failing = second.pickAt(116.5, 39.95)
+    const failing = second.pickAt(2.2674, 41.4395)
     second.wrapper.unmount()
     await failing
     await flushPromises()
@@ -471,7 +471,7 @@ describe('useAreaQuery 的拾取', () => {
   it('半径被改成非法值时不发请求，直接说范围参数无效', async () => {
     const { radiusM, error, errorDetail, pickAt } = withSetup(() => useAreaQuery())
     radiusM.value = 0
-    await pickAt(116.4, 39.9)
+    await pickAt(2.1674, 41.3895)
     await flushPromises()
     expect(fetchMock).not.toHaveBeenCalled()
     expect(error.value).toBe('范围参数无效')
@@ -508,7 +508,7 @@ describe('useAreaQuery 的拾取', () => {
     const { center, stats, hint, pickAt } = withSetup(() =>
       useAreaQuery({ stage: makeStage(viewer) }),
     )
-    await pickAt(116.4, 39.9)
+    await pickAt(2.1674, 41.3895)
     await flushPromises()
     expect(stats.value).not.toBeNull()
 
@@ -522,7 +522,7 @@ describe('useAreaQuery 的拾取', () => {
   it('不是 Esc 的按键不收选区', async () => {
     respondWith()
     const { center, stats, pickAt } = withSetup(() => useAreaQuery())
-    await pickAt(116.4, 39.9)
+    await pickAt(2.1674, 41.3895)
     await flushPromises()
 
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'a' }))

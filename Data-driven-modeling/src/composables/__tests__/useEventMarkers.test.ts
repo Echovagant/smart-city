@@ -45,7 +45,7 @@ const CITY_EVENT: CityEvent = {
   title: '空气质量由优转为良',
   time: '2026-10-22T03:00:00Z',
   location_kind: 'city',
-  location: { lng: 116.4020155, lat: 39.9153679, label: '数据范围中心' },
+  location: { lng: 2.1694155, lat: 41.4048679, label: '数据范围中心' },
   metric_key: 'aqi_24h',
   source: SOURCE,
   estimated: false,
@@ -59,14 +59,14 @@ const GEOMETRY_EVENT: CityEvent = {
   title: '路网负载指数 92.4 超过参考阈值 80',
   time: '2026-10-22T09:00:00Z',
   location_kind: 'geometry',
-  location: { lng: 116.41, lat: 39.92, label: '主路段（OSM way/41662973）' },
+  location: { lng: 2.1774, lat: 41.4095, label: '主路段（OSM way/41662973）' },
   metric_key: 'road_load_index',
   source: SOURCE,
   estimated: true,
 }
 
 const overviewOf = (events: CityEvent[]): CityOverview => ({
-  city: { code: 110000, name: '北京市', latitude: 40.05, longitude: 116.4 },
+  city: { id: 'barcelona', name: '巴塞罗那', latitude: 41.395, longitude: 2.165, timezone: 'Europe/Madrid' },
   generated_at: '2026-10-22T04:00:00Z',
   metrics: [],
   series: [],
@@ -116,8 +116,8 @@ describe('useEventMarkers', () => {
     const geometry = byId.get(GEOMETRY_EVENT.id)!
     expect(city.location?.lng).toBe(cityConfig.center.lng)
     expect(city.location?.lat).toBe(cityConfig.center.lat)
-    expect(geometry.location?.lng).toBe(116.41)
-    expect(geometry.location?.lat).toBe(39.92)
+    expect(geometry.location?.lng).toBe(2.1774)
+    expect(geometry.location?.lat).toBe(41.4095)
   })
 
   it('没有指标时事件流是空数组（不编条目）', () => {
@@ -212,7 +212,7 @@ describe('useEventMarkers', () => {
     const { markers, flyTo } = makeMarkers([GEOMETRY_EVENT])
     markers.flyToEvent(GEOMETRY_EVENT)
     const flight = flyTo.mock.calls[0][0] as { destination: { x: number } }
-    expect(flight.destination.x).toBe(116.41)
+    expect(flight.destination.x).toBe(2.1774)
     expect(flight.destination.x).not.toBe(cityConfig.center.lng)
   })
 
@@ -223,7 +223,7 @@ describe('useEventMarkers', () => {
   })
 
   it('ringPositions：半径为 0 时给空数组，否则按分段数给点', () => {
-    expect(ringPositions(116.4, 39.9, 0)).toEqual([])
-    expect(ringPositions(116.4, 39.9, 100)).toHaveLength(49)
+    expect(ringPositions(2.1674, 41.3895, 0)).toEqual([])
+    expect(ringPositions(2.1674, 41.3895, 100)).toHaveLength(49)
   })
 })

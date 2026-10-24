@@ -103,10 +103,10 @@ const buildingFeature = (height: string): BuildingsResponse['features'][number] 
     type: 'Polygon',
     coordinates: [
       [
-        [116.4, 39.9],
-        [116.401, 39.9],
-        [116.401, 39.901],
-        [116.4, 39.9],
+        [2.1674, 41.3895],
+        [2.1684, 41.3895],
+        [2.1684, 41.3905],
+        [2.1674, 41.3895],
       ],
     ] as Position[][],
   },
@@ -118,8 +118,8 @@ const roadFeature = (highway: string): RoadsResponse['features'][number] => ({
   geometry: {
     type: 'LineString',
     coordinates: [
-      [116.39, 39.9],
-      [116.42, 39.9],
+      [2.1574, 41.3895],
+      [2.1874, 41.3895],
     ] as Position[],
   },
 })

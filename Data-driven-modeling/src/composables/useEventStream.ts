@@ -111,7 +111,7 @@ export const formatEventTime = (value?: string | null): string | null => {
 /**
  * 事件位置 → 实际落点。
  *
- * 两类事件，**全项目只有一个城心**（天安门 = `cityConfig.center`，也是相机的绕行中心）：
+ * 两类事件，**全项目只有一个城心**（`cityConfig.center`，也是相机的绕行中心）：
  *
  * - **全市级**（`location_kind === 'city'`：空气质量、天气）——
  *   全市指标**没有空间位置**，落在城心是准确的；
@@ -136,7 +136,7 @@ export const resolveEventLocation = (
   return event.location
 }
 
-/** 全市级事件的位置标签（城心 = 天安门）。 */
+/** 全市级事件的位置标签（城心 = `cityConfig.center`）。 */
 export const CITY_EVENT_LOCATION_LABEL = '城心（全市指标）'
 
 /**

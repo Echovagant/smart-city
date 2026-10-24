@@ -9,7 +9,7 @@ const originalFetch = globalThis.fetch
 
 /** 城市指标端点的一份最小载荷。 */
 const overviewPayload = {
-  city: { code: 110000, name: '北京市', latitude: 40.05, longitude: 116.4 },
+  city: { id: 'barcelona', name: '巴塞罗那', latitude: 41.395, longitude: 2.165, timezone: 'Europe/Madrid' },
   generated_at: '2026-10-22T04:00:00Z',
   metrics: [
     {
@@ -125,10 +125,10 @@ describe('useCityData', () => {
       .mockResolvedValueOnce(new Response(JSON.stringify({ status: 'normal' }), { status: 200 }))
 
     const { loadAll } = withSetup(useCityData)
-    await loadAll({ bbox: '116.380,39.905,116.420,39.925' })
+    await loadAll({ bbox: '2.1474,41.3945,2.1874,41.4145' })
 
     const urls = fetchMock.mock.calls.map(call => call[0])
-    expect(urls).toContain('/api/buildings?bbox=116.380%2C39.905%2C116.420%2C39.925')
+    expect(urls).toContain('/api/buildings?bbox=2.1474%2C41.3945%2C2.1874%2C41.4145')
   })
 
   it('does not touch the refs when the component unmounts while the request is in flight', async () => {
@@ -172,7 +172,7 @@ describe('useCityData', () => {
     expect(cityOverview.value?.metrics[0].source.name).toBe('中国环境监测总站')
     expect(cityOverviewError.value).toBeNull()
     const urls = fetchMock.mock.calls.map(call => call[0])
-    expect(urls).toContain('/api/city/overview')
+    expect(urls).toContain('/api/city/overview?city=barcelona')
   })
 
   it('loadCityOverview records its own error without failing the whole scene', async () => {
