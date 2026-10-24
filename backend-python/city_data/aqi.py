@@ -91,7 +91,8 @@ def iaqi(pollutant: str, concentration: Optional[float]) -> Optional[float]:
     """污染物浓度 → IAQI。
 
     ``concentration`` 一律用**上游单位 μg/m³**（CO 的 mg/m³ 换算在内部做）。
-    污染物不认识、浓度是 None / 非数字 / 负数 → 返回 ``None``。
+    数字字符串也会被转换（``float()`` 能解析的都算数）；
+    污染物不认识、浓度是 ``None`` / 布尔 / 非数字 / 负数 / NaN / 无穷 → 返回 ``None``。
     """
     if pollutant not in BREAKPOINTS:
         return None

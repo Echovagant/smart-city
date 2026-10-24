@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 from data_processor import DataProcessorError, get_data_processor
 from city_data import aggregator as city_aggregator
-from city_data import city_codes
+from city_data import cities
 from city_data.models import AreaStats, CityOverview
 from city_data.sources.area import aggregate_area
 
@@ -35,10 +35,8 @@ DATA_UNAVAILABLE_DETAIL = "城市数据暂时不可用，请稍后重试"
 # bbox 参数非法时的统一文案，追加具体原因后返回。
 BBOX_DETAIL = "bbox 必须是 4 个逗号分隔的数字：min_lon,min_lat,max_lon,max_lat"
 
-# cityCode 参数非法时的统一文案。
-CITY_CODE_DETAIL = (
-    "cityCode 必须是 cnemc 城市/省份代码表里的六位代码，例如 110000（北京）"
-)
+# city 参数非法时的统一文案。
+CITY_PARAM_DETAIL = "city 必须是已知城市 id，例如 barcelona（巴塞罗那）"
 
 # 响应压缩参数。必须与 Starlette 的 GZipMiddleware 保持一致：
 # 「全量响应缓存」预压缩出来的字节要靠这组参数与中间件自己压的结果对齐。
@@ -693,25 +691,22 @@ async def get_traffic_status():
 
 
 @app.get("/api/city/overview")
-async def get_city_overview(cityCode: str = "110000"):
+async def get_city_overview(city: str = cities.DEFAULT_CITY_ID):
     """城市运行指标聚合：空气质量 / 天气 / 路网静态指标。
 
-    - ``cityCode`` 默认 110000（北京），只接受 cnemc 城市/省份代码表里的值，
+    - ``city`` 默认 ``barcelona``，只接受**本地城市表**里存在的 id，
       否则 400（参数问题与数据是否可用无关，先校验再取数）。
     - **端点永不 500**：任何一个上游源失败或超时都只是把它放进 ``degraded``，
       其余指标照常返回；取不到的指标值是 null，不拿 0 或旧值冒充。
     - 响应带 ``Cache-Control``（前端 30 秒缓存）与 ``X-Data-Generated-At``（排查用）。
     """
-    try:
-        code = int(cityCode)
-    except (TypeError, ValueError):
-        raise HTTPException(status_code=400, detail=CITY_CODE_DETAIL)
-    if not city_codes.is_known_city_code(code):
-        raise HTTPException(status_code=400, detail=CITY_CODE_DETAIL)
+    city_obj = cities.get_city(city)
+    if city_obj is None:
+        raise HTTPException(status_code=400, detail=CITY_PARAM_DETAIL)
 
     try:
         overview = await city_aggregator.build_city_overview(
-            code,
+            city_obj,
             buildings_path=_buildings_path,
             roads_path=_roads_path,
         )
@@ -721,16 +716,11 @@ async def get_city_overview(cityCode: str = "110000"):
         # 细节只写日志。
         logger.exception("城市指标聚合失败")
         overview = CityOverview(
-            city={
-                "code": code,
-                "name": None,
-                "latitude": None,
-                "longitude": None,
-            },
+            city=city_obj.as_payload(),
             generated_at=city_aggregator.now_iso(),
             metrics=[],
             series=[],
-            degraded=city_aggregator.source_names(code),
+            degraded=city_aggregator.source_names(city_obj),
         )
 
     return JSONResponse(

@@ -7,7 +7,8 @@
 - 四条派生规则**各自**产出与不产出哪些事件；
 - **id 稳定**（同一条事件重复派生 id 不变 —— 前端据此去重）；
 - **level 正确**（AQI 分级 → 提示/预警/告警）；
-- **estimated 正确**（模型估算派生的路网负载事件是 true，其余是 false）；
+- **estimated 正确**（事件继承它依据的那个源的标记：路网负载是 true，
+  两个 open-meteo 源也是 true —— 它们是模式数据）；
 - 每条事件都带 **source + metric_key + time**；
 - 规则 3 的位置落在**真实主干道**上（不许用城心假装路段）；
 - 一条规则出错**只跳过那条规则**，端点因此永不 500。
@@ -19,6 +20,7 @@ from pathlib import Path
 import pytest
 
 from city_data import events
+from city_data.cities import CITIES
 from city_data.models import (
     EventLocation,
     Metric,
@@ -29,12 +31,36 @@ from city_data.models import (
 )
 from city_data.sources import road_network
 
+# 聚合器现在按**城市对象**取数（不再有数字城市代码）。
+_CITY = CITIES["barcelona"]
+
 SOURCE = SourceInfo(
-    name="中国环境监测总站",
-    url="https://air.cnemc.cn:18007/CityData/GetAllCityRealTimeAQIModels",
-    observed_at="2026-10-22T04:00:00Z",
-    fetched_at="2026-10-22T04:30:00Z",
+    name="Open-Meteo 空气质量（CAMS 模型再分析）",
+    url="https://air-quality-api.open-meteo.com/v1/air-quality?latitude=41.395&longitude=2.165",
+    observed_at="2026-10-24T10:00:00Z",
+    fetched_at="2026-10-24T10:30:00Z",
     realtime=True,
+    # 模型再分析值 —— 事件继承这个标记。
+    estimated=True,
+)
+
+# 天气源同样是数值模式（estimated = true）。
+WEATHER_SOURCE = SourceInfo(
+    name="Open-Meteo 天气预报",
+    url="https://api.open-meteo.com/v1/forecast?latitude=41.395&longitude=2.165",
+    observed_at="2026-10-24T10:00:00Z",
+    fetched_at="2026-10-24T10:30:00Z",
+    realtime=True,
+    estimated=True,
+)
+
+# 一个**实测**来源：用来证明事件的 estimated 是「继承」来的，不是写死的。
+MEASURED_SOURCE = SourceInfo(
+    name="本地 OSM 快照",
+    url="backend-python/geojson/buildings.geojson",
+    observed_at="2026-10-24T08:00:00Z",
+    fetched_at="2026-10-24T10:30:00Z",
+    realtime=False,
     estimated=False,
 )
 
@@ -47,7 +73,7 @@ ROAD_SOURCE = SourceInfo(
     estimated=True,
 )
 
-CENTER = EventLocation(lng=116.4, lat=39.915, label="城心（数据范围中心）")
+CENTER = EventLocation(lng=2.1650, lat=41.3950, label="城心（数据范围中心）")
 
 
 def metric(key, value, level=None, label=None, source=None, unit=""):
@@ -202,12 +228,29 @@ class TestRule1LevelChange:
         )
         assert "按 AQI 分级标准换算" in result[0].detail
 
-    def test_is_not_an_estimate(self):
+    def test_inherits_the_estimated_flag_from_its_source(self):
+        """事件是派生的：依据的源是模型数据，事件就是模型数据。"""
         result = events.derive_events(
             [],
             [aqi_series([("2026-10-22T00:00:00Z", 30), ("2026-10-22T01:00:00Z", 80)])],
             center=CENTER,
         )
+        assert result[0].estimated is True
+        assert result[0].source.estimated is True
+
+    def test_a_measured_source_produces_a_measured_event(self):
+        """反过来也要成立：源是实测的，事件就不能被标成估算。"""
+        measured_series = Series(
+            key="aqi_24h",
+            label="24 小时 AQI",
+            unit="AQI",
+            points=[
+                SeriesPoint(t="2026-10-22T00:00:00Z", v=30),
+                SeriesPoint(t="2026-10-22T01:00:00Z", v=80),
+            ],
+            source=MEASURED_SOURCE,
+        )
+        result = events.derive_events([], [measured_series], center=CENTER)
         assert result[0].estimated is False
 
 
@@ -223,7 +266,7 @@ class TestRule2CurrentAqi:
         assert result[0].level == "warn"
         assert result[0].title == "当前空气质量轻度污染"
         assert result[0].metric_key == "aqi"
-        assert result[0].estimated is False
+        assert result[0].estimated is True
 
     def test_grade_two_produces_nothing(self):
         result = events.derive_events(
@@ -248,7 +291,7 @@ class TestRule2CurrentAqi:
 class TestRule3RoadLoad:
     """规则 3：路网负载指数超过参考阈值。"""
 
-    anchor = RoadAnchor(lng=116.41, lat=39.92, label="主路段（OSM way/12345）")
+    anchor = RoadAnchor(lng=2.1710, lat=41.3950, label="主路段（OSM way/12345）")
 
     def test_over_threshold_produces_an_alert_event(self):
         result = events.derive_events(
@@ -305,29 +348,38 @@ class TestRule4Weather:
 
     def test_cold_temperature(self):
         result = events.derive_events(
-            [metric("weather_temp", -3.0, unit="℃")], [], center=CENTER
+            [metric("weather_temp", -3.0, unit="℃", source=WEATHER_SOURCE)],
+            [],
+            center=CENTER,
         )
         assert len(result) == 1
         assert result[0].type == "weather"
         assert result[0].level == "warn"
         assert "低温" in result[0].title
-        assert result[0].estimated is False
+        # 天气源是数值模式 → 事件继承估算标记
+        assert result[0].estimated is True
 
     def test_hot_temperature(self):
         result = events.derive_events(
-            [metric("weather_temp", 38.5, unit="℃")], [], center=CENTER
+            [metric("weather_temp", 38.5, unit="℃", source=WEATHER_SOURCE)],
+            [],
+            center=CENTER,
         )
         assert len(result) == 1
         assert "高温" in result[0].title
 
     def test_normal_temperature_produces_nothing(self):
         result = events.derive_events(
-            [metric("weather_temp", 18.0, unit="℃")], [], center=CENTER
+            [metric("weather_temp", 18.0, unit="℃", source=WEATHER_SOURCE)],
+            [],
+            center=CENTER,
         )
         assert result == []
 
     def test_degraded_weather_produces_nothing(self):
-        result = events.derive_events([metric("weather_temp", None)], [], center=CENTER)
+        result = events.derive_events(
+            [metric("weather_temp", None, source=WEATHER_SOURCE)], [], center=CENTER
+        )
         assert result == []
 
 
@@ -358,7 +410,7 @@ class TestLocationKind:
         assert [event.location_kind for event in result] == ["city"]
 
     def test_road_load_event_is_geometry_anchored(self):
-        anchor = RoadAnchor(lng=116.41, lat=39.92, label="主路段（OSM way/12345）")
+        anchor = RoadAnchor(lng=2.1710, lat=41.3950, label="主路段（OSM way/12345）")
         result = events.derive_events(
             [metric("road_load_index", 92.4, source=ROAD_SOURCE)],
             [],
@@ -382,7 +434,7 @@ class TestLocationKind:
         assert result[0].location.lng == CENTER.lng
 
     def test_the_reference_point_is_not_called_the_city_centre(self):
-        # 「城心」全项目只有一个（天安门，前端 cityConfig.center）。
+        # 「城心」全项目只有一个（前端 cityConfig.center）。
         # 后端这个点是**数据范围中心**，不许再叫城心。
         assert "城心" not in events.SCENE_CENTER_FALLBACK.label
         assert "城心" not in road_network.SCENE_CENTER_LABEL
@@ -431,7 +483,7 @@ class TestIdStability:
                 ]
             )
         ]
-        anchor = RoadAnchor(lng=116.41, lat=39.92, label="主路段（OSM way/12345）")
+        anchor = RoadAnchor(lng=2.1710, lat=41.3950, label="主路段（OSM way/12345）")
 
         first = events.derive_events(metrics, series, center=CENTER, road_anchor=anchor)
         second = events.derive_events(metrics, series, center=CENTER, road_anchor=anchor)
@@ -534,7 +586,7 @@ class TestRealRoadAnchor:
         anchor = road_network.longest_main_road_anchor(features)
         assert anchor is not None
         # 城心是数据围中心；主干道中点一般不等于它（不相等才说明没在拿城心假装路段）
-        assert (anchor.lng, anchor.lat) != (116.4020155, 39.9153679)
+        assert (anchor.lng, anchor.lat) != (2.1650, 41.3950)
 
     def test_longer_road_wins_within_the_same_tier(self):
         from city_data.sources import road_network
@@ -545,7 +597,7 @@ class TestRealRoadAnchor:
                 "properties": {"highway": "primary"},
                 "geometry": {
                     "type": "LineString",
-                    "coordinates": [[116.40, 39.90], [116.401, 39.90]],
+                    "coordinates": [[2.160, 41.390], [2.161, 41.390]],
                 },
             },
             {
@@ -553,7 +605,7 @@ class TestRealRoadAnchor:
                 "properties": {"highway": "primary"},
                 "geometry": {
                     "type": "LineString",
-                    "coordinates": [[116.40, 39.90], [116.42, 39.90]],
+                    "coordinates": [[2.160, 41.390], [2.170, 41.390]],
                 },
             },
             {
@@ -561,7 +613,7 @@ class TestRealRoadAnchor:
                 "properties": {"highway": "footway"},
                 "geometry": {
                     "type": "LineString",
-                    "coordinates": [[116.40, 39.90], [116.43, 39.90]],
+                    "coordinates": [[2.160, 41.390], [2.180, 41.390]],
                 },
             },
         ]
@@ -570,7 +622,7 @@ class TestRealRoadAnchor:
         # 主干道比人行道等级高：即使人行道更长也不选它
         assert "way/2" in anchor.label
         # 同级里取最长的那条
-        assert abs(anchor.lng - 116.41) < 1e-6
+        assert abs(anchor.lng - 2.165) < 1e-6
 
 
 class TestAggregatorWiring:
@@ -619,7 +671,7 @@ class TestAggregatorWiring:
             encoding="utf-8",
         )
         overview = asyncio.run(
-            aggregator.build_city_overview(110000, buildings_path=buildings)
+            aggregator.build_city_overview(_CITY, buildings_path=buildings)
         )
         # 上游全挂 → 那些源降级；事件流是空数组（**不编事件**）
         assert overview.events == []
@@ -630,7 +682,7 @@ class TestAggregatorWiring:
 
         overview = asyncio.run(
             aggregator.build_city_overview(
-                110000,
+                _CITY,
                 buildings_path=tmp_path / "nope.geojson",
             )
         )
@@ -674,7 +726,7 @@ class TestAggregatorWiring:
             encoding="utf-8",
         )
         overview = asyncio.run(
-            aggregator.build_city_overview(110000, buildings_path=buildings)
+            aggregator.build_city_overview(_CITY, buildings_path=buildings)
         )
         by_key = {item.key: item for item in overview.facilities}
         assert by_key["medical"].members == ["relation/3464247"]

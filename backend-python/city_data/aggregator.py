@@ -25,7 +25,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from . import city_codes, events
+from . import events
+from .cities import City
 from .http import SourceUnavailable
 from .models import (
     CityEvent,
@@ -50,9 +51,6 @@ SOURCE_TIMEOUT_SECONDS = 5.0
 AIR_QUALITY_TTL_SECONDS = 1800.0
 WEATHER_TTL_SECONDS = 600.0
 STATIC_TTL_SECONDS = float("inf")
-
-# 逐日历史是**日维度**的数据，一天才变一次 —— 缓存 1 小时足够。
-AIR_QUALITY_DAILY_TTL_SECONDS = 3600.0
 
 # 指标在响应里的固定顺序。前端按 key 取值，这个顺序只影响可读性。
 METRIC_ORDER: Tuple[str, ...] = (
@@ -173,19 +171,17 @@ async def _fetch_spec(spec: SourceSpec) -> SourceResult:
 
 
 def _build_specs(
-    city_code: int,
+    city: City,
     buildings_path: Optional[Path],
     roads_path: Optional[Path],
 ) -> List[SourceSpec]:
-    """列出本城市要取的六个源。"""
-    history_url = air_quality.HISTORY_URL + "?citycode=%s" % city_code
-    daily_url = air_quality.DAILY_HISTORY_URL + "?citycode=%s" % city_code
-    weather_cityid = city_codes.WEATHER_CITY_IDS.get(city_code)
-    weather_url = (
-        weather.BASE_URL + weather_cityid + ".html"
-        if weather_cityid
-        else weather.BASE_URL + "<cityid>"
-    )
+    """列出本城市要取的四个源。
+
+    两个远程源（open-meteo 的天气与空气质量）各自**一次请求**拿全部所需数据：
+    空气质量源同时给出 AQI、六项污染物浓度、逐小时序列与逐日序列，
+    所以它是**一个**源而不是三个 —— 降级时整块降级，不会出现
+    「实时 AQI 有值但污染物浓度是空的」这种自相矛盾的状态。
+    """
     roads_key = "roads:%s:%s" % (buildings_path or road_network.DEFAULT_BUILDINGS_PATH,
                                  roads_path or road_network.DEFAULT_ROADS_PATH)
     facilities_key = "facilities:%s" % (
@@ -195,37 +191,23 @@ def _build_specs(
     return [
         SourceSpec(
             name=air_quality.SOURCE_NAME,
-            url=air_quality.REALTIME_URL,
-            slots=air_quality.REALTIME_SLOTS,
+            url=air_quality.build_url(city),
+            slots=air_quality.SLOTS,
             ttl=AIR_QUALITY_TTL_SECONDS,
-            cache_key="aqi:realtime:%s" % city_code,
-            fetch=lambda: air_quality.fetch_realtime(city_code),
-        ),
-        SourceSpec(
-            name=air_quality.HISTORY_SOURCE_NAME,
-            url=history_url,
-            slots=air_quality.HISTORY_SLOTS,
-            ttl=AIR_QUALITY_TTL_SECONDS,
-            cache_key="aqi:history:%s" % city_code,
-            fetch=lambda: air_quality.fetch_history(city_code),
-        ),
-        SourceSpec(
-            # 逐日历史：只产出一条序列（aqi_daily），**不产出指标**。
-            # 它与逐小时历史分属两个源 —— 逐日挂了不影响 24 小时曲线。
-            name=air_quality.DAILY_SOURCE_NAME,
-            url=daily_url,
-            slots=(),
-            ttl=AIR_QUALITY_DAILY_TTL_SECONDS,
-            cache_key="aqi:daily:%s" % city_code,
-            fetch=lambda: air_quality.fetch_daily_history(city_code),
+            cache_key="aqi:%s" % city.id,
+            fetch=lambda: air_quality.fetch(city),
+            # CAMS 是模型再分析值 —— 降级占位也要标出来。
+            estimated=True,
         ),
         SourceSpec(
             name=weather.SOURCE_NAME,
-            url=weather_url,
+            url=weather.build_url(city),
             slots=weather.SLOTS,
             ttl=WEATHER_TTL_SECONDS,
-            cache_key="weather:%s" % city_code,
-            fetch=lambda: weather.fetch(city_code),
+            cache_key="weather:%s" % city.id,
+            fetch=lambda: weather.fetch(city),
+            # 数值天气预报 —— 同样不是站点实测。
+            estimated=True,
         ),
         SourceSpec(
             name=road_network.SOURCE_NAME,
@@ -247,12 +229,12 @@ def _build_specs(
     ]
 
 
-def source_names(city_code: int) -> List[str]:
+def source_names(city: City) -> List[str]:
     """这个城市涉及的**全部**源的名字。
 
     聚合器整体出意外时用它构造一份「全部降级」的响应。
     """
-    return [spec.name for spec in _build_specs(city_code, None, None)]
+    return [spec.name for spec in _build_specs(city, None, None)]
 
 
 def _order_metrics(metrics: List[Metric]) -> List[Metric]:
@@ -265,18 +247,18 @@ def _order_metrics(metrics: List[Metric]) -> List[Metric]:
 
 
 async def build_city_overview(
-    city_code: int,
+    city: City,
     *,
     buildings_path: Optional[Path] = None,
     roads_path: Optional[Path] = None,
 ) -> CityOverview:
     """聚合一个城市的运行指标。
 
-    六个源**并发**取数（``asyncio.gather``），每个源独立超时。
+    四个源**并发**取数（``asyncio.gather``），每个源独立超时。
     取不到的源进 ``degraded``，并在它的槽位上留下 ``value = null`` 的占位指标
     （前端据此显示「数据源暂不可用」，不会拿 0 或旧值冒充）。
     """
-    specs = _build_specs(city_code, buildings_path, roads_path)
+    specs = _build_specs(city, buildings_path, roads_path)
     outcomes = await asyncio.gather(
         *[_fetch_spec(spec) for spec in specs],
         return_exceptions=True,
@@ -288,14 +270,9 @@ async def build_city_overview(
     degraded: List[str] = []
     scene_center: Optional[EventLocation] = None
     road_anchor: Optional[RoadAnchor] = None
-    city_info: Dict[str, Any] = {
-        "code": city_code,
-        # 名称由上游实时接口给出（air_quality 的 city_info），
-        # 这里不另存一份行政区划名录 —— 仓库里只有代码白名单。
-        "name": None,
-        "latitude": None,
-        "longitude": None,
-    }
+    # 城市信息直接来自**本地城市表**（``city_data/cities.py``）——
+    # 不再由某个远程源顺带给出：上游一挂，城市名与坐标也该照常返回。
+    city_info: Dict[str, Any] = city.as_payload()
 
     for spec, outcome in zip(specs, outcomes):
         if isinstance(outcome, BaseException):
@@ -315,8 +292,6 @@ async def build_city_overview(
         metrics.extend(outcome.metrics)
         series.extend(outcome.series)
         facility_categories.extend(outcome.facilities)
-        if outcome.city:
-            city_info = outcome.city
         if outcome.scene_center is not None:
             scene_center = outcome.scene_center
         if outcome.road_anchor is not None:

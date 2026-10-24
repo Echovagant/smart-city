@@ -1,40 +1,65 @@
-"""天气数据源 —— 中国天气网（免 key，但限制很多）。
+"""天气数据源 —— open-meteo Forecast API（免 key，数值模式预报）。
 
-接口（2026-10-22 实测）
+接口（2026-10-24 实测）
 ----------------------
-``GET http://www.weather.com.cn/data/sk/{cityid}.html`` → 200 JSON::
+``GET https://api.open-meteo.com/v1/forecast`` → 200 JSON::
 
-    {"weatherinfo":{"city":"北京","cityid":"101010100","temp":"18","WD":"东南风",
-                    "WS":"1级","SD":"17%","WSE":"1","time":"17:05","rain":"0"}}
+    {"latitude": 41.43923, "longitude": 2.168546,
+     "utc_offset_seconds": 7200, "timezone": "Europe/Madrid",
+     "elevation": 47.0,
+     "current_units": {"time": "unixtime", "temperature_2m": "°C",
+                       "relative_humidity_2m": "%", "wind_speed_10m": "km/h",
+                       "precipitation": "mm"},
+     "current": {"time": 1792806300, "interval": 900,
+                 "temperature_2m": 15.8, "relative_humidity_2m": 86,
+                 "apparent_temperature": 16.0, "weather_code": 80,
+                 "wind_speed_10m": 6.2, "precipitation": 0.10}}
 
-已知限制（**务必保留在文档里**）
---------------------------------
-1. **只有 ``101010100``（北京）通**：上海 ``101020100``、深圳 ``101280601``
-   都会返回 HTML 错误页（HTTP 200 但不是 JSON）。别的城市直接判为不可用，
-   不去瞎试其它 cityid。
-2. **时间戳可能不新鲜**：上游只给 ``HH:MM``，没有日期。
-   实测上游给的时间比本地时间还晚几个小时（本地 12:00 时上游报 17:05），
-   说明这个时间戳**不是**可靠的实时观测时间。
-   本模块的处理是：按北京时间补上今天的日期；若补出来的时刻落在未来
-   （超过 5 分钟容差），就回退一天，取「最近的那个可能时刻」；
-   再用「观测时间与当前时间差是否超过 1 小时」决定 ``realtime`` 是 true 还是 false。
-   **不新鲜就说不新鲜** —— 契约里如实标出来，前端照实显示。
-3. 响应头是 ``text/html``（没有 charset），按 UTF-8 解码；不是 JSON 就是不可用。
+为什么用 Unix epoch 秒
+----------------------
+请求带 ``timeformat=unixtime``，上游所有时间都是 **Unix 秒**。本机没有 IANA
+时区库（``zoneinfo`` 在 Windows 上要额外装 ``tzdata``，而本项目不新增任何
+依赖），所以**一律用 epoch 秒**，需要本地时刻时用响应里的
+``utc_offset_seconds`` 换算 —— 不去解析 ``Europe/Madrid`` 的本地时间。
+
+已知限制
+--------
+1. **这是数值模式预报，不是站点实测** → ``source.estimated = True``。
+2. ``current.time`` 是**当前小时的整点**（预报步长 15 分钟，``current`` 给的
+   却是整点），所以观测时刻最多比现在早 1 小时；超过 1 小时就如实标成
+   「不是实时」，不假装是实时读数。
+3. ``weather_code`` 是 WMO 天气现象代码（上游按 WMO 表给出），本模块只透传
+   数字，不自己翻译 —— 免得翻译错。
+4. 上游要求署名（免费档的授权条件）—— 署名写在响应的 ``extra.attribution``
+   里，随数据一起发出去，不只写在文档里。
+5. 免费档仅限非商业用途。
 """
-import re
-from datetime import datetime, timedelta, timezone
+from __future__ import annotations
+
+import math
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
+from urllib.parse import urlencode
 
 from .. import http
+from ..cities import City
 from ..http import SourceUnavailable
 from ..models import Metric, SourceInfo, SourceResult
 
-BASE_URL = "http://www.weather.com.cn/data/sk/"
+BASE_URL = "https://api.open-meteo.com/v1/forecast"
 
-# 上游给的时间没有时区信息时，按北京时间理解。
-CHINA_TZ = timezone(timedelta(hours=8))
+# 源的名字（前端会直接显示在指标带上）。
+SOURCE_NAME = "Open-Meteo 天气预报"
 
-SOURCE_NAME = "中国天气网"
+# 请求 ``current`` 时要的变量。顺序固定，方便比对与排查。
+CURRENT_FIELDS = (
+    "temperature_2m",
+    "relative_humidity_2m",
+    "apparent_temperature",
+    "weather_code",
+    "wind_speed_10m",
+    "precipitation",
+)
 
 # 降级时占位指标的槽位。
 SLOTS = (
@@ -42,13 +67,11 @@ SLOTS = (
     ("weather_humidity", "相对湿度", "%"),
 )
 
-# 上游只给 HH:MM：允许的最小时间戳容差（超过就认为落在未来）。
-FUTURE_TOLERANCE = timedelta(minutes=5)
-
 # 观测时间与当前时间差超过这个秒数，就不再声称「实时」。
 REALTIME_MAX_AGE_SECONDS = 3600.0
 
-_TIME_PATTERN = re.compile(r"^(\d{1,2}):(\d{2})$")
+# 上游要求的署名（免费档的授权条件）—— 随数据一起发出去，别只写在文档里。
+ATTRIBUTION = "Weather data by open-meteo.com"
 
 
 def now_iso() -> str:
@@ -61,105 +84,115 @@ def to_iso(moment: datetime) -> str:
     return moment.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
-def resolve_observed_at(hhmm: Any, now: datetime) -> Optional[datetime]:
-    """把上游的 ``HH:MM`` 还原成一个 UTC 时刻。
+def build_url(city: City) -> str:
+    """按城市取数点拼出完整请求地址。
 
-    上游不给日期，所以先按「今天」补；若补出来的时刻落在未来
-    （超过 5 分钟容差），回退一天 —— 取「最近的那个可能时刻」。
-    返回 None 表示上游的时间戳没法解析。
+    坐标与时区都来自城市表 —— **不写死**任何一座城市的坐标。
+    参数顺序固定，方便在日志里肉眼比对两次请求。
     """
-    if not isinstance(hhmm, str):
-        return None
-    match = _TIME_PATTERN.match(hhmm.strip())
-    if not match:
-        return None
-    hour, minute = int(match.group(1)), int(match.group(2))
-    if hour > 23 or minute > 59:
-        return None
-
-    local_now = now.astimezone(CHINA_TZ)
-    candidate = local_now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-    if candidate - now > FUTURE_TOLERANCE:
-        candidate -= timedelta(days=1)
-    return candidate.astimezone(timezone.utc)
+    query = urlencode(
+        {
+            "latitude": city.latitude,
+            "longitude": city.longitude,
+            "current": ",".join(CURRENT_FIELDS),
+            "timezone": city.timezone,
+            "timeformat": "unixtime",
+        },
+        safe=",",
+    )
+    return BASE_URL + "?" + query
 
 
 def _to_float(raw: Any) -> Optional[float]:
+    """上游数值 → 浮点数；不是有限数就当没有。"""
     if raw is None or isinstance(raw, bool):
         return None
     try:
-        value = float(str(raw).strip().rstrip("%"))
+        value = float(raw)
     except (TypeError, ValueError):
         return None
-    return value
+    return value if math.isfinite(value) else None
 
 
-def parse_weather(payload: Any, now: datetime) -> Dict[str, Any]:
-    """把 ``sk`` 接口的响应整理成一份规整的字典。"""
+def _epoch_seconds(raw: Any) -> Optional[int]:
+    """Unix epoch 秒 → int；不是数字就当没有。"""
+    value = _to_float(raw)
+    return None if value is None else int(value)
+
+
+def parse_current(payload: Any, now: datetime) -> Dict[str, Any]:
+    """把 ``current`` 段落整理成一份规整的字典。
+
+    取不到 ``current``、关键字段（气温 / 湿度 / 观测时刻）不是数字，
+    一律抛 :class:`SourceUnavailable` —— 这个源整体降级，
+    而不是悄悄交出半个指标。
+    """
     if not isinstance(payload, dict):
         raise SourceUnavailable("天气响应不是 JSON 对象")
-    info = payload.get("weatherinfo")
-    if not isinstance(info, dict):
-        raise SourceUnavailable("天气响应缺少 weatherinfo")
+    current = payload.get("current")
+    if not isinstance(current, dict):
+        raise SourceUnavailable("天气响应缺少 current")
 
-    observed = resolve_observed_at(info.get("time"), now)
-    age = None if observed is None else (now - observed).total_seconds()
+    temperature = _to_float(current.get("temperature_2m"))
+    if temperature is None:
+        raise SourceUnavailable("天气响应缺少可用的 temperature_2m")
+    humidity = _to_float(current.get("relative_humidity_2m"))
+    if humidity is None:
+        raise SourceUnavailable("天气响应缺少可用的 relative_humidity_2m")
+
+    observed_epoch = _epoch_seconds(current.get("time"))
+    if observed_epoch is None:
+        raise SourceUnavailable("天气响应缺少 current.time")
+    observed_at = datetime.fromtimestamp(observed_epoch, tz=timezone.utc)
+    age = (now - observed_at).total_seconds()
+
     return {
-        "city": info.get("city"),
-        "cityid": info.get("cityid"),
-        "temperature": _to_float(info.get("temp")),
-        "humidity": _to_float(info.get("SD")),
-        "direction": info.get("WD"),
-        "wind_level": info.get("WS"),
-        "rain": _to_float(info.get("rain")),
-        "observed_at": observed,
+        "temperature": temperature,
+        "humidity": humidity,
+        "apparent_temperature": _to_float(current.get("apparent_temperature")),
+        "wind_speed_10m": _to_float(current.get("wind_speed_10m")),
+        "precipitation": _to_float(current.get("precipitation")),
+        "weather_code": _to_float(current.get("weather_code")),
+        "observed_at": observed_at,
         "age_seconds": age,
-        "realtime": age is not None and 0 <= age <= REALTIME_MAX_AGE_SECONDS,
+        "realtime": 0 <= age <= REALTIME_MAX_AGE_SECONDS,
+        "timezone": payload.get("timezone"),
+        "utc_offset_seconds": _to_float(payload.get("utc_offset_seconds")),
     }
 
 
-def fetch(city_code: int, timeout: float = http.DEFAULT_TIMEOUT_SECONDS) -> SourceResult:
-    """取某个城市的实况天气。
+def fetch(city: City, timeout: float = http.DEFAULT_TIMEOUT_SECONDS) -> SourceResult:
+    """取某个城市的实况天气（数值模式预报）。
 
-    只有北京有可用的 cityid；别的城市直接判为不可用（不试别的 cityid）。
+    取不到就抛 :class:`SourceUnavailable`（调用方把它算作降级）。
     """
-    from .. import city_codes
-
-    cityid = city_codes.WEATHER_CITY_IDS.get(city_code)
-    if cityid is None:
-        raise SourceUnavailable(
-            "该城市没有可用的 weather.com.cn cityid（实测只有北京 101010100 可用）"
-        )
-
     fetched_at = now_iso()
-    url = BASE_URL + cityid + ".html"
-    payload = http.request_json(
-        url,
-        headers={"Referer": "http://www.weather.com.cn/", "Accept": "application/json, text/plain, */*"},
-        timeout=timeout,
-    )
+    url = build_url(city)
+    payload = http.request_json(url, timeout=timeout)
     now = datetime.now(tz=timezone.utc)
-    parsed = parse_weather(payload, now)
+    parsed = parse_current(payload, now)
 
     source = SourceInfo(
         name=SOURCE_NAME,
         url=url,
-        observed_at=to_iso(parsed["observed_at"]) if parsed["observed_at"] else None,
+        observed_at=to_iso(parsed["observed_at"]),
         fetched_at=fetched_at,
         realtime=bool(parsed["realtime"]),
-        estimated=False,
+        # 数值模式预报，不是站点实测。
+        estimated=True,
     )
 
-    extra = {
-        "city": parsed["city"],
-        "cityid": parsed["cityid"],
-        "direction": parsed["direction"],
-        "wind_level": parsed["wind_level"],
-        "rain": parsed["rain"],
-        # 上游只给 HH:MM，日期是推断出来的 —— 说清楚，别让人以为是上游给的。
-        "time_precision": "upstream gives HH:MM only; the date is inferred (Asia/Shanghai)",
-        "stale": parsed["age_seconds"] is not None and parsed["age_seconds"] > REALTIME_MAX_AGE_SECONDS,
-    }
+    extra: Dict[str, Any] = {}
+    extra["attribution"] = ATTRIBUTION
+    for key in ("apparent_temperature", "wind_speed_10m", "precipitation", "weather_code"):
+        value = parsed[key]
+        # 上游没给就不放这个键 —— 不放没有来源的数字，也不放 0 冒充。
+        if value is not None:
+            extra[key] = value
+    if parsed["timezone"] is not None:
+        extra["timezone"] = parsed["timezone"]
+    if parsed["utc_offset_seconds"] is not None:
+        extra["utc_offset_seconds"] = parsed["utc_offset_seconds"]
 
     metrics = [
         Metric(

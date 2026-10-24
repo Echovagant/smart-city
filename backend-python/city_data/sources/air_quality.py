@@ -1,98 +1,127 @@
-"""空气质量数据源 —— 中国环境监测总站（cnemc）。
+"""空气质量数据源 —— open-meteo Air Quality API（CAMS 模型再分析）。
 
-官方、免 key、实时。主力数据源。
-
-接口（2026-10-22 实测）
+接口（2026-10-24 实测）
 ----------------------
-============================================  ======  ==========================================
-地址                                            方法    说明
-============================================  ======  ==========================================
-``/CityData/GetAllCityRealTimeAQIModels``      GET     338 个城市的实时 AQI（含分级、首要污染物、经纬度）
-``/HourChangesPublish/GetCityRealTimeAqiHistory``  POST  城市逐小时历史（**空 body**，GET 会 404）
-============================================  ======  ==========================================
+``GET https://air-quality-api.open-meteo.com/v1/air-quality`` → 200 JSON::
 
-三个必须记住的坑
-----------------
-1. **历史接口是 POST**：用 GET 一律 404。
-2. **必须带 Referer**（``https://air.cnemc.cn:18007/``），否则可能被拒。
-3. **``TimePoint`` 有两种格式**：``"/Date(1792558800000)/"``（MS 时间戳）
-   与 ``"2026-10-22T11:00:00"``（不带时区的本地时间）——两种都要能解析。
+    {"latitude": 41.4, "longitude": 2.2000008,
+     "utc_offset_seconds": 7200, "timezone": "Europe/Madrid", "elevation": 47.0,
+     "current_units": {"time": "unixtime", "pm2_5": "μg/m³", ...},
+     "current": {"time": 1792803600, "interval": 3600,
+                 "pm10": 13.0, "pm2_5": 8.3, "ozone": 30.0,
+                 "nitrogen_dioxide": 33.6, "sulphur_dioxide": 2.9,
+                 "carbon_monoxide": 167.0, "us_aqi": 40, "european_aqi": 45},
+     "hourly": {"time": [1792706400, 1792710000, ...],
+                "pm2_5": [...], "ozone": [...], ...}}
 
-实时接口只给 AQI 与分级，**不给污染物浓度**；浓度要从逐小时历史里取。
-所以本模块分成三个独立的取数函数（``fetch_realtime`` / ``fetch_history`` /
-``fetch_daily_history``），聚合器把它们当三个源分别降级 ——
-逐小时历史挂了不应该把实时 AQI 一起拖下水。
+一个请求给出全部所需数据
+------------------------
+上游同时给 ``hourly`` 与 ``current``，所以本模块是**一个源**：
+7 个指标 + 2 条序列。取不到就整体降级（调用方把它当一个源注册）。
 
-逐日历史与逐小时历史**不是一回事**
---------------------------------
-逐日历史是**日维度**的：一天一条，值是**24 小时均值**（字段名都带 ``_24h``），
-O3 的口径是「8 小时最大值的日平均」（字段名 ``O3_8h_24h``）。
-它回答的是「这几天怎么样」；逐小时历史回答的是「今天怎么样」。
+自己算 AQI
+----------
+上游只给**污染物浓度**（μg/m³），不给国标口径的 AQI —— 换算在
+``city_data/aqi.py`` 里做（GB/T 3095-2012 的 IAQI 分段 + 线性内插）。
+本模块负责**口径**：把逐小时浓度聚合成国标要的平均值。
+
+- **指标**（截至当前小时）：PM2.5 / PM10 / O3 / NO2 / SO2 / CO 取**24 小时
+  滑动平均**；CO 的单位是 **mg/m³**（上游是 μg/m³，除以 1000）。
+- **AQI 指标**：PM2.5 / PM10 / NO2 / SO2 / CO 用 **24 小时滑动平均**，
+  O3 用 **8 小时滑动平均**（``aqi.AVERAGING_HOURS``）——
+  指标口径与 AQI 口径**可以不同**，前者是「当前浓度水平」，后者是国标口径。
+- **滑动平均**：窗口内**有值**的那些点的算术平均；一个值都没有就跳过
+  （该指标 ``value = None``，不参与 AQI 的最大值）。
+  窗口里的点太少时也算不出来（数据刚开头时平均值不稳，宁可不给数）——
+  点数下限是 ``min(MIN_WINDOW_POINTS, 窗口小时数)``：
+  24 小时窗口至少要 12 个点，8 小时的 O3 窗口要凑满 8 个点。
+- **逐日序列**：只取**完整的本地日**（一天 24 个小时都有数据），
+  不含今天的不完整日，也不含未来的预报日。
+  日 AQI 里 PM/NO2/SO2/CO 用当日 24 小时平均，O3 用**当日 8 小时滑动平均
+  的最大值**（国标的日 O3 口径）；``values`` 里各项污染物的日统计值
+  与该日 AQI 的输入**一致**（CO 换算成 mg/m³）。
+
+已知限制
+--------
+1. **这是 CAMS 模型再分析值（11 km 网格），不是站点实测**
+   → ``source.estimated = True``。
+2. 上游**没有 ``daily`` 段落** → 日聚合全部由本模块从 ``hourly`` 算出来。
+3. ``utc_offset_seconds`` 是**请求时刻的固定偏移**，整个响应里不变
+   （夏令时切换会被忽略）—— 用它分本地日与上游自己的日边界一致。
+4. 上游的 ``european_aqi`` / ``us_aqi`` 是按**瞬时值**算的官方指数，
+   与我们按**国标 24 小时滑动平均**换算出来的 AQI **不是同一个口径，
+   不能直接比大小** —— 响应里同时给出，但用途不同。
+5. 署名要求：同时署名 **CAMS ENSEMBLE 数据提供方** 与 **Open-Meteo**
+   （免费档的授权条件）—— 署名写在响应的 ``extra.attribution`` 里，
+   随数据一起发出去，不只写在文档里。
+6. 免费档仅限非商业用途。
 """
+from __future__ import annotations
+
 import math
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Sequence, Tuple
+from urllib.parse import urlencode
 
 from .. import http
+from ..aqi import AVERAGING_HOURS, aqi_from_pollutants, aqi_level
+from ..cities import City
 from ..http import SourceUnavailable
 from ..models import Metric, Series, SeriesPoint, SourceInfo, SourceResult
 
-BASE_URL = "https://air.cnemc.cn:18007"
-REALTIME_URL = BASE_URL + "/CityData/GetAllCityRealTimeAQIModels"
-HISTORY_URL = BASE_URL + "/HourChangesPublish/GetCityRealTimeAqiHistoryByCondition"
-# 逐日历史（14 天）。同样必须 POST + 空 body。
-DAILY_HISTORY_URL = BASE_URL + "/HourChangesPublish/GetCityDayAqiHistoryByCondition"
-
-# cnemc 要求带 Referer，否则可能被拒。
-HEADERS = {"Referer": BASE_URL + "/"}
-
-# 上游给的时间没有时区信息时，按北京时间理解（上游服务器就在北京）。
-CHINA_TZ = timezone(timedelta(hours=8))
+BASE_URL = "https://air-quality-api.open-meteo.com/v1/air-quality"
 
 # 源的名字（前端会直接显示在指标带上）。
-SOURCE_NAME = "中国环境监测总站"
-HISTORY_SOURCE_NAME = "中国环境监测总站（逐小时历史）"
-DAILY_SOURCE_NAME = "中国环境监测总站（逐日历史）"
+SOURCE_NAME = "Open-Meteo 空气质量（CAMS 模型再分析）"
 
-# 降级时占位指标的槽位：正常情况下这个源会提供哪几个指标。
-REALTIME_SLOTS = (("aqi", "空气质量", "AQI"),)
-HISTORY_SLOTS = (
-    ("pm25", "PM2.5", "μg/m³"),
-    ("pm10", "PM10", "μg/m³"),
-    ("o3", "O3", "μg/m³"),
-    ("no2", "NO2", "μg/m³"),
-    ("so2", "SO2", "μg/m³"),
-    ("co", "CO", "mg/m³"),
+# 上游变量名 → (指标 key, 中文名, 单位)。
+# CO 的单位是 mg/m³（上游给的是 μg/m³，换算在下面做）。
+POLLUTANTS: Tuple[Tuple[str, str, str, str], ...] = (
+    ("pm2_5", "pm25", "PM2.5", "μg/m³"),
+    ("pm10", "pm10", "PM10", "μg/m³"),
+    ("ozone", "o3", "O3", "μg/m³"),
+    ("nitrogen_dioxide", "no2", "NO2", "μg/m³"),
+    ("sulphur_dioxide", "so2", "SO2", "μg/m³"),
+    ("carbon_monoxide", "co", "CO", "mg/m³"),
 )
 
-# 逐小时历史里的污染物字段 → (指标 key, 中文名, 单位)。
-# CO 的单位是 mg/m³，其余是 μg/m³（cnemc 的口径）。
-POLLUTANTS = (
-    ("PM2_5", "pm25", "PM2.5", "μg/m³"),
-    ("PM10", "pm10", "PM10", "μg/m³"),
-    ("O3", "o3", "O3", "μg/m³"),
-    ("NO2", "no2", "NO2", "μg/m³"),
-    ("SO2", "so2", "SO2", "μg/m³"),
-    ("CO", "co", "CO", "mg/m³"),
-)
+# 降级时占位指标的槽位（顺序即响应里的顺序）。
+SLOTS: Tuple[Tuple[str, str, str], ...] = (
+    ("aqi", "空气质量", "AQI"),
+) + tuple((key, label, unit) for _var, key, label, unit in POLLUTANTS)
 
-# 逐日历史里的污染物字段 → (指标 key, 中文名, 单位)。
+# 上游 ``current`` 里额外要的两个官方指数。
+EXTRA_CURRENT_FIELDS = ("european_aqi", "us_aqi")
+
+# 窗口内至少要有多少个点才算得出平均值。数据刚开头时窗口不满，
+# 少于这个点数说明样本太少 —— 宁可给 None，也不给一个不稳的平均值。
 #
-# **字段名与逐小时的不一样**：逐日是 24 小时均值，所以都带 ``_24h`` 后缀；
-# O3 额外带 ``8h`` —— cnemc 的 O3 口径是「8 小时最大值的日平均」。
-# 指标 key 与逐小时**保持一致**（pm25 / pm10 / o3 / …），
-# 这样前端的污染物映射表不用分两套。
-DAILY_POLLUTANTS = (
-    ("PM2_5_24h", "pm25", "PM2.5", "μg/m³"),
-    ("PM10_24h", "pm10", "PM10", "μg/m³"),
-    ("O3_8h_24h", "o3", "O3", "μg/m³"),
-    ("NO2_24h", "no2", "NO2", "μg/m³"),
-    ("SO2_24h", "so2", "SO2", "μg/m³"),
-    ("CO_24h", "co", "CO", "mg/m³"),
-)
+# 这个下限是**按 24 小时窗口**定的（24 小时里至少 12 个点）。
+# 更短的窗口（O3 的 8 小时）按窗口长度取下限：``min(12, 窗口小时数)`` ——
+# 否则 8 小时的窗口永远凑不齐 12 个点，O3 会永远取不到值。
+MIN_WINDOW_POINTS = 12
+
+# 逐小时序列保留最近多少个小时（= 24 小时滑动窗口的长度）。
+HOURLY_POINTS = 24
+
+# 逐日序列保留最近多少个完整日。
+DAILY_POINTS = 7
+
+# CO：上游 μg/m³ → 指标口径 mg/m³。
+CO_SCALE = 0.001
+
+SECONDS_PER_HOUR = 3600
+SECONDS_PER_DAY = 86400
 
 # 观测时间与当前时间差超过这个秒数，就不再声称「实时」。
 REALTIME_MAX_AGE_SECONDS = 3600.0
+
+# 口径说明（写进响应的 extra，别让人把两种口径混着比）。
+AQI_BASIS = "GB/T 3095-2012 IAQI 分段换算（24 小时滑动平均，O3 取 8 小时）"
+DATA_KIND = "CAMS 模型再分析值（非站点实测）"
+
+# 上游要求的署名（免费档的授权条件）—— 随数据一起发出去，别只写在文档里。
+ATTRIBUTION = "CAMS ENSEMBLE 数据提供方 + Open-Meteo"
 
 
 def now_iso() -> str:
@@ -105,279 +134,352 @@ def to_iso(moment: datetime) -> str:
     return moment.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
-def parse_time_point(raw: Any) -> Optional[datetime]:
-    """解析上游的 ``TimePoint``，返回 UTC datetime。
+def build_url(city: City) -> str:
+    """按城市取数点拼出完整请求地址。
 
-    支持两种格式（实测两种都出现过）：
-
-    - ``"/Date(1792558800000)/"`` —— .NET 的 MS 时间戳；
-    - ``"2026-10-22T11:00:00"`` —— 不带时区的本地时间，按北京时间理解。
+    坐标与时区都来自城市表 —— **不写死**任何一座城市的坐标。
     """
-    if not isinstance(raw, str):
-        return None
-    text = raw.strip()
-    if not text:
-        return None
-
-    if text.startswith("/Date("):
-        inner = text[len("/Date("):].split(")")[0]
-        try:
-            millis = int(inner)
-        except ValueError:
-            return None
-        return datetime.fromtimestamp(millis / 1000.0, tz=timezone.utc)
-
-    try:
-        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=CHINA_TZ)
-    return parsed.astimezone(timezone.utc)
-
-
-def _to_int(raw: Any) -> Optional[int]:
-    """上游的数值字段一律是字符串；转成整数，转不了返回 None。"""
-    if raw is None or isinstance(raw, bool):
-        return None
-    try:
-        value = float(str(raw).strip())
-    except (TypeError, ValueError):
-        return None
-    if not math.isfinite(value):
-        return None
-    return int(value) if value.is_integer() else None
+    hourly_vars = ",".join(var for var, _key, _label, _unit in POLLUTANTS)
+    current_vars = ",".join(
+        [var for var, _key, _label, _unit in POLLUTANTS] + list(EXTRA_CURRENT_FIELDS)
+    )
+    query = urlencode(
+        {
+            "latitude": city.latitude,
+            "longitude": city.longitude,
+            "hourly": hourly_vars,
+            "current": current_vars,
+            "timezone": city.timezone,
+            "timeformat": "unixtime",
+            "past_days": 7,
+            "forecast_days": 1,
+        },
+        safe=",",
+    )
+    return BASE_URL + "?" + query
 
 
 def _to_float(raw: Any) -> Optional[float]:
-    """上游的数值字段 → 浮点数；转不了返回 None。"""
+    """上游数值 → 浮点数；不是有限数就当没有。"""
     if raw is None or isinstance(raw, bool):
         return None
     try:
-        value = float(str(raw).strip())
+        value = float(raw)
     except (TypeError, ValueError):
         return None
     return value if math.isfinite(value) else None
 
 
-def _is_recent(observed_at: Optional[datetime], now: datetime) -> bool:
-    """观测时间离现在不到一小时才算「实时」。"""
-    if observed_at is None:
-        return False
-    age = (now - observed_at).total_seconds()
-    return 0 <= age <= REALTIME_MAX_AGE_SECONDS
+def _epoch_seconds(raw: Any) -> Optional[int]:
+    """Unix epoch 秒 → int；不是数字就当没有。"""
+    value = _to_float(raw)
+    return None if value is None else int(value)
 
 
-def find_city(payload: Any, city_code: int) -> Optional[Dict[str, Any]]:
-    """在实时城市列表里找出目标城市。找不到返回 None。"""
-    if not isinstance(payload, list):
-        return None
-    for item in payload:
-        if not isinstance(item, dict):
+def parse_payload(payload: Any) -> Dict[str, Any]:
+    """把上游响应整理成内部结构。
+
+    返回：``{"records": [...], "offset": int, "timezone": str|None, "current": dict}``。
+    每个 record 是 ``{"epoch": int, "values": {指标 key: 数值|None}}``，
+    按时间**升序**。
+
+    逐小时数据整体缺失时抛 :class:`SourceUnavailable` ——
+    没有它就什么都算不出来。
+    """
+    if not isinstance(payload, dict):
+        raise SourceUnavailable("空气质量响应不是 JSON 对象")
+
+    hourly = payload.get("hourly")
+    if not isinstance(hourly, dict):
+        raise SourceUnavailable("空气质量响应缺少 hourly")
+    times = hourly.get("time")
+    if not isinstance(times, list) or not times:
+        raise SourceUnavailable("空气质量响应缺少逐小时时间轴")
+
+    columns: Dict[str, Any] = {}
+    for var, _key, _label, _unit in POLLUTANTS:
+        columns[var] = hourly.get(var)
+
+    records: List[Dict[str, Any]] = []
+    for index, raw_time in enumerate(times):
+        epoch = _epoch_seconds(raw_time)
+        if epoch is None:
             continue
-        if _to_int(item.get("CityCode")) == city_code:
-            return item
-    return None
+        values: Dict[str, Optional[float]] = {}
+        for var, key, _label, _unit in POLLUTANTS:
+            column = columns.get(var)
+            if isinstance(column, list) and index < len(column):
+                values[key] = _to_float(column[index])
+            else:
+                values[key] = None
+        records.append({"epoch": epoch, "values": values})
+
+    records.sort(key=lambda record: record["epoch"])
+    if not records:
+        raise SourceUnavailable("空气质量响应没有可用的逐小时数据点")
+
+    current = payload.get("current")
+    return {
+        "records": records,
+        "offset": int(_to_float(payload.get("utc_offset_seconds")) or 0),
+        "timezone": payload.get("timezone"),
+        "current": current if isinstance(current, dict) else {},
+    }
 
 
-def fetch_realtime(city_code: int, timeout: float = http.DEFAULT_TIMEOUT_SECONDS) -> SourceResult:
-    """取某个城市的实时 AQI。
+def _current_index(records: Sequence[Dict[str, Any]], now_epoch: int) -> int:
+    """「当前小时」的下标 —— 最后一个**不晚于**当前时刻的点。
+
+    未来时刻的预报点不算 —— 那是预报，不是已经发生的事。
+    """
+    index = -1
+    for position, record in enumerate(records):
+        if record["epoch"] <= now_epoch:
+            index = position
+        else:
+            break
+    if index < 0:
+        raise SourceUnavailable("逐小时数据里没有不晚于当前时刻的点")
+    return index
+
+
+def _window_average(
+    records: Sequence[Dict[str, Any]],
+    index: int,
+    key: str,
+    hours: int,
+) -> Optional[float]:
+    """截至 ``records[index]`` 的 ``hours`` 小时滑动平均。
+
+    窗口是**时间窗口**（``[end - (hours-1) 小时, end]``），窗口内有值的点
+    取算术平均；点太少（数据刚开头）或一个值都没有就返回 ``None``。
+    """
+    end = records[index]["epoch"]
+    lower = end - (hours - 1) * SECONDS_PER_HOUR
+    values: List[float] = []
+    for record in records[: index + 1]:
+        if record["epoch"] < lower:
+            continue
+        value = record["values"].get(key)
+        if value is not None:
+            values.append(value)
+    if len(values) < min(MIN_WINDOW_POINTS, hours):
+        return None
+    return sum(values) / len(values)
+
+
+def _aqi_at(records: Sequence[Dict[str, Any]], index: int) -> Optional[int]:
+    """某个小时上的国标 AQI。
+
+    各污染物的平均窗口按 ``aqi.AVERAGING_HOURS`` 走（O3 是 8 小时，
+    其余 24 小时）—— 换算本身交给 ``aqi.aqi_from_pollutants``。
+    """
+    concentrations: Dict[str, Optional[float]] = {}
+    for _var, key, _label, _unit in POLLUTANTS:
+        concentrations[key] = _window_average(records, index, key, AVERAGING_HOURS[key])
+    return aqi_from_pollutants(concentrations)
+
+
+def _daily_mean(values: Sequence[Optional[float]]) -> Optional[float]:
+    """一组逐小时值的日平均；点太少就当没有。"""
+    present = [value for value in values if value is not None]
+    if len(present) < MIN_WINDOW_POINTS:
+        return None
+    return sum(present) / len(present)
+
+
+def _group_by_local_day(
+    records: Sequence[Dict[str, Any]],
+    offset: int,
+) -> Dict[int, List[int]]:
+    """按本地日分组（返回每个本地日对应的记录下标列表）。
+
+    本地日编号 = ``(epoch + utc_offset_seconds) // 86400`` —— 与上游自己的
+    日边界一致（上游给的偏移在响应里是固定的）。
+    """
+    groups: Dict[int, List[int]] = {}
+    for index, record in enumerate(records):
+        day = (record["epoch"] + offset) // SECONDS_PER_DAY
+        groups.setdefault(day, []).append(index)
+    return groups
+
+
+def _daily_point(
+    records: Sequence[Dict[str, Any]],
+    day_indexes: Sequence[int],
+) -> Tuple[Optional[int], Dict[str, Optional[float]]]:
+    """一个完整本地日 → ``(日 AQI, 各污染物的日统计值)``。
+
+    PM/NO2/SO2/CO 用当日 24 小时平均；O3 用当日 8 小时滑动平均的最大值
+    （窗口允许跨过日界 —— 国标的「日最大 8 小时滑动平均」就是这样）。
+    """
+    means: Dict[str, Optional[float]] = {}
+    for _var, key, _label, _unit in POLLUTANTS:
+        if key == "o3":
+            continue
+        means[key] = _daily_mean([records[i]["values"].get(key) for i in day_indexes])
+
+    o3_max: Optional[float] = None
+    for index in day_indexes:
+        average = _window_average(records, index, "o3", AVERAGING_HOURS["o3"])
+        if average is None:
+            continue
+        if o3_max is None or average > o3_max:
+            o3_max = average
+    means["o3"] = o3_max
+
+    # AQI 的输入与上面的日统计值一致（CO 传上游单位 μg/m³）。
+    aqi = aqi_from_pollutants({key: means.get(key) for key in means})
+
+    # 对外的日统计值：键与指标 key 一致，CO 换算成 mg/m³。
+    values: Dict[str, Optional[float]] = {
+        key: means.get(key) for key in ("pm25", "pm10", "o3", "no2", "so2")
+    }
+    values["co"] = None if means.get("co") is None else means["co"] * CO_SCALE
+    return aqi, values
+
+
+def fetch(city: City, timeout: float = http.DEFAULT_TIMEOUT_SECONDS) -> SourceResult:
+    """取某个城市的空气质量（7 个指标 + 2 条序列）。
 
     取不到就抛 :class:`SourceUnavailable`（调用方把它算作降级）。
     """
     fetched_at = now_iso()
-    payload = http.request_json(REALTIME_URL, headers=HEADERS, timeout=timeout)
-    city = find_city(payload, city_code)
-    if city is None:
-        raise SourceUnavailable("上游实时列表里没有城市代码 %s" % city_code)
-
-    observed = parse_time_point(city.get("TimePoint"))
+    url = build_url(city)
+    payload = http.request_json(url, timeout=timeout)
     now = datetime.now(tz=timezone.utc)
+    now_epoch = int(now.timestamp())
+
+    parsed = parse_payload(payload)
+    records: List[Dict[str, Any]] = parsed["records"]
+    index = _current_index(records, now_epoch)
+    current = parsed["current"]
+
+    observed_at = datetime.fromtimestamp(records[index]["epoch"], tz=timezone.utc)
+    age = (now - observed_at).total_seconds()
     source = SourceInfo(
         name=SOURCE_NAME,
-        url=REALTIME_URL,
-        observed_at=to_iso(observed) if observed else None,
-        fetched_at=fetched_at,
-        realtime=_is_recent(observed, now),
-        estimated=False,
-    )
-
-    aqi = _to_int(city.get("AQI"))
-    level = _to_int(city.get("AqiLevel"))
-    quality = city.get("Quality") if isinstance(city.get("Quality"), str) else None
-    pollutant = city.get("PrimaryPollutant") if isinstance(city.get("PrimaryPollutant"), str) else None
-    measure = city.get("Measure") if isinstance(city.get("Measure"), str) else None
-
-    metric = Metric(
-        key="aqi",
-        label="空气质量",
-        value=aqi,
-        unit="AQI",
-        level=level,
-        level_label=quality,
-        extra={
-            "quality": quality,
-            "primary_pollutant": pollutant,
-            "health_advice": measure,
-            "area": city.get("Area"),
-        },
-        source=source,
-    )
-
-    city_info = {
-        "code": city_code,
-        "name": city.get("Area"),
-        "latitude": _to_float(city.get("Latitude")),
-        "longitude": _to_float(city.get("Longitude")),
-    }
-    return SourceResult(metrics=[metric], series=[], city=city_info)
-
-
-def parse_history(payload: Any) -> List[Dict[str, Any]]:
-    """把逐小时历史解析成按时间升序的列表。
-
-    每个元素：``{"t": ISO 时间, "aqi": float|None, "PM2_5": float|None, ...}``。
-    """
-    if not isinstance(payload, list):
-        return []
-    rows: List[Dict[str, Any]] = []
-    for item in payload:
-        if not isinstance(item, dict):
-            continue
-        moment = parse_time_point(item.get("TimePoint"))
-        if moment is None:
-            continue
-        row: Dict[str, Any] = {"t": to_iso(moment), "aqi": _to_float(item.get("AQI"))}
-        for field_name, key, _label, _unit in POLLUTANTS:
-            row[key] = _to_float(item.get(field_name))
-        rows.append(row)
-    rows.sort(key=lambda row: row["t"])
-    return rows
-
-
-def fetch_history(city_code: int, timeout: float = http.DEFAULT_TIMEOUT_SECONDS) -> SourceResult:
-    """取某个城市的逐小时历史（污染物浓度 + 24 小时 AQI 序列）。
-
-    注意历史接口**必须用 POST 且 body 为空对象**（``{}``）——用 GET 会 404。
-    """
-    fetched_at = now_iso()
-    url = HISTORY_URL + "?citycode=%s" % city_code
-    payload = http.request_json(
-        url,
-        method="POST",
-        headers=dict(HEADERS, **{"Content-Type": "application/json;charset=UTF-8"}),
-        data=b"{}",
-        timeout=timeout,
-    )
-    rows = parse_history(payload)
-    if not rows:
-        raise SourceUnavailable("逐小时历史没有可用数据点")
-
-    latest = rows[-1]
-    observed = parse_time_point(latest["t"])
-    now = datetime.now(tz=timezone.utc)
-    source = SourceInfo(
-        name=HISTORY_SOURCE_NAME,
         url=url,
-        observed_at=latest["t"],
+        observed_at=to_iso(observed_at),
         fetched_at=fetched_at,
-        realtime=_is_recent(observed, now),
-        estimated=False,
+        realtime=0 <= age <= REALTIME_MAX_AGE_SECONDS,
+        # CAMS 是模型再分析值，不是站点实测。
+        estimated=True,
     )
 
-    metrics: List[Metric] = []
-    for _field_name, key, label, unit in POLLUTANTS:
+    # ---- 指标 ---------------------------------------------------------
+    # 指标口径：全部 24 小时滑动平均（CO 换算成 mg/m³）。
+    averages: Dict[str, Optional[float]] = {}
+    for _var, key, _label, _unit in POLLUTANTS:
+        averages[key] = _window_average(records, index, key, 24)
+
+    aqi_value = _aqi_at(records, index)
+    level = aqi_level(aqi_value)
+
+    aqi_extra: Dict[str, Any] = {
+        "aqi_basis": AQI_BASIS,
+        "data_kind": DATA_KIND,
+        "attribution": ATTRIBUTION,
+        "observed_hour": to_iso(observed_at),
+    }
+    for field_name in EXTRA_CURRENT_FIELDS:
+        value = _to_float(current.get(field_name))
+        if value is not None:
+            aqi_extra[field_name] = value
+    if parsed["timezone"] is not None:
+        aqi_extra["timezone"] = parsed["timezone"]
+    aqi_extra["utc_offset_seconds"] = parsed["offset"]
+
+    metrics = [
+        Metric(
+            key="aqi",
+            label="空气质量",
+            value=aqi_value,
+            unit="AQI",
+            level=level[0] if level else None,
+            level_label=level[1] if level else None,
+            extra=aqi_extra,
+            source=source,
+        )
+    ]
+    for _var, key, label, unit in POLLUTANTS:
+        value = averages.get(key)
+        if key == "co" and value is not None:
+            value = value * CO_SCALE
         metrics.append(
             Metric(
                 key=key,
                 label=label,
-                value=latest.get(key),
+                value=value,
                 unit=unit,
-                extra={"observed_hour": latest["t"]},
+                extra={
+                    "basis": "24 小时滑动平均",
+                    "data_kind": DATA_KIND,
+                    "attribution": ATTRIBUTION,
+                    "observed_hour": to_iso(observed_at),
+                    "utc_offset_seconds": parsed["offset"],
+                },
                 source=source,
             )
         )
 
-    series = Series(
+    # ---- 序列 ---------------------------------------------------------
+    # 逐小时：最近 24 个小时，每点的 AQI 以该小时结尾的滑动窗口算出。
+    first = max(0, index - HOURLY_POINTS + 1)
+    hourly_points = [
+        SeriesPoint(
+            t=to_iso(datetime.fromtimestamp(records[position]["epoch"], tz=timezone.utc)),
+            v=_aqi_at(records, position),
+        )
+        for position in range(first, index + 1)
+    ]
+    hourly_series = Series(
         key="aqi_24h",
         label="24 小时 AQI",
         unit="AQI",
-        points=[SeriesPoint(t=row["t"], v=row["aqi"]) for row in rows],
+        points=hourly_points,
         source=source,
     )
-    return SourceResult(metrics=metrics, series=[series])
 
+    # 逐日：只取**完整的本地日**（24 个小时都有数据），不含今天与未来。
+    groups = _group_by_local_day(records, parsed["offset"])
+    today = (now_epoch + parsed["offset"]) // SECONDS_PER_DAY
+    complete_days = [
+        day
+        for day in sorted(groups)
+        if day < today and len(groups[day]) == 24
+    ][-DAILY_POINTS:]
 
-def parse_daily_history(payload: Any) -> List[Dict[str, Any]]:
-    """把逐日历史解析成按时间升序的列表。
-
-    每个元素：``{"t": ISO 时间, "aqi": float|None, "pm25": float|None, ...}``。
-
-    与逐小时历史的区别：这里的值是**日均值**（上游字段都带 ``_24h``）。
-    """
-    if not isinstance(payload, list):
-        return []
-    rows: List[Dict[str, Any]] = []
-    for item in payload:
-        if not isinstance(item, dict):
+    daily_points: List[SeriesPoint] = []
+    for day in complete_days:
+        day_indexes = groups[day]
+        day_aqi, day_values = _daily_point(records, day_indexes)
+        if all(value is None for value in day_values.values()):
+            # 一项都算不出来 → 不产出这个键（序列点序列化时会省略 values）。
+            daily_points.append(
+                SeriesPoint(
+                    t=to_iso(
+                        datetime.fromtimestamp(records[day_indexes[0]]["epoch"], tz=timezone.utc)
+                    ),
+                    v=day_aqi,
+                )
+            )
             continue
-        moment = parse_time_point(item.get("TimePoint"))
-        if moment is None:
-            continue
-        row: Dict[str, Any] = {"t": to_iso(moment), "aqi": _to_float(item.get("AQI"))}
-        for field_name, key, _label, _unit in DAILY_POLLUTANTS:
-            row[key] = _to_float(item.get(field_name))
-        rows.append(row)
-    rows.sort(key=lambda row: row["t"])
-    return rows
-
-
-def fetch_daily_history(city_code: int, timeout: float = http.DEFAULT_TIMEOUT_SECONDS) -> SourceResult:
-    """取某个城市的**逐日**历史（最近 14 天：AQI 日均 + 各项污染物日均）。
-
-    与逐小时历史一样：**必须用 POST 且 body 为空对象**（``{}``）——用 GET 会 404。
-
-    这一条只产出**序列**，不产出指标：指标带已经由逐小时历史提供了，
-    重复放一份日均值只会让大屏上出现两个含义不同的「PM2.5」。
-    """
-    fetched_at = now_iso()
-    url = DAILY_HISTORY_URL + "?citycode=%s" % city_code
-    payload = http.request_json(
-        url,
-        method="POST",
-        headers=dict(HEADERS, **{"Content-Type": "application/json;charset=UTF-8"}),
-        data=b"{}",
-        timeout=timeout,
-    )
-    rows = parse_daily_history(payload)
-    if not rows:
-        raise SourceUnavailable("逐日历史没有可用数据点")
-
-    latest = rows[-1]
-    source = SourceInfo(
-        name=DAILY_SOURCE_NAME,
-        url=url,
-        observed_at=latest["t"],
-        fetched_at=fetched_at,
-        # 逐日数据按定义就不是实时的（最旧的一条是 14 天前）。
-        realtime=False,
-        estimated=False,
-    )
-
-    series = Series(
+        daily_points.append(
+            SeriesPoint(
+                t=to_iso(
+                    datetime.fromtimestamp(records[day_indexes[0]]["epoch"], tz=timezone.utc)
+                ),
+                v=day_aqi,
+                values=day_values,
+            )
+        )
+    daily_series = Series(
         key="aqi_daily",
         label="逐日 AQI",
         unit="AQI",
-        points=[
-            SeriesPoint(
-                t=row["t"],
-                # AQI 放在 v 里 —— 折线图组件不用改就能画。
-                v=row["aqi"],
-                # 各项污染物的日均值放在 values 里（键与指标 key 一致）。
-                values={key: row[key] for _f, key, _l, _u in DAILY_POLLUTANTS},
-            )
-            for row in rows
-        ],
+        points=daily_points,
         source=source,
     )
-    return SourceResult(metrics=[], series=[series])
+
+    return SourceResult(metrics=metrics, series=[hourly_series, daily_series])

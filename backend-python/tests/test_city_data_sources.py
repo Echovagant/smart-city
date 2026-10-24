@@ -1,31 +1,141 @@
-"""城市数据层：各数据源的单元测试。
+"""两个远程数据源的单元测试：open-meteo 天气 + 空气质量（CAMS 模型再分析）。
 
-**这些测试一律不打真实网络。**
-上游响应全部是写死的假数据（CI 上没有外网，而且真实网络会让测试变慢又flaky）。
+**这些测试一律不打真实网络**：上游响应是构造出来的假数据
+（``city_data.http.request_json`` 被替换掉），CI 上没有外网也能跑。
 
-覆盖的解析坑（都是实测踩出来的）：
-- ``TimePoint`` 的两种格式（``/Date(...)/`` 与不带时区的 ISO）；
-- AQI 是字符串，必须转数字；
-- 天气的时间戳只有 ``HH:MM``，日期要推断，且可能不新鲜；
-- 路网长度要自己算（等距圆柱近似）。
+覆盖的坑：
+- 上游的时间是 **Unix epoch 秒**（请求带 ``timeformat=unixtime``），
+  不是 ISO 字符串；
+- 空气质量**没有** ``daily`` 段落，日聚合要从 ``hourly`` 自己算；
+- CO 的对外单位是 **mg/m³**（上游是 μg/m³）；
+- 窗口内数据不足时，指标是 ``None``，**不是 0**；
+- 两个源都是**模式数据** → ``source.estimated`` 必须是 ``True``。
 """
-import json
-import math
+import time
 import urllib.error
-import urllib.request
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 import pytest
 
-from city_data import city_codes, http
+from city_data import http
+from city_data.cities import CITIES, City
 from city_data.http import SourceUnavailable
-from city_data.sources import air_quality, road_network, weather
+from city_data.sources import air_quality, weather
 
-CHINA_TZ = timezone(timedelta(hours=8))
+# 上游给的固定时区偏移（Europe/Madrid 的夏季偏移）。构造假数据时用它
+# 对齐本地日边界 —— 响应里的 ``utc_offset_seconds`` 决定「哪一天」。
+UTC_OFFSET = 7200
+
+# 与上游一致的规模：``past_days=7`` + ``forecast_days=1``
+# → 8 个本地日 × 24 小时 = 192 个点（含今天的不完整日与未来预报日）。
+TOTAL_POINTS = 192
+PAST_DAYS = 7
+
+# 上游的污染物变量名。
+UPSTREAM_VARS = (
+    "pm2_5",
+    "pm10",
+    "ozone",
+    "nitrogen_dioxide",
+    "sulphur_dioxide",
+    "carbon_monoxide",
+)
+
+# 一组「每项都落在分段点上」的常数浓度：算出来的 AQI 是 75（良）。
+CONSTANT_CONCENTRATIONS = {
+    "pm2_5": 55.0,
+    "pm10": 50.0,
+    "ozone": 100.0,
+    "nitrogen_dioxide": 40.0,
+    "sulphur_dioxide": 50.0,
+    "carbon_monoxide": 2000.0,
+}
+
+
+def _now_epoch() -> int:
+    return int(time.time())
+
+
+def _local_midnight(now_epoch: int, offset: int = UTC_OFFSET) -> int:
+    """当前本地日的 00:00（epoch 秒）。"""
+    return ((now_epoch + offset) // 86400) * 86400 - offset
+
+
+def _make_air_payload(
+    concentrations,
+    now_epoch=None,
+    *,
+    offset=UTC_OFFSET,
+    start_epoch=None,
+    total_points=TOTAL_POINTS,
+    with_current=True,
+):
+    """造一份空气质量的响应。
+
+    ``concentrations`` 的键是上游变量名；值可以是常数、列表，
+    或 ``f(index) -> 值`` 的可调用对象（用来造浓度随时间变化的序列）。
+    """
+    now_epoch = _now_epoch() if now_epoch is None else now_epoch
+    if start_epoch is None:
+        start_epoch = _local_midnight(now_epoch, offset) - PAST_DAYS * 86400
+    times = [start_epoch + index * 3600 for index in range(total_points)]
+
+    hourly = {"time": list(times)}
+    for var in UPSTREAM_VARS:
+        source = concentrations.get(var)
+        column = []
+        for index in range(total_points):
+            if source is None:
+                column.append(None)
+            elif callable(source):
+                column.append(source(index))
+            elif isinstance(source, list):
+                column.append(source[index] if index < len(source) else None)
+            else:
+                column.append(source)
+        hourly[var] = column
+
+    payload = {
+        "latitude": 41.4,
+        "longitude": 2.2,
+        "utc_offset_seconds": offset,
+        "timezone": "Europe/Madrid",
+        "elevation": 47.0,
+        "hourly": hourly,
+    }
+    if with_current:
+        usable = [value for value in times if value <= now_epoch]
+        payload["current"] = {
+            "time": max(usable) if usable else times[-1],
+            "interval": 3600,
+            "pm2_5": 7.6,
+            "pm10": 11.3,
+            "ozone": 33.0,
+            "nitrogen_dioxide": 25.1,
+            "sulphur_dioxide": 2.2,
+            "carbon_monoxide": 163.0,
+            "us_aqi": 40,
+            "european_aqi": 40,
+        }
+    return payload
+
+
+def _current_hour_index(now_epoch: int, offset: int = UTC_OFFSET) -> int:
+    """当前小时在 hourly 数组里的下标。"""
+    start = _local_midnight(now_epoch, offset) - PAST_DAYS * 86400
+    return (now_epoch - start) // 3600
+
+
+def _by_key(result):
+    return {metric.key: metric for metric in result.metrics}
+
+
+def _series_by_key(result):
+    return {series.key: series for series in result.series}
 
 
 # ---------------------------------------------------------------------------
-# HTTP 封装
+# HTTP 封装（两个源都靠它把网络异常收敛成一种异常）
 # ---------------------------------------------------------------------------
 
 
@@ -63,15 +173,6 @@ class TestHttp:
         )
         assert http.request_json("https://example.invalid/x") == {"a": 1}
 
-    def test_decodes_utf8_when_charset_is_missing(self, monkeypatch):
-        # 中国天气网返回的是 text/html（没有 charset）——必须按 UTF-8 解，
-        # 否则中文全是乱码。
-        payload = '{"city": "北京"}'.encode("utf-8")
-        monkeypatch.setattr(
-            http.urllib.request, "urlopen", lambda *a, **k: _FakeResponse(payload)
-        )
-        assert http.request_json("https://example.invalid/x") == {"city": "北京"}
-
     def test_http_error_becomes_source_unavailable(self, monkeypatch):
         def boom(*args, **kwargs):
             raise urllib.error.HTTPError("u", 404, "Not Found", {}, None)
@@ -89,7 +190,6 @@ class TestHttp:
             http.request_json("https://example.invalid/x")
 
     def test_non_json_body_becomes_source_unavailable(self, monkeypatch):
-        # 上游对不存在的 cityid 返回的是 HTML 错误页
         monkeypatch.setattr(
             http.urllib.request,
             "urlopen",
@@ -98,488 +198,414 @@ class TestHttp:
         with pytest.raises(SourceUnavailable):
             http.request_json("https://example.invalid/x")
 
-    def test_sends_user_agent(self, monkeypatch):
-        seen = {}
 
-        def fake(request, timeout=None):
-            seen["agent"] = request.get_header("User-agent")
-            seen["timeout"] = timeout
-            return _FakeResponse(b"{}")
+# ---------------------------------------------------------------------------
+# 天气
+# ---------------------------------------------------------------------------
 
-        monkeypatch.setattr(http.urllib.request, "urlopen", fake)
-        http.request_json("https://example.invalid/x", timeout=3.5)
-        assert "smart-city" in seen["agent"]
-        assert seen["timeout"] == 3.5
+
+def _weather_payload(now_epoch, age_seconds=1800):
+    """造一份天气预报响应（``current`` 里的时间是 epoch 秒）。"""
+    observed = now_epoch - age_seconds
+    return {
+        "latitude": 41.43923,
+        "longitude": 2.168546,
+        "utc_offset_seconds": UTC_OFFSET,
+        "timezone": "Europe/Madrid",
+        "elevation": 47.0,
+        "current_units": {"time": "unixtime", "temperature_2m": "°C"},
+        "current": {
+            "time": observed,
+            "interval": 900,
+            "temperature_2m": 15.8,
+            "relative_humidity_2m": 86,
+            "apparent_temperature": 16.0,
+            "weather_code": 80,
+            "wind_speed_10m": 6.2,
+            "precipitation": 0.10,
+        },
+    }
+
+
+class TestWeatherUrl:
+    def test_url_uses_the_city_coordinates_and_timezone(self):
+        city = City(id="other", name="别处", latitude=12.5, longitude=-3.25, timezone="UTC")
+        url = weather.build_url(city)
+        assert "latitude=12.5" in url
+        assert "longitude=-3.25" in url
+        assert "timezone=UTC" in url
+        # 不能把某一座城市的坐标写死。
+        assert "41.395" not in url
+        assert "2.165" not in url
+
+    def test_url_asks_for_unixtime_and_the_current_block(self):
+        url = weather.build_url(CITIES["barcelona"])
+        assert url.startswith("https://api.open-meteo.com/v1/forecast?")
+        assert "timeformat=unixtime" in url
+        assert "current=temperature_2m" in url
+        assert "timezone=Europe%2FMadrid" in url
+
+
+class TestWeatherParse:
+    def test_parse_current_reads_the_numbers(self):
+        now = datetime(2026, 10, 24, 2, 0, tzinfo=timezone.utc)
+        payload = _weather_payload(int(now.timestamp()), age_seconds=1800)
+        parsed = weather.parse_current(payload, now)
+        assert parsed["temperature"] == 15.8
+        assert parsed["humidity"] == 86.0
+        assert parsed["apparent_temperature"] == 16.0
+        assert parsed["wind_speed_10m"] == 6.2
+        assert parsed["precipitation"] == 0.10
+        assert parsed["weather_code"] == 80
+        assert parsed["realtime"] is True
+        assert parsed["utc_offset_seconds"] == UTC_OFFSET
+
+    def test_parse_current_rejects_a_missing_block(self):
+        now = datetime(2026, 10, 24, 2, 0, tzinfo=timezone.utc)
+        with pytest.raises(SourceUnavailable):
+            weather.parse_current({"current": None}, now)
+        with pytest.raises(SourceUnavailable):
+            weather.parse_current({"current": {}}, now)
+        with pytest.raises(SourceUnavailable):
+            weather.parse_current("not a dict", now)
+
+    def test_parse_current_rejects_non_numeric_fields(self):
+        now = datetime(2026, 10, 24, 2, 0, tzinfo=timezone.utc)
+        payload = _weather_payload(int(now.timestamp()))
+        payload["current"]["temperature_2m"] = "很冷"
+        with pytest.raises(SourceUnavailable):
+            weather.parse_current(payload, now)
+
+        payload = _weather_payload(int(now.timestamp()))
+        payload["current"]["relative_humidity_2m"] = None
+        with pytest.raises(SourceUnavailable):
+            weather.parse_current(payload, now)
+
+        payload = _weather_payload(int(now.timestamp()))
+        payload["current"]["time"] = "2026-10-24T02:00:00"
+        with pytest.raises(SourceUnavailable):
+            weather.parse_current(payload, now)
+
+
+class TestWeatherFetch:
+    def test_fetch_produces_two_metrics_with_a_source(self, monkeypatch):
+        now_epoch = _now_epoch()
+        payload = _weather_payload(now_epoch)
+        calls = []
+
+        def fake_request(url, **kwargs):
+            calls.append(url)
+            return payload
+
+        monkeypatch.setattr(weather.http, "request_json", fake_request)
+
+        result = weather.fetch(CITIES["barcelona"])
+
+        assert [metric.key for metric in result.metrics] == [
+            "weather_temp",
+            "weather_humidity",
+        ]
+        temp = result.metrics[0]
+        assert temp.value == 15.8
+        assert temp.unit == "℃"
+        assert result.metrics[1].value == 86.0
+        assert result.metrics[1].unit == "%"
+
+        # 来源标注：数值模式预报 → 必须标 estimated。
+        source = temp.source
+        assert source.name == weather.SOURCE_NAME
+        assert source.estimated is True
+        assert source.url == weather.build_url(CITIES["barcelona"])
+        assert calls == [source.url]
+        assert source.fetched_at.endswith("Z")
+        # observed_at 是上游数据自身的时间，不是取数时间。
+        expected = datetime.fromtimestamp(payload["current"]["time"], tz=timezone.utc)
+        assert source.observed_at == expected.isoformat(timespec="seconds").replace("+00:00", "Z")
+        assert source.observed_at != source.fetched_at
+        assert source.realtime is True
+
+    def test_extra_carries_the_upstream_fields(self, monkeypatch):
+        payload = _weather_payload(_now_epoch())
+        monkeypatch.setattr(weather.http, "request_json", lambda url, **kwargs: payload)
+
+        result = weather.fetch(CITIES["barcelona"])
+        extra = result.metrics[0].extra
+
+        assert extra["apparent_temperature"] == 16.0
+        assert extra["wind_speed_10m"] == 6.2
+        assert extra["precipitation"] == 0.10
+        assert extra["weather_code"] == 80
+        assert extra["timezone"] == "Europe/Madrid"
+        assert extra["utc_offset_seconds"] == UTC_OFFSET
+        # 上游的署名要求随数据一起发出去。
+        assert extra["attribution"] == weather.ATTRIBUTION
+        # 两个指标共用一份 extra。
+        assert result.metrics[1].extra == extra
+
+    def test_missing_upstream_field_is_not_invented(self, monkeypatch):
+        payload = _weather_payload(_now_epoch())
+        payload["current"]["precipitation"] = None
+        monkeypatch.setattr(weather.http, "request_json", lambda url, **kwargs: payload)
+
+        result = weather.fetch(CITIES["barcelona"])
+        assert "precipitation" not in result.metrics[0].extra
+
+    def test_stale_observation_is_not_realtime(self, monkeypatch):
+        now_epoch = _now_epoch()
+        payload = _weather_payload(now_epoch, age_seconds=7200)
+        monkeypatch.setattr(weather.http, "request_json", lambda url, **kwargs: payload)
+
+        result = weather.fetch(CITIES["barcelona"])
+        assert result.metrics[0].source.realtime is False
+
+    def test_upstream_failure_propagates_as_unavailable(self, monkeypatch):
+        def boom(url, **kwargs):
+            raise SourceUnavailable("测试：上游不可用")
+
+        monkeypatch.setattr(weather.http, "request_json", boom)
+        with pytest.raises(SourceUnavailable):
+            weather.fetch(CITIES["barcelona"])
+
+    def test_broken_payload_is_unavailable(self, monkeypatch):
+        monkeypatch.setattr(weather.http, "request_json", lambda url, **kwargs: {"nope": 1})
+        with pytest.raises(SourceUnavailable):
+            weather.fetch(CITIES["barcelona"])
 
 
 # ---------------------------------------------------------------------------
 # 空气质量
 # ---------------------------------------------------------------------------
 
-REALTIME_PAYLOAD = [
-    {
-        "TimePoint": "2026-10-22T12:00:00",
-        "AQI": "51",
-        "AqiLevel": 2,
-        "PrimaryPollutant": "颗粒物(PM10)",
-        "Quality": "良",
-        "Measure": "极少数异常敏感人群应减少户外活动",
-        "Area": "北京市",
-        "CityCode": 110000,
-        "Latitude": "40.059588086956521739130434783",
-        "Longitude": "116.40260991304347826086956522",
-    }
-]
 
-HISTORY_PAYLOAD = [
-    {
-        "TimePoint": "/Date(1792558800000)/",
-        "TimePointStr": "21日13时",
-        "AQI": "16",
-        "CO": "0.3",
-        "NO2": "5",
-        "O3": "51",
-        "PM10": "9",
-        "PM2_5": "3",
-        "SO2": "3",
-        "Quality": "优",
-    },
-    {
-        "TimePoint": "/Date(1792641600000)/",
-        "TimePointStr": "22日12时",
-        "AQI": "60",
-        "CO": "0.5",
-        "NO2": "30",
-        "O3": "44",
-        "PM10": "64",
-        "PM2_5": "32",
-        "SO2": "4",
-        "Quality": "良",
-    },
-]
+class TestAirQualityUrl:
+    def test_url_uses_the_city_coordinates_and_timezone(self):
+        city = City(id="other", name="别处", latitude=12.5, longitude=-3.25, timezone="UTC")
+        url = air_quality.build_url(city)
+        assert "latitude=12.5" in url
+        assert "longitude=-3.25" in url
+        assert "timezone=UTC" in url
+        assert "41.395" not in url
+        assert "2.165" not in url
+
+    def test_url_asks_for_hourly_current_and_unixtime(self):
+        url = air_quality.build_url(CITIES["barcelona"])
+        assert url.startswith("https://air-quality-api.open-meteo.com/v1/air-quality?")
+        assert "timeformat=unixtime" in url
+        assert "hourly=pm2_5,pm10,ozone" in url
+        assert "european_aqi" in url
+        assert "past_days=7" in url
 
 
-# 逐日历史（实测上游给的就是倒序 newest-first，且字段带 _24h 后缀）
-# 这两行是 2026-10-22 实测 cnemc 返回的原值。
-DAILY_HISTORY_PAYLOAD = [
-    {
-        "TimePoint": "/Date(1792598400000)/",
-        "TimePointStr": "22日",
-        "AQI": "50",
-        "PM2_5_24h": "26",
-        "PM10_24h": "50",
-        "O3_8h_24h": "62",
-        "NO2_24h": "31",
-        "SO2_24h": "3",
-        "CO_24h": "0.5",
-        "Quality": "良",
-        "CityCode": 110000,
-    },
-    {
-        "TimePoint": "/Date(1791561600000)/",
-        "TimePointStr": "10日",
-        "AQI": "93",
-        "PM2_5_24h": "46",
-        "PM10_24h": "84",
-        "O3_8h_24h": "151",
-        "NO2_24h": "31",
-        "SO2_24h": "4",
-        "CO_24h": "0.7",
-        "Quality": "良",
-        "CityCode": 110000,
-    },
-]
-
-
-class TestTimePoint:
-    def test_parses_dotnet_date_format(self):
-        # "/Date(1792558800000)/" —— .NET 的毫秒时间戳
-        parsed = air_quality.parse_time_point("/Date(1792558800000)/")
-        assert parsed is not None
-        assert parsed.tzinfo is not None
-        assert parsed == datetime(2026, 10, 21, 5, 0, tzinfo=timezone.utc)
-
-    def test_parses_naive_iso_as_china_time(self):
-        # 不带时区的 ISO 按北京时间理解（上游服务器在北京）
-        parsed = air_quality.parse_time_point("2026-10-22T12:00:00")
-        assert parsed == datetime(2026, 10, 22, 4, 0, tzinfo=timezone.utc)
-
-    def test_rejects_garbage(self):
-        assert air_quality.parse_time_point("not a time") is None
-        assert air_quality.parse_time_point("") is None
-        assert air_quality.parse_time_point(None) is None
-        assert air_quality.parse_time_point("/Date(abc)/") is None
-
-
-class TestAirQualityRealtime:
-    def test_finds_city_by_code(self):
-        found = air_quality.find_city(REALTIME_PAYLOAD, 110000)
-        assert found is not None
-        assert found["Area"] == "北京市"
-
-    def test_missing_city_returns_none(self):
-        assert air_quality.find_city(REALTIME_PAYLOAD, 999999) is None
-        assert air_quality.find_city({"not": "a list"}, 110000) is None
-
-    def test_fetch_realtime_produces_metric_with_source(self, monkeypatch):
-        calls = []
-
-        def fake_request(url, **kwargs):
-            calls.append((url, kwargs.get("method", "GET")))
-            return REALTIME_PAYLOAD
-
-        monkeypatch.setattr(air_quality.http, "request_json", fake_request)
-
-        result = air_quality.fetch_realtime(110000)
-
-        assert len(result.metrics) == 1
-        metric = result.metrics[0]
-        assert metric.key == "aqi"
-        # AQI 上游是字符串，必须转成数字
-        assert metric.value == 51
-        assert metric.level == 2
-        assert metric.level_label == "良"
-        assert metric.extra["primary_pollutant"] == "颗粒物(PM10)"
-        # 来源标注：实测，不是估算
-        assert metric.source.name == air_quality.SOURCE_NAME
-        assert metric.source.estimated is False
-        assert metric.source.observed_at is not None
-        assert metric.source.fetched_at is not None
-        assert result.city["name"] == "北京市"
-        assert result.city["latitude"] == pytest.approx(40.0595, abs=1e-3)
-        # 实时的取数是 GET
-        assert calls == [(air_quality.REALTIME_URL, "GET")]
-
-    def test_unknown_city_raises_unavailable(self, monkeypatch):
+class TestAirQualityFetch:
+    def test_produces_seven_metrics_and_two_series(self, monkeypatch):
+        payload = _make_air_payload(CONSTANT_CONCENTRATIONS)
         monkeypatch.setattr(
-            air_quality.http, "request_json", lambda url, **kwargs: REALTIME_PAYLOAD
+            air_quality.http, "request_json", lambda url, **kwargs: payload
         )
-        with pytest.raises(SourceUnavailable):
-            air_quality.fetch_realtime(999999)
 
+        result = air_quality.fetch(CITIES["barcelona"])
+        metrics = _by_key(result)
 
-class TestAirQualityHistory:
-    def test_parse_history_sorts_by_time(self):
-        rows = air_quality.parse_history(HISTORY_PAYLOAD)
-        assert len(rows) == 2
-        assert rows[0]["t"] < rows[1]["t"]
-        # 污染物是字符串，要转成数字
-        assert rows[1]["pm25"] == 32.0
-        assert rows[1]["co"] == 0.5
-        assert rows[1]["aqi"] == 60.0
+        assert [metric.key for metric in result.metrics] == [
+            "aqi",
+            "pm25",
+            "pm10",
+            "o3",
+            "no2",
+            "so2",
+            "co",
+        ]
+        assert metrics["pm25"].value == 55.0
+        assert metrics["pm10"].value == 50.0
+        assert metrics["o3"].value == 100.0
+        assert metrics["no2"].value == 40.0
+        assert metrics["so2"].value == 50.0
+        # CO 的对外单位是 mg/m³（上游给的是 μg/m³）。
+        assert metrics["co"].value == 2.0
+        assert metrics["co"].unit == "mg/m³"
+        assert metrics["pm25"].unit == "μg/m³"
 
-    def test_parse_history_ignores_broken_rows(self):
-        rows = air_quality.parse_history([{"TimePoint": "nope"}, "not a dict"])
-        assert rows == []
+        assert [series.key for series in result.series] == ["aqi_24h", "aqi_daily"]
 
-    def test_fetch_history_uses_post_with_empty_body(self, monkeypatch):
-        calls = []
-
-        def fake_request(url, **kwargs):
-            calls.append((url, kwargs.get("method"), kwargs.get("data")))
-            return HISTORY_PAYLOAD
-
-        monkeypatch.setattr(air_quality.http, "request_json", fake_request)
-
-        result = air_quality.fetch_history(110000)
-
-        # 历史接口必须 POST 且 body 为空对象；用 GET 会 404
-        assert calls[0][1] == "POST"
-        assert calls[0][2] == b"{}"
-        assert len(result.metrics) == 6
-        keys = [metric.key for metric in result.metrics]
-        assert keys == ["pm25", "pm10", "o3", "no2", "so2", "co"]
-        # 最新一个小时的浓度
-        assert result.metrics[0].value == 32.0
-        assert result.metrics[0].source.estimated is False
-        # 24 小时序列
-        assert len(result.series) == 1
-        assert result.series[0].key == "aqi_24h"
-        assert len(result.series[0].points) == 2
-
-    def test_empty_history_raises_unavailable(self, monkeypatch):
-        monkeypatch.setattr(air_quality.http, "request_json", lambda url, **kwargs: [])
-        with pytest.raises(SourceUnavailable):
-            air_quality.fetch_history(110000)
-
-
-class TestAirQualityDailyHistory:
-    """逐日历史（14 天，日均值）。
-
-    字段名与逐小时**不一样**：逐日是 24 小时均值，字段都带 ``_24h``，
-    O3 是 ``O3_8h_24h``（8 小时最大值的日平均）。
-    """
-
-    def test_parse_daily_history_sorts_by_time(self):
-        # 夹具是**倒序**的（上游就是这样给的）→ 解析后必须按时间升序
-        rows = air_quality.parse_daily_history(DAILY_HISTORY_PAYLOAD)
-        assert len(rows) == 2
-        assert rows[0]["t"] < rows[1]["t"]
-        # 污染物是字符串，要转成数字
-        assert rows[1]["pm25"] == 26.0
-        assert rows[1]["co"] == 0.5
-        assert rows[1]["aqi"] == 50.0
-        # O3 的日均值走的是 O3_8h_24h 字段
-        assert rows[1]["o3"] == 62.0
-
-    def test_parse_daily_history_ignores_broken_rows(self):
-        rows = air_quality.parse_daily_history([{"TimePoint": "nope"}, "not a dict"])
-        assert rows == []
-
-    def test_parse_daily_history_accepts_the_iso_time_point(self):
-        # 两种 TimePoint 格式都要能解析（与逐小时历史同一套解析器）
-        rows = air_quality.parse_daily_history(
-            [{"TimePoint": "2026-10-22T00:00:00", "AQI": "50"}]
-        )
-        assert len(rows) == 1
-        assert rows[0]["t"] == "2026-10-21T16:00:00Z"
-
-    def test_fetch_daily_history_uses_post_with_empty_body(self, monkeypatch):
-        calls = []
-
-        def fake_request(url, **kwargs):
-            calls.append((url, kwargs.get("method"), kwargs.get("data"), kwargs.get("headers")))
-            return DAILY_HISTORY_PAYLOAD
-
-        monkeypatch.setattr(air_quality.http, "request_json", fake_request)
-
-        result = air_quality.fetch_daily_history(110000)
-
-        # 逐日接口同样必须 POST 且 body 为空对象；用 GET 会 404
-        assert calls[0][1] == "POST"
-        assert calls[0][2] == b"{}"
-        # cnemc 要求带 Referer
-        assert calls[0][3]["Referer"] == air_quality.BASE_URL + "/"
-        # 这一条只产序列，不产指标（指标带已经有逐小时的浓度了）
-        assert result.metrics == []
-        assert len(result.series) == 1
-        assert result.series[0].key == "aqi_daily"
-        assert len(result.series[0].points) == 2
-
-    def test_fetch_daily_history_points_carry_every_pollutant(self, monkeypatch):
+    def test_aqi_uses_the_national_standard_conversion(self, monkeypatch):
+        payload = _make_air_payload(CONSTANT_CONCENTRATIONS)
         monkeypatch.setattr(
-            air_quality.http, "request_json", lambda url, **kwargs: DAILY_HISTORY_PAYLOAD
+            air_quality.http, "request_json", lambda url, **kwargs: payload
         )
 
-        result = air_quality.fetch_daily_history(110000)
-        point = result.series[0].points[-1]
+        metrics = _by_key(air_quality.fetch(CITIES["barcelona"]))
+        aqi = metrics["aqi"]
 
-        # AQI 放在 v 里 —— 折线图组件不用改就能画
-        assert point.v == 50.0
-        # 各项污染物的日均值放在 values 里，键与指标 key 一致
-        assert point.values is not None
-        assert point.values["pm25"] == 26.0
-        assert point.values["pm10"] == 50.0
-        assert point.values["o3"] == 62.0
-        assert point.values["no2"] == 31.0
-        assert point.values["so2"] == 3.0
-        assert point.values["co"] == 0.5
-        # 来源标注：实测，不是估算；逐日数据按定义不是实时的
-        assert result.series[0].source.name == air_quality.DAILY_SOURCE_NAME
-        assert result.series[0].source.estimated is False
-        assert result.series[0].source.realtime is False
+        # PM2.5 = 55 → IAQI 75；其余污染物都落在更低的段上 → AQI = 75。
+        assert aqi.value == 75
+        assert aqi.unit == "AQI"
+        assert aqi.level == 2
+        assert aqi.level_label == "良"
 
-    def test_empty_daily_history_raises_unavailable(self, monkeypatch):
-        monkeypatch.setattr(air_quality.http, "request_json", lambda url, **kwargs: [])
-        with pytest.raises(SourceUnavailable):
-            air_quality.fetch_daily_history(110000)
-
-
-# ---------------------------------------------------------------------------
-# 天气
-# ---------------------------------------------------------------------------
-
-WEATHER_PAYLOAD = {
-    "weatherinfo": {
-        "city": "北京",
-        "cityid": "101010100",
-        "temp": "18",
-        "WD": "东南风",
-        "WS": "1级",
-        "SD": "17%",
-        "time": "17:05",
-        "rain": "0",
-    }
-}
-
-
-class TestWeather:
-    def test_observed_at_uses_today_when_in_the_past(self):
-        # 本地时间 2026-10-22 18:00（= 10:00 UTC）→ 上游的 17:05 是 55 分钟前
-        now = datetime(2026, 10, 22, 10, 0, tzinfo=timezone.utc)
-        parsed = weather.parse_weather(WEATHER_PAYLOAD, now)
-        assert parsed["observed_at"] == datetime(2026, 10, 22, 9, 5, tzinfo=timezone.utc)
-        assert parsed["realtime"] is True
-
-    def test_observed_at_rolls_back_a_day_when_in_the_future(self):
-        # 本地时间 2026-10-22 12:00（= 04:00 UTC）→ 上游报的 17:05 落在未来，
-        # 说明它不是今天的读数：回退一天，并如实标成「不是实时」。
-        now = datetime(2026, 10, 22, 4, 0, tzinfo=timezone.utc)
-        parsed = weather.parse_weather(WEATHER_PAYLOAD, now)
-        assert parsed["observed_at"] == datetime(2026, 10, 21, 9, 5, tzinfo=timezone.utc)
-        assert parsed["realtime"] is False
-
-    def test_stale_weather_is_not_realtime(self):
-        # 本地时间 2026-10-22 07:00（= 23:00 UTC 前一天）→ 观测已超过 1 小时
-        now = datetime(2026, 10, 22, 23, 0, tzinfo=timezone.utc)
-        parsed = weather.parse_weather(WEATHER_PAYLOAD, now)
-        assert parsed["realtime"] is False
-
-    def test_fetch_produces_metrics_with_source(self, monkeypatch):
+    def test_source_is_marked_estimated_and_carries_the_url(self, monkeypatch):
+        payload = _make_air_payload(CONSTANT_CONCENTRATIONS)
         monkeypatch.setattr(
-            weather.http, "request_json", lambda url, **kwargs: WEATHER_PAYLOAD
+            air_quality.http, "request_json", lambda url, **kwargs: payload
         )
-        result = weather.fetch(110000)
-        keys = [metric.key for metric in result.metrics]
-        assert keys == ["weather_temp", "weather_humidity"]
-        assert result.metrics[0].value == 18.0
-        assert result.metrics[0].unit == "℃"
-        assert result.metrics[1].value == 17.0
-        assert result.metrics[0].extra["direction"] == "东南风"
-        assert result.metrics[0].source.estimated is False
 
-    def test_city_without_known_cityid_is_unavailable(self, monkeypatch):
+        result = air_quality.fetch(CITIES["barcelona"])
+        source = result.metrics[0].source
+
+        assert source.name == air_quality.SOURCE_NAME
+        # CAMS 是模型再分析值 → 必须标 estimated。
+        assert source.estimated is True
+        assert source.url == air_quality.build_url(CITIES["barcelona"])
+        assert source.realtime is True
+        assert source.fetched_at.endswith("Z")
+        # 观测时刻是「当前小时」那个点，不是取数时刻。
+        assert source.observed_at.endswith("Z")
+        assert source.observed_at != source.fetched_at
+
+    def test_extra_explains_the_basis_and_carries_the_upstream_indices(self, monkeypatch):
+        payload = _make_air_payload(CONSTANT_CONCENTRATIONS)
         monkeypatch.setattr(
-            weather.http, "request_json", lambda url, **kwargs: WEATHER_PAYLOAD
-        )
-        # 实测只有北京通，其它城市直接判为不可用，不瞎试别的 cityid
-        with pytest.raises(SourceUnavailable):
-            weather.fetch(310000)
-
-    def test_non_json_response_is_unavailable(self, monkeypatch):
-        # 上游对不存在的 cityid 返回的是 HTML 错误页
-        def boom(url, **kwargs):
-            raise SourceUnavailable("响应不是 JSON")
-
-        monkeypatch.setattr(weather.http, "request_json", boom)
-        with pytest.raises(SourceUnavailable):
-            weather.fetch(110000)
-
-
-# ---------------------------------------------------------------------------
-# 本地路网
-# ---------------------------------------------------------------------------
-
-
-def _write_geojson(path, features, timestamp="2026-06-21T11:40:10Z"):
-    path.write_text(
-        json.dumps(
-            {"type": "FeatureCollection", "timestamp": timestamp, "features": features},
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
-    return path
-
-
-def _line(highway, coords):
-    return {
-        "type": "Feature",
-        "properties": {"highway": highway},
-        "geometry": {"type": "LineString", "coordinates": coords},
-    }
-
-
-def _polygon(name):
-    return {
-        "type": "Feature",
-        "properties": {"name": name},
-        "geometry": {
-            "type": "Polygon",
-            "coordinates": [[[0, 0], [0.001, 0], [0.001, 0.001], [0, 0.001], [0, 0]]],
-        },
-    }
-
-
-class TestRoadNetwork:
-    def test_tier_matches_frontend_tiers(self):
-        assert road_network.tier_of("primary") == "main"
-        assert road_network.tier_of("trunk") == "main"
-        assert road_network.tier_of("secondary") == "secondary"
-        assert road_network.tier_of("residential") == "local"
-        assert road_network.tier_of("footway") == "footway"
-        # 不在分级表里的一律落到「其他」
-        assert road_network.tier_of("living_street") == "other"
-        assert road_network.tier_of("primary_link") == "other"
-        assert road_network.tier_of(None) == "other"
-
-    def test_polyline_length_is_about_right(self):
-        # 天安门一带：1 度经度约 85.3 km，1 度纬度约 111.3 km
-        length = road_network.polyline_length_m([[116.0, 39.9], [116.01, 39.9]])
-        assert length == pytest.approx(853, rel=0.02)
-        length = road_network.polyline_length_m([[116.0, 39.9], [116.0, 39.91]])
-        assert length == pytest.approx(1113, rel=0.02)
-
-    def test_load_index_is_deterministic(self):
-        first, extra = road_network.compute_load_index(3854, 202.1729)
-        second, _ = road_network.compute_load_index(3854, 202.1729)
-        assert first == second
-        assert 0 <= first <= 100
-        assert extra["inputs"]["buildings_per_km_road"] == pytest.approx(19.0629, abs=1e-3)
-
-    def test_load_index_is_capped(self):
-        value, _ = road_network.compute_load_index(100000, 1.0)
-        assert value == 100.0
-
-    def test_fetch_produces_measured_and_estimated_metrics(self, tmp_path):
-        buildings = _write_geojson(tmp_path / "buildings.geojson", [_polygon("a"), _polygon("b")])
-        roads = _write_geojson(
-            tmp_path / "roads.geojson",
-            [
-                _line("primary", [[116.0, 39.9], [116.01, 39.9]]),
-                _line("footway", [[116.0, 39.9], [116.001, 39.9]]),
-                _polygon("plaza"),
-            ],
+            air_quality.http, "request_json", lambda url, **kwargs: payload
         )
 
-        result = road_network.fetch(buildings, roads)
-        by_key = {metric.key: metric for metric in result.metrics}
+        metrics = _by_key(air_quality.fetch(CITIES["barcelona"]))
+        extra = metrics["aqi"].extra
 
-        assert by_key["building_count"].value == 2
-        assert by_key["road_count"].value == 3
-        assert by_key["road_count"].extra["line_features"] == 2
-        assert by_key["road_count"].extra["area_features"] == 1
-        assert by_key["road_count_main"].value == 1
-        assert by_key["road_count_footway"].value == 1
-        assert by_key["road_length_km"].value > 0
-        # 实测指标：estimated 为 False
-        assert by_key["road_length_km"].source.estimated is False
-        # 模型估算指标：必须标 True
-        assert by_key["road_load_index"].source.estimated is True
-        assert "模型估算" in by_key["road_load_index"].label
-        # 观测时间取自 OSM 抽取的时间戳
-        assert by_key["building_count"].source.observed_at == "2026-06-21T11:40:10Z"
+        assert extra["aqi_basis"] == air_quality.AQI_BASIS
+        assert extra["data_kind"] == air_quality.DATA_KIND
+        assert extra["european_aqi"] == 40
+        assert extra["us_aqi"] == 40
+        # 上游的署名要求随数据一起发出去。
+        assert extra["attribution"] == air_quality.ATTRIBUTION
 
+    def test_hourly_series_covers_the_last_24_hours(self, monkeypatch):
+        payload = _make_air_payload(CONSTANT_CONCENTRATIONS)
+        monkeypatch.setattr(
+            air_quality.http, "request_json", lambda url, **kwargs: payload
+        )
 
-# ---------------------------------------------------------------------------
-# 代码表
-# ---------------------------------------------------------------------------
+        series = _series_by_key(air_quality.fetch(CITIES["barcelona"]))["aqi_24h"]
+        assert len(series.points) == 24
+        assert series.unit == "AQI"
+        assert series.label == "24 小时 AQI"
+        # 时间升序。
+        times = [point.t for point in series.points]
+        assert times == sorted(times)
+        # 浓度恒定 → 每一点的 AQI 都是 75。
+        assert [point.v for point in series.points] == [75] * 24
 
+    def test_daily_series_keeps_only_complete_local_days(self, monkeypatch):
+        payload = _make_air_payload(CONSTANT_CONCENTRATIONS)
+        monkeypatch.setattr(
+            air_quality.http, "request_json", lambda url, **kwargs: payload
+        )
 
-class TestCityCodes:
-    def test_known_codes(self):
-        assert city_codes.is_known_city_code(110000)
-        assert city_codes.is_known_city_code(310000)
-        # 只有省份、没有城市条目的代码也在表里
-        assert city_codes.is_known_city_code(130000)
-        assert not city_codes.is_known_city_code(999999)
-        assert not city_codes.is_known_city_code(0)
+        series = _series_by_key(air_quality.fetch(CITIES["barcelona"]))["aqi_daily"]
+        assert len(series.points) == 7
 
-    def test_weather_cityid_only_for_beijing(self):
-        assert city_codes.WEATHER_CITY_IDS == {110000: "101010100"}
+        times = [point.t for point in series.points]
+        assert times == sorted(times)
 
-    def test_codes_only_no_region_names(self):
-        """代码表里**只有代码**，没有行政区划名称。
+        point = series.points[-1]
+        assert point.v == 75
+        assert point.values == {
+            "pm25": 55.0,
+            "pm10": 50.0,
+            "o3": 100.0,
+            "no2": 40.0,
+            "so2": 50.0,
+            "co": 2.0,
+        }
 
-        这条是公开仓库的硬约束：仓库里不留行政区划名录。
-        校验能力靠纯数字白名单，名称由上游实时接口给出。
+    def test_daily_series_excludes_today_and_the_future(self, monkeypatch):
+        now_epoch = _now_epoch()
+        payload = _make_air_payload(CONSTANT_CONCENTRATIONS, now_epoch)
+        monkeypatch.setattr(
+            air_quality.http, "request_json", lambda url, **kwargs: payload
+        )
+
+        series = _series_by_key(air_quality.fetch(CITIES["barcelona"]))["aqi_daily"]
+        # 今天是不完整的一天（24 小时还没走完），未来是预报 —— 都不许出现。
+        today = _local_midnight(now_epoch)
+        for point in series.points:
+            assert datetime.fromisoformat(point.t.replace("Z", "+00:00")).timestamp() < today
+
+    def test_sliding_window_spans_24_hours_not_one(self, monkeypatch):
+        """最近 12 小时 PM2.5 = 100，其余为 0。
+
+        24 小时滑动平均 = 50；1 小时的窗口会给出 100 —— 两者必须不同。
         """
-        assert not hasattr(city_codes, "PROVINCE_NAMES")
-        assert not hasattr(city_codes, "city_name")
-        assert all(isinstance(code, int) for code in city_codes.KNOWN_CODES)
-        # 城市代码与省份代码有 4 个重合（北京/天津/上海/重庆），
-        # 所以并集不是两者之和 —— 断言集合相等，不���长度相加。
-        assert city_codes.KNOWN_CODES == (
-            city_codes.CITY_CODES | city_codes.PROVINCE_CODES
+        now_epoch = _now_epoch()
+        current_index = _current_hour_index(now_epoch)
+        concentrations = dict(CONSTANT_CONCENTRATIONS)
+        concentrations["pm2_5"] = lambda index: 100.0 if index > current_index - 12 else 0.0
+        payload = _make_air_payload(concentrations, now_epoch)
+        monkeypatch.setattr(
+            air_quality.http, "request_json", lambda url, **kwargs: payload
         )
-        assert len(city_codes.KNOWN_CODES) == 368
+
+        metrics = _by_key(air_quality.fetch(CITIES["barcelona"]))
+
+        assert metrics["pm25"].value == 50.0
+        # PM2.5 = 50 → IAQI 68.75 → 取整 69。
+        assert metrics["aqi"].value == 69
+
+    def test_missing_pollutant_is_none_not_zero(self, monkeypatch):
+        concentrations = dict(CONSTANT_CONCENTRATIONS)
+        concentrations["ozone"] = None
+        payload = _make_air_payload(concentrations)
+        monkeypatch.setattr(
+            air_quality.http, "request_json", lambda url, **kwargs: payload
+        )
+
+        metrics = _by_key(air_quality.fetch(CITIES["barcelona"]))
+        # 取不到就是 None —— 不许拿 0 冒充。
+        assert metrics["o3"].value is None
+        # 其余污染物照常出数，AQI 也照常算。
+        assert metrics["pm25"].value == 55.0
+        assert metrics["aqi"].value == 75
+
+    def test_too_few_points_in_the_window_is_none(self, monkeypatch):
+        """数据刚开头（窗口里不足 12 个点）→ 指标是 None。"""
+        now_epoch = _now_epoch()
+        current_hour = (now_epoch // 3600) * 3600
+        payload = _make_air_payload(
+            CONSTANT_CONCENTRATIONS,
+            now_epoch,
+            start_epoch=current_hour - 5 * 3600,
+            total_points=6,
+        )
+        monkeypatch.setattr(
+            air_quality.http, "request_json", lambda url, **kwargs: payload
+        )
+
+        metrics = _by_key(air_quality.fetch(CITIES["barcelona"]))
+        assert metrics["pm25"].value is None
+        assert metrics["aqi"].value is None
+        assert metrics["co"].value is None
+
+    def test_future_points_are_not_used_as_the_current_hour(self, monkeypatch):
+        """最后一个 ≤ 当前时刻的点才是「当前小时」；未来的预报点不算。"""
+        now_epoch = _now_epoch()
+        payload = _make_air_payload(CONSTANT_CONCENTRATIONS, now_epoch)
+        monkeypatch.setattr(
+            air_quality.http, "request_json", lambda url, **kwargs: payload
+        )
+
+        result = air_quality.fetch(CITIES["barcelona"])
+        source = result.metrics[0].source
+        observed = datetime.fromisoformat(source.observed_at.replace("Z", "+00:00"))
+        assert observed.timestamp() <= now_epoch
+        assert now_epoch - observed.timestamp() < 3600
+
+    def test_upstream_failure_propagates_as_unavailable(self, monkeypatch):
+        def boom(url, **kwargs):
+            raise SourceUnavailable("测试：上游不可用")
+
+        monkeypatch.setattr(air_quality.http, "request_json", boom)
+        with pytest.raises(SourceUnavailable):
+            air_quality.fetch(CITIES["barcelona"])
+
+    def test_broken_payload_is_unavailable(self, monkeypatch):
+        monkeypatch.setattr(air_quality.http, "request_json", lambda url, **kwargs: {"nope": 1})
+        with pytest.raises(SourceUnavailable):
+            air_quality.fetch(CITIES["barcelona"])

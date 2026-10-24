@@ -153,7 +153,7 @@ class CityEvent(BaseModel):
     - ``time``：事件发生/判定时刻（ISO8601）。
     - ``location_kind``：**这个事件有没有具体空间位置**。
         - ``"city"``：**全市级**事件（空气质量、天气）—— 没有空间位置，
-          前端把它落在**城心**（应用里唯一定义的城心：天安门）。
+          前端把它落在**城心**（应用里唯一定义的城心：``cityConfig.center``）。
         - ``"geometry"``：**几何锚定**事件（路网负载）——
           ``location`` 是**真实几何**上的点（最长主干道的弧长中点）。
     - ``location``：位置。``location_kind="geometry"`` 时是事件的真实坐标；
@@ -254,8 +254,6 @@ class SourceResult:
 
     metrics: List[Metric] = field(default_factory=list)
     series: List[Series] = field(default_factory=list)
-    # 只有部分源能给出城市信息（目前是空气质量源）；取不到时是 None。
-    city: Optional[Dict[str, Any]] = None
     # 设施分类计数（目前只有本地 OSM 快照源能给）。取不到时是空列表。
     facilities: List[FacilityCategory] = field(default_factory=list)
     # 场景里的「城市中心」（本地 OSM 快照的围中心）。取不到时是 None。

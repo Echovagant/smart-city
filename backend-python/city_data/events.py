@@ -25,15 +25,21 @@
 4     ``weather_temp <= 0``（低温）/ ``>= 35``（高温）→ 极端天气提示        warn         false       城心（全市）     ``"city"``
 ====  ==================================================================  ==========  ==========  ================  ===============
 
-**「城心」只有一个**：应用里唯一定义的城心是天安门（前端 ``cityConfig.center``，
-也是相机的绕行中心）。规则 1/2/4 是**全市级**事件 —— 全市指标本来就没有空间位置，
+**「城心」只有一个**：应用里唯一定义的城心是 ``cityConfig.center``（前端），
+也是相机的绕行中心。规则 1/2/4 是**全市级**事件 —— 全市指标本来就没有空间位置，
 落在城心是准确的，而且这样它在默认鸟瞰视角下**永远在屏幕中心**。
 规则 3 是**几何锚定**事件 —— 位置是真实道路上的点，不许用城心假装路段。
+
+事件的 ``estimated`` 继承自它依据的那个源
+------------------------------------------
+事件是**派生**出来的：它依据的指标本身是实测还是模型估算，
+这条事件就是实测还是模型估算。所以 ``estimated`` 不写死，
+而是取 ``source.estimated``（路网负载那条本来就是估算，不变）。
 
 AQI 分级换算
 ------------
 逐小时序列的点上**只有 AQI 数值，没有分级字段**，所以按国标
-（HJ 633-2012 的六档）换算，与 cnemc 的 ``AqiLevel``（1..6）一致：
+（HJ 633-2012 的六档）换算，与 ``city_data/aqi.py`` 的分级一致：
 
 =====  ==========  ==============
 AQI   分级        ``AqiLevel``
@@ -46,12 +52,14 @@ AQI   分级        ``AqiLevel``
 >300  严重污染    6
 =====  ==========  ==============
 
-这是**确定性标准映射**，不是猜测，所以 ``estimated = false``。
+这是**确定性标准映射**，不是猜测，所以分级本身不带估算标记
+（``estimated`` 取自它依据的源，见上面的说明）。
 """
 import logging
 import math
 from typing import List, Optional, Sequence, Tuple
 
+from .aqi import AQI_LEVEL_BANDS, aqi_level
 from .models import CityEvent, EventLocation, Metric, RoadAnchor, Series, SourceInfo
 
 logger = logging.getLogger(__name__)
@@ -59,15 +67,14 @@ logger = logging.getLogger(__name__)
 # 逐小时 AQI 序列的 key（规则 1 用的就是它）。
 AQI_SERIES_KEY = "aqi_24h"
 
-# AQI 分级带：(上界, 分级编号, 中文名)。上界含端点。
-AQI_LEVEL_BANDS: Tuple[Tuple[float, int, str], ...] = (
-    (50.0, 1, "优"),
-    (100.0, 2, "良"),
-    (150.0, 3, "轻度污染"),
-    (200.0, 4, "中度污染"),
-    (300.0, 5, "重度污染"),
-    (math.inf, 6, "严重污染"),
-)
+# AQI 分级带定义在 ``city_data/aqi.py``（与换算口径放在一起）。
+# 这里重新导出，保留「从本模块取分级」的既有用法。
+__all__ = [
+    "AQI_LEVEL_BANDS",
+    "AQI_SERIES_KEY",
+    "aqi_level",
+    "derive_events",
+]
 
 # 规则 2：当前 AQI 等级达到这个数就出事件（3 = 轻度污染）。
 AQI_ALERT_LEVEL = 3
@@ -91,17 +98,17 @@ LOCATION_KIND_GEOMETRY = "geometry"
 # 本地 OSM 快照不可用时的兜底参考点。
 #
 # 注意：这是**数据范围中心**（OSM 抽取范围的围中心），**不是城心** ——
-# 全项目只有一个城心：天安门（前端 ``cityConfig.center``，也是相机的绕行中心）。
+# 全项目只有一个城心：前端 ``cityConfig.center``（也是相机的绕行中心）。
 # 全市级事件的坐标由前端按 ``location_kind`` 解析到城心，这里只是后端自己的参考点。
 SCENE_CENTER_FALLBACK = EventLocation(
-    lng=116.4020155, lat=39.9153679, label="数据范围中心（默认位置）"
+    lng=2.1650, lat=41.3950, label="数据范围中心（默认位置）"
 )
 
 
 def aqi_level(value: Optional[float]) -> Optional[Tuple[int, str]]:
     """AQI 数值 → ``(分级编号, 中文名)``。取不到或不是数字时返回 ``None``。
 
-    按国标 HJ 633-2012 换算，与 cnemc 的 ``AqiLevel`` 一致。
+    按国标 HJ 633-2012 换算，与 ``city_data/aqi.py`` 的分级一致。
     """
     if value is None or isinstance(value, bool):
         return None
@@ -195,7 +202,8 @@ def _rule_aqi_level_change(
                         location=center,
                         metric_key=item.key,
                         source=item.source,
-                        estimated=False,
+                        # 事件是派生的：依据的源是模型数据，事件就是模型数据。
+                        estimated=bool(item.source.estimated),
                     )
                 )
             previous = grade
@@ -233,7 +241,7 @@ def _rule_current_aqi(metrics: Sequence[Metric], center: EventLocation) -> List[
             location=center,
             metric_key=metric.key,
             source=metric.source,
-            estimated=False,
+            estimated=bool(metric.source.estimated),
         )
     ]
 
@@ -314,7 +322,7 @@ def _rule_weather(metrics: Sequence[Metric], center: EventLocation) -> List[City
             location=center,
             metric_key=metric.key,
             source=metric.source,
-            estimated=False,
+            estimated=bool(metric.source.estimated),
         )
     ]
 
@@ -331,7 +339,7 @@ def derive_events(
     - ``metrics`` / ``series``：聚合器拿到的全部指标与序列（**含降级占位**）。
     - ``center``：**数据范围中心**（本地 OSM 快照的围中心）——
       全市级事件（``location_kind="city"``）的后端参考点。
-      前端会按 kind 把它们改放到**城心**（天安门），所以这里的坐标只是载荷里的参考值。
+      前端会按 kind 把它们改放到**城心**（``cityConfig.center``），所以这里的坐标只是载荷里的参考值。
     - ``road_anchor``：最长主干道的中点（规则 3 的**真实几何**位置）。
 
     **每条规则各自兜住自己的异常**：任何一条规则出错只是跳过那条规则，

@@ -1,7 +1,12 @@
 """`GET /api/city/overview` 的契约与降级测试。
 
-**这些测试一律不打真实网络**：上游响应是写死的假数据
-（``city_data.http.request_json`` 被替换掉），CI 上没有外网也能跑。
+**这些测试一律不打真实网络**：远程源在**源模块层**被替换掉
+（``city_data.sources.air_quality.fetch`` / ``city_data.sources.weather.fetch``），
+CI 上没有外网也能跑。
+
+为什么桩在源模块层而不是 HTTP 层：端点契约（参数、降级、缓存、序列形状）
+与「上游 JSON 怎么解析」是两件事 —— 后者由源模块自己的测试负责。
+桩在源模块层，这两组测试就不会互相牵制。
 
 覆盖的硬要求：
 - 每个指标都必须带 source（漏一个就红）；
@@ -9,85 +14,93 @@
 - 某个源失败/超时 → 端点仍然 200，``degraded`` 列出该源，
   对应位置的指标值是 null（**不是 0**）；
 - 缓存生效：连续两次请求只打一次上游，``fetched_at`` 是首次取数时间；
-- 参数不合法（未知城市代码）→ 400。
+- 参数不合法（未知城市 id）→ 400。
 """
 import time
 
 import pytest
-from fastapi.testclient import TestClient
 
-import main
-from city_data import aggregator
+from city_data import aggregator, cities
 from city_data.http import SourceUnavailable
+from city_data.models import Metric, Series, SeriesPoint, SourceInfo, SourceResult
 
-REALTIME_PAYLOAD = [
-    {
-        "TimePoint": "2026-10-22T12:00:00",
-        "AQI": "51",
-        "AqiLevel": 2,
-        "PrimaryPollutant": "颗粒物(PM10)",
-        "Quality": "良",
-        "Measure": "极少数异常敏感人群应减少户外活动",
-        "Area": "北京市",
-        "CityCode": 110000,
-        "Latitude": "40.059588086956521739130434783",
-        "Longitude": "116.40260991304347826086956522",
-    }
-]
 
-HISTORY_PAYLOAD = [
-    {
-        "TimePoint": "/Date(1792641600000)/",
-        "AQI": "60",
-        "CO": "0.5",
-        "NO2": "30",
-        "O3": "44",
-        "PM10": "64",
-        "PM2_5": "32",
-        "SO2": "4",
-    }
-]
+def _source(name, url="https://example.invalid/source", estimated=False):
+    return SourceInfo(
+        name=name,
+        url=url,
+        observed_at="2026-10-24T10:00:00Z",
+        fetched_at="2026-10-24T10:00:05Z",
+        realtime=True,
+        estimated=estimated,
+    )
 
-WEATHER_PAYLOAD = {
-    "weatherinfo": {
-        "city": "北京",
-        "cityid": "101010100",
-        "temp": "18",
-        "WD": "东南风",
-        "WS": "1级",
-        "SD": "17%",
-        "time": "17:05",
-        "rain": "0",
-    }
-}
 
-# 逐日历史（实测上游给的是倒序 newest-first，字段带 _24h 后缀）
-DAILY_HISTORY_PAYLOAD = [
-    {
-        "TimePoint": "/Date(1792598400000)/",
-        "TimePointStr": "22日",
-        "AQI": "50",
-        "PM2_5_24h": "26",
-        "PM10_24h": "50",
-        "O3_8h_24h": "62",
-        "NO2_24h": "31",
-        "SO2_24h": "3",
-        "CO_24h": "0.5",
-        "CityCode": 110000,
-    },
-    {
-        "TimePoint": "/Date(1791561600000)/",
-        "TimePointStr": "10日",
-        "AQI": "93",
-        "PM2_5_24h": "46",
-        "PM10_24h": "84",
-        "O3_8h_24h": "151",
-        "NO2_24h": "31",
-        "SO2_24h": "4",
-        "CO_24h": "0.7",
-        "CityCode": 110000,
-    },
-]
+def _air_result():
+    """一份假的空气质量源结果（指标 + 两条序列）。"""
+    source = _source("Open-Meteo 空气质量（CAMS 模型再分析）", estimated=True)
+    metrics = [
+        Metric(
+            key="aqi",
+            label="空气质量",
+            value=42,
+            unit="AQI",
+            level=1,
+            level_label="优",
+            source=source,
+        ),
+        Metric(
+            key="pm25",
+            label="PM2.5",
+            value=8.3,
+            unit="μg/m³",
+            source=source,
+        ),
+    ]
+    series = [
+        Series(
+            key="aqi_24h",
+            label="24 小时 AQI",
+            unit="AQI",
+            points=[SeriesPoint(t="2026-10-24T09:00:00Z", v=40)],
+            source=source,
+        ),
+        Series(
+            key="aqi_daily",
+            label="逐日 AQI",
+            unit="AQI",
+            points=[
+                SeriesPoint(
+                    t="2026-10-23T00:00:00Z",
+                    v=50,
+                    values={"pm25": 26.0, "co": 0.5},
+                )
+            ],
+            source=source,
+        ),
+    ]
+    return SourceResult(metrics=metrics, series=series)
+
+
+def _weather_result():
+    source = _source("Open-Meteo 天气预报", estimated=True)
+    metrics = [
+        Metric(
+            key="weather_temp",
+            label="气温",
+            value=15.8,
+            unit="℃",
+            source=source,
+        ),
+        Metric(
+            key="weather_humidity",
+            label="相对湿度",
+            value=86,
+            unit="%",
+            source=source,
+        ),
+    ]
+    return SourceResult(metrics=metrics, series=[])
 
 
 @pytest.fixture(autouse=True)
@@ -98,49 +111,50 @@ def clear_aggregator_cache():
     aggregator.clear_cache()
 
 
-def _fake_upstream(calls=None, failing=(), slow=()):
-    """造一个假的 request_json。
+def _install(monkeypatch, *, air=None, weather=None, failing=(), slow=(), calls=None):
+    """替换两个远程源的取数函数。
 
-    ``failing`` 里的片段出现在 URL 里就抛异常；
-    ``slow`` 里的片段出现在 URL 里就睡一会儿（用来测超时）。
+    ``failing`` / ``slow`` 里是源的**名字**片段（``"air"`` / ``"weather"``）。
     """
+    air_result = air if air is not None else _air_result()
+    weather_result = weather if weather is not None else _weather_result()
 
-    def fake(url, **kwargs):
-        if calls is not None:
-            calls.append(url)
-        for token in failing:
-            if token in url:
-                raise SourceUnavailable("测试：上游不可用")
-        for token in slow:
-            if token in url:
-                time.sleep(0.5)
-        if "GetAllCityRealTimeAQIModels" in url:
-            return REALTIME_PAYLOAD
-        if "GetCityRealTimeAqiHistoryByCondition" in url:
-            return HISTORY_PAYLOAD
-        if "GetCityDayAqiHistoryByCondition" in url:
-            return DAILY_HISTORY_PAYLOAD
-        if "weather.com.cn" in url:
-            return WEATHER_PAYLOAD
-        raise SourceUnavailable("测试：未知地址 " + url)
+    def make_fetch(kind, result):
+        def fetch(city, *args, **kwargs):
+            if calls is not None:
+                calls.append(kind)
+            for token in failing:
+                if token in kind:
+                    raise SourceUnavailable("测试：上游不可用")
+            for token in slow:
+                if token in kind:
+                    time.sleep(0.5)
+            return result
 
-    return fake
+        return fetch
 
-
-def _install(monkeypatch, **kwargs):
-    calls = kwargs.pop("calls", None)
-    monkeypatch.setattr("city_data.http.request_json", _fake_upstream(calls=calls, **kwargs))
+    monkeypatch.setattr(
+        "city_data.sources.air_quality.fetch", make_fetch("air", air_result)
+    )
+    monkeypatch.setattr(
+        "city_data.sources.weather.fetch", make_fetch("weather", weather_result)
+    )
 
 
 class TestCityOverviewEndpoint:
     def test_returns_real_shaped_payload(self, client, monkeypatch):
         _install(monkeypatch)
-        response = client.get("/api/city/overview?cityCode=110000")
+        response = client.get("/api/city/overview?city=barcelona")
 
         assert response.status_code == 200
         payload = response.json()
-        assert payload["city"]["code"] == 110000
-        assert payload["city"]["name"] == "北京市"
+        assert payload["city"]["id"] == "barcelona"
+        assert payload["city"]["name"] == "巴塞罗那"
+        assert payload["city"]["latitude"] == pytest.approx(41.3950)
+        assert payload["city"]["longitude"] == pytest.approx(2.1650)
+        assert payload["city"]["timezone"] == "Europe/Madrid"
+        # 旧的数字代码字段已经不存在了
+        assert "code" not in payload["city"]
         assert payload["generated_at"]
         assert payload["degraded"] == []
 
@@ -150,11 +164,13 @@ class TestCityOverviewEndpoint:
         assert "road_load_index" in keys
 
         aqi = next(m for m in payload["metrics"] if m["key"] == "aqi")
-        assert aqi["value"] == 51
-        assert aqi["level_label"] == "良"
+        assert aqi["value"] == 42
+        assert aqi["level_label"] == "优"
 
-        # 24 小时序列
-        assert any(s["key"] == "aqi_24h" for s in payload["series"])
+        # 两条序列都在
+        series_keys = {s["key"] for s in payload["series"]}
+        assert "aqi_24h" in series_keys
+        assert "aqi_daily" in series_keys
 
     def test_every_metric_carries_a_source(self, client, monkeypatch):
         _install(monkeypatch)
@@ -171,7 +187,7 @@ class TestCityOverviewEndpoint:
             assert "observed_at" in source
             assert isinstance(source["estimated"], bool)
 
-    def test_estimated_flag_marks_the_model_metric_only(self, client, monkeypatch):
+    def test_estimated_flag_is_carried_through(self, client, monkeypatch):
         _install(monkeypatch)
         payload = client.get("/api/city/overview").json()
 
@@ -179,32 +195,42 @@ class TestCityOverviewEndpoint:
             metric["key"]: metric["source"]["estimated"]
             for metric in payload["metrics"]
         }
-        # 路网负载是模型估算
-        assert estimated["road_load_index"] is True
-        # 其余都是实测
-        assert estimated["aqi"] is False
-        assert estimated["weather_temp"] is False
+        # 两个远程源都是模式数据 → 估算
+        assert estimated["aqi"] is True
+        assert estimated["weather_temp"] is True
+        # 本地 OSM 快照是实测
         assert estimated["road_length_km"] is False
         assert estimated["building_count"] is False
+        # 路网负载是模型估算
+        assert estimated["road_load_index"] is True
 
     def test_degraded_source_keeps_the_endpoint_at_200(self, client, monkeypatch):
-        _install(monkeypatch, failing=("GetAllCityRealTimeAQIModels",))
+        _install(monkeypatch, failing=("air",))
         response = client.get("/api/city/overview")
 
         assert response.status_code == 200
         payload = response.json()
-        assert "中国环境监测总站" in payload["degraded"]
+        assert "Open-Meteo 空气质量（CAMS 模型再分析）" in payload["degraded"]
 
         aqi = next(m for m in payload["metrics"] if m["key"] == "aqi")
         # 取不到就是 null —— **不许**拿 0 冒充
         assert aqi["value"] is None
         # 其它源照常返回
         weather = next(m for m in payload["metrics"] if m["key"] == "weather_temp")
-        assert weather["value"] == 18.0
+        assert weather["value"] == 15.8
         assert next(m for m in payload["metrics"] if m["key"] == "road_load_index")["value"] is not None
 
+    def test_degraded_placeholder_keeps_the_estimated_flag(self, client, monkeypatch):
+        """降级占位也是模式来源的占位 —— 标记不能丢。"""
+        _install(monkeypatch, failing=("air",))
+        payload = client.get("/api/city/overview").json()
+
+        aqi = next(m for m in payload["metrics"] if m["key"] == "aqi")
+        assert aqi["value"] is None
+        assert aqi["source"]["estimated"] is True
+
     def test_slow_source_times_out_without_slowing_the_others(self, client, monkeypatch):
-        _install(monkeypatch, slow=("weather.com.cn",))
+        _install(monkeypatch, slow=("weather",))
         monkeypatch.setattr(aggregator, "SOURCE_TIMEOUT_SECONDS", 0.05)
 
         started = time.monotonic()
@@ -213,13 +239,13 @@ class TestCityOverviewEndpoint:
 
         assert response.status_code == 200
         payload = response.json()
-        assert "中国天气网" in payload["degraded"]
+        assert "Open-Meteo 天气预报" in payload["degraded"]
         weather = next(m for m in payload["metrics"] if m["key"] == "weather_temp")
         assert weather["value"] is None
         # 超时的源没有拖慢整体（上游睡了 0.5 s，整体必须明显快于它）
         assert elapsed < 0.5
         # 其它源照常有数据
-        assert next(m for m in payload["metrics"] if m["key"] == "aqi")["value"] == 51
+        assert next(m for m in payload["metrics"] if m["key"] == "aqi")["value"] == 42
 
     def test_cache_hits_the_upstream_once_and_keeps_the_first_fetch_time(
         self, client, monkeypatch
@@ -230,8 +256,8 @@ class TestCityOverviewEndpoint:
         first = client.get("/api/city/overview").json()
         second = client.get("/api/city/overview").json()
 
-        realtime_calls = [url for url in calls if "GetAllCityRealTimeAQIModels" in url]
-        assert len(realtime_calls) == 1, "缓存命中时不该再打上游"
+        assert calls.count("air") == 1, "缓存命中时不该再打上游"
+        assert calls.count("weather") == 1
 
         def fetched_at(payload):
             aqi = next(m for m in payload["metrics"] if m["key"] == "aqi")
@@ -248,21 +274,21 @@ class TestCityOverviewEndpoint:
         assert response.headers["X-Data-Generated-At"]
         assert response.headers["X-Data-Generated-At"] == response.json()["generated_at"]
 
-    def test_unknown_city_code_is_rejected(self, client, monkeypatch):
+    def test_unknown_city_id_is_rejected(self, client, monkeypatch):
         _install(monkeypatch)
-        response = client.get("/api/city/overview?cityCode=999999")
+        response = client.get("/api/city/overview?city=atlantis")
         assert response.status_code == 400
-        assert "cityCode" in response.json()["detail"]
+        assert "city" in response.json()["detail"]
 
-    def test_non_numeric_city_code_is_rejected(self, client, monkeypatch):
+    def test_non_numeric_city_id_is_rejected(self, client, monkeypatch):
         _install(monkeypatch)
-        response = client.get("/api/city/overview?cityCode=abc")
+        response = client.get("/api/city/overview?city=110000")
         assert response.status_code == 400
 
-    def test_default_city_code_is_beijing(self, client, monkeypatch):
+    def test_default_city_is_the_configured_one(self, client, monkeypatch):
         _install(monkeypatch)
         payload = client.get("/api/city/overview").json()
-        assert payload["city"]["code"] == 110000
+        assert payload["city"]["id"] == cities.DEFAULT_CITY_ID
 
     def test_unexpected_internal_error_still_returns_200(self, client, monkeypatch):
         # 聚合器之外的意外错误也不能让大屏白屏：返回一份「全部降级」的 200。
@@ -275,47 +301,20 @@ class TestCityOverviewEndpoint:
         assert response.status_code == 200
         payload = response.json()
         assert payload["metrics"] == []
-        assert "中国环境监测总站" in payload["degraded"]
-        assert "中国天气网" in payload["degraded"]
-        assert payload["city"]["code"] == 110000
+        assert "Open-Meteo 空气质量（CAMS 模型再分析）" in payload["degraded"]
+        assert "Open-Meteo 天气预报" in payload["degraded"]
+        assert payload["city"]["id"] == "barcelona"
 
 
-class TestDailyTrendSeries:
-    """逐日趋势序列（``aqi_daily``）的契约与降级。"""
-
-    def test_daily_series_carries_the_pollutant_daily_means(self, client, monkeypatch):
-        _install(monkeypatch)
-        payload = client.get("/api/city/overview?cityCode=110000").json()
-
-        series = {s["key"]: s for s in payload["series"]}
-        assert "aqi_daily" in series
-        daily = series["aqi_daily"]
-        assert daily["unit"] == "AQI"
-        assert daily["source"]["name"] == "中国环境监测总站（逐日历史）"
-        assert daily["source"]["estimated"] is False
-        # 按时间升序
-        times = [point["t"] for point in daily["points"]]
-        assert times == sorted(times)
-        # AQI 在 v 里，污染物日均值在 values 里
-        point = daily["points"][-1]
-        assert point["v"] == 50.0
-        assert point["values"] == {
-            "pm25": 26.0,
-            "pm10": 50.0,
-            "o3": 62.0,
-            "no2": 31.0,
-            "so2": 3.0,
-            "co": 0.5,
-        }
+class TestSeriesShape:
+    """序列的点形状不许变。"""
 
     def test_hourly_points_keep_their_original_shape(self, client, monkeypatch):
-        """既有序列的点形状**一个字节都不许变**。
-
-        多指标序列的点多了 ``values``，但 ``aqi_24h`` 的点必须仍然是
+        """多指标序列的点多了 ``values``，但 ``aqi_24h`` 的点必须仍然是
         ``{"t": ..., "v": ...}`` —— 不多一个 ``"values": null``。
         """
         _install(monkeypatch)
-        payload = client.get("/api/city/overview?cityCode=110000").json()
+        payload = client.get("/api/city/overview?city=barcelona").json()
 
         series = {s["key"]: s for s in payload["series"]}
         assert "aqi_24h" in series
@@ -323,36 +322,7 @@ class TestDailyTrendSeries:
             assert set(point.keys()) == {"t", "v"}
         # 逐日序列的点才带 values
         assert "values" in series["aqi_daily"]["points"][-1]
-
-    def test_daily_source_failure_degrades_without_inventing_numbers(self, client, monkeypatch):
-        _install(monkeypatch, failing=("GetCityDayAqiHistoryByCondition",))
-        response = client.get("/api/city/overview?cityCode=110000")
-
-        assert response.status_code == 200
-        payload = response.json()
-        # 进 degraded
-        assert "中国环境监测总站（逐日历史）" in payload["degraded"]
-        # 序列为空（没有这条序列），**不许编数字**
-        assert "aqi_daily" not in {s["key"] for s in payload["series"]}
-        # 其它源照常返回
-        assert "aqi_24h" in {s["key"] for s in payload["series"]}
-
-    def test_air_quality_outage_removes_the_daily_series(self, client, monkeypatch):
-        """空气质量源整体降级时，逐日序列也不产出。"""
-        _install(
-            monkeypatch,
-            failing=(
-                "GetAllCityRealTimeAQIModels",
-                "GetCityRealTimeAqiHistoryByCondition",
-                "GetCityDayAqiHistoryByCondition",
-            ),
-        )
-        payload = client.get("/api/city/overview?cityCode=110000").json()
-
-        assert "中国环境监测总站" in payload["degraded"]
-        assert "中国环境监测总站（逐小时历史）" in payload["degraded"]
-        assert "中国环境监测总站（逐日历史）" in payload["degraded"]
-        assert payload["series"] == []
+        assert series["aqi_daily"]["points"][-1]["values"]["pm25"] == 26.0
 
 
 class TestExistingEndpointsUntouched:

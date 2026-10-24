@@ -259,9 +259,9 @@ def test_filter_on_real_osm_data_matches_reference(processor):
     """真实 OSM 数据上，新旧实现的过滤结果必须逐要素一致。"""
     data = processor.load_geojson(str(OSM_BUILDINGS))
     for bbox in (
-        [116.380, 39.905, 116.420, 39.925],  # 前端默认 bbox（= 整个提取范围）
-        [116.390, 39.905, 116.400, 39.920],  # 天安门核心区
-        [116.385, 39.907, 116.395, 39.917],  # 另一个子范围
+        [2.145, 41.385, 2.185, 41.405],  # 整个提取范围
+        [2.160, 41.390, 2.170, 41.400],  # Eixample 街区腹地
+        [2.155, 41.392, 2.165, 41.402],  # 另一个子范围
     ):
         expected = _reference_filter(data, bbox)
         actual = processor.filter_features_by_bbox(data, bbox)

@@ -15,7 +15,11 @@ import json
 
 import pytest
 
+from city_data.cities import CITIES
 from city_data.sources import facilities
+
+# 聚合器现在按**城市对象**取数（不再有数字城市代码）。
+_CITY = CITIES["barcelona"]
 
 
 def _write_geojson(path, features, timestamp="2026-06-21T11:40:10Z"):
@@ -197,7 +201,7 @@ class TestAggregatorWiring:
             tmp_path / "buildings.geojson",
             [_building(building="hospital"), _building(building="school")],
         )
-        overview = asyncio.run(aggregator.build_city_overview(110000, buildings_path=path))
+        overview = asyncio.run(aggregator.build_city_overview(_CITY, buildings_path=path))
 
         keys = [item.key for item in overview.facilities]
         assert keys == ["medical", "public_safety", "education", "heritage", "commerce"]
@@ -212,7 +216,7 @@ class TestAggregatorWiring:
 
         overview = asyncio.run(
             aggregator.build_city_overview(
-                110000,
+                _CITY,
                 buildings_path=tmp_path / "nope.geojson",
             )
         )
