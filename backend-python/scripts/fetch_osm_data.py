@@ -57,6 +57,11 @@ from pathlib import Path
 
 DEFAULT_ENDPOINTS = [
     "https://overpass-api.de/api/interpreter",
+    # lz4 / z 是同一个 Overpass 实例的另外两个入口。
+    # 实测（2026-10-24，本机）：主入口偶尔超时，另两个入口同一时刻可用 ——
+    # 三个都留着，探活阶段换着试，比只有一个入口稳。
+    "https://lz4.overpass-api.de/api/interpreter",
+    "https://z.overpass-api.de/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
     "https://overpass.osm.ch/api/interpreter",
 ]
@@ -64,10 +69,10 @@ DEFAULT_ENDPOINTS = [
 # 环境变量名：逗号分隔的端点 URL 列表。给了就替代默认列表。
 ENDPOINTS_ENV_VAR = "OVERPASS_ENDPOINTS"
 
-# 抓取范围：south, west, north, east = 39.905,116.380,39.925,116.420，
-# 即北京天安门周边约 4 km × 2 km。前端不再默认带 bbox 请求（见 Plan 011），
-# 只有需要子区域时才显式传一个进来。
-DEFAULT_BBOX = (39.905, 116.380, 39.925, 116.420)
+# 抓取范围：south, west, north, east = 41.385,2.145,41.405,2.185，
+# 即西班牙巴塞罗那 Eixample 街区与圣家堂一带，约 2.2 km × 3.4 km。
+# 前端不再默认带 bbox 请求（见 Plan 011），只有需要子区域时才显式传一个进来。
+DEFAULT_BBOX = (41.385, 2.145, 41.405, 2.185)
 
 # 读取超时。查询本身声明了 [timeout:180]（服务端最多算 180 秒），
 # 所以客户端的读超时必须比它大一点，否则服务端还在算的时候客户端就断了。
@@ -84,7 +89,13 @@ BACKOFF_MAX = 60  # 秒，退避上限
 
 # 健康探测：正式查询前的轻量检查。短超时（12 秒）+ 极小查询，
 # 探不通就立刻换下一个端点，不进入重试循环。
+#
+# 12 秒是**默认值**，可以覆盖：慢实例（实测 overpass-api.de 的空查询偶尔要
+# 十几秒才响应）会被误判成「不可达」而整批跳过 —— 那不是端点死了，
+# 只是这一次的链路慢。用环境变量 OVERPASS_PROBE_TIMEOUT 或 --probe-timeout
+# 调大即可；**不要把默认值调大**，默认值要保持「死端点快速排除」。
 PROBE_TIMEOUT = 12  # 秒
+PROBE_TIMEOUT_ENV_VAR = "OVERPASS_PROBE_TIMEOUT"
 PROBE_QUERY = "[out:json];node(1);out;"  # 按 id 取单个节点，最轻量的一条查询
 
 # 默认输出目录：<repo>/backend-python/geojson（本脚本位于 backend-python/scripts/）
@@ -251,12 +262,45 @@ def resolve_endpoints(explicit=None, env=None) -> list:
     return list(DEFAULT_ENDPOINTS)
 
 
-def fetch_overpass(query: str, endpoints):
+def resolve_probe_timeout(explicit=None, env=None) -> int:
+    """决定这次探活用的超时秒数。
+
+    优先级：命令行 --probe-timeout > 环境变量 OVERPASS_PROBE_TIMEOUT > 默认值。
+
+    环境变量里不是正整数就忽略它（回落到默认值）并打印一行提示 ——
+    静默吞掉一个写错的环境变量会让人以为超时已经生效了。
+    """
+    if explicit is not None:
+        return int(explicit)
+    environ = os.environ if env is None else env
+    raw = environ.get(PROBE_TIMEOUT_ENV_VAR)
+    if raw is None or not str(raw).strip():
+        return PROBE_TIMEOUT
+    try:
+        value = int(str(raw).strip())
+    except ValueError:
+        print(
+            f"[fetch_osm_data] ignoring invalid {PROBE_TIMEOUT_ENV_VAR}: {raw!r}",
+            file=sys.stderr,
+        )
+        return PROBE_TIMEOUT
+    if value <= 0:
+        print(
+            f"[fetch_osm_data] ignoring non-positive {PROBE_TIMEOUT_ENV_VAR}: {raw!r}",
+            file=sys.stderr,
+        )
+        return PROBE_TIMEOUT
+    return value
+
+
+def fetch_overpass(query: str, endpoints, probe_timeout: int = PROBE_TIMEOUT):
     """依次尝试端点，返回 (数据, 成功的端点)。全部失败则抛 FetchError。
 
     每个端点分两步：先做健康探测（短超时），探不通就立刻换下一个 ——
     **不进入重试循环**，不为死端点白等 3 × HTTP_TIMEOUT 秒。
     探测通过的端点才进入正式查询的重试循环。
+
+    ``probe_timeout`` 让调用方按链路情况调大探活窗口（慢实例不是死实例）。
 
     HTTP 200 并不代表成功：Overpass 会在 "remark" 字段里报告运行时错误
     （查询超时等），而只收录部分区域数据的实例会对本项目这个 bbox
@@ -265,7 +309,7 @@ def fetch_overpass(query: str, endpoints):
     """
     failures = []
     for endpoint in endpoints:
-        if not probe_endpoint(endpoint):
+        if not probe_endpoint(endpoint, timeout=probe_timeout):
             failures.append(f"  {endpoint} [probe] unreachable")
             continue
         for attempt in range(1, MAX_ATTEMPTS + 1):
@@ -503,6 +547,14 @@ def parse_args(argv=None):
         default=None,
         help="只抓取其中一类数据",
     )
+    parser.add_argument(
+        "--probe-timeout",
+        type=int,
+        default=None,
+        help="健康探测的超时秒数（默认 %d；也可用环境变量 %s）。"
+        "慢实例不是死实例 —— 调大它，别把慢端点误判成不可达。"
+        % (PROBE_TIMEOUT, PROBE_TIMEOUT_ENV_VAR),
+    )
     return parser.parse_args(argv)
 
 
@@ -510,11 +562,13 @@ def main(argv=None) -> int:
     args = parse_args(argv)
     bbox = parse_bbox(args.bbox)
     endpoints = resolve_endpoints(args.endpoint)
+    probe_timeout = resolve_probe_timeout(args.probe_timeout)
     out_dir = Path(args.out_dir)
     datasets = ["buildings", "roads"] if args.only is None else [args.only]
 
     print(f"[fetch_osm_data] bbox (south,west,north,east) = {bbox}")
     print(f"[fetch_osm_data] out-dir = {out_dir}")
+    print(f"[fetch_osm_data] probe timeout = {probe_timeout}s")
     print(f"[fetch_osm_data] endpoints ({len(endpoints)}):")
     for endpoint in endpoints:
         print(f"[fetch_osm_data]   - {endpoint}")
@@ -524,7 +578,7 @@ def main(argv=None) -> int:
         query = build_query(kind, bbox)
         print(f"[fetch_osm_data] fetching {kind} ...")
         try:
-            data, endpoint = fetch_overpass(query, endpoints)
+            data, endpoint = fetch_overpass(query, endpoints, probe_timeout=probe_timeout)
         except FetchError as exc:
             print(f"[fetch_osm_data] ERROR: {exc}", file=sys.stderr)
             print(
