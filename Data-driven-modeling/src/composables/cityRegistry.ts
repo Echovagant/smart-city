@@ -22,6 +22,7 @@ export interface CityOption {
 export const CITY_OPTIONS: CityOption[] = [
   { id: 'barcelona', label: '巴塞罗那' },
   { id: 'milano', label: '米兰' },
+  { id: 'nuernberg', label: '纽伦堡' },
 ]
 
 /** 城市 id 是否已知。 */

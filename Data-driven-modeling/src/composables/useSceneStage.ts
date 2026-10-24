@@ -111,6 +111,13 @@ export const CITY_SCENES: Record<string, CityScene> = {
     zoomLevel: 1500,
     streetPosition: { lng: 9.1919, lat: 45.46355 },
   },
+  nuernberg: {
+    // 老城的市场广场（Hauptmarkt）：中世纪老城的开阔地。
+    center: { lng: 11.0770, lat: 49.4539 },
+    zoomLevel: 1500,
+    // 平视落点：教堂街（Kirchenplatz）一带，正北朝北能看到圣洛伦佐教堂与城墙塔楼。
+    streetPosition: { lng: 11.0768, lat: 49.4543 },
+  },
 }
 
 /** 城市配置参数。 */

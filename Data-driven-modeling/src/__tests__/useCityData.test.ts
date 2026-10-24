@@ -2,8 +2,19 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { Mock } from 'vitest'
 import { defineComponent, h, isReactive } from 'vue'
 import { mount, flushPromises } from '@vue/test-utils'
-import { useCityData } from '@/composables/useCityData'
+import { useCityData, readCityFromLocation } from '@/composables/useCityData'
+import { CITY_OPTIONS } from '@/composables/cityRegistry'
+import { CITY_SCENES, cityConfig, setActiveCityScene } from '@/composables/useSceneStage'
 import { ApiError } from '@/api/client'
+
+/** 当前城心 / 平视落点的快照（换城会就地改 cityConfig）。 */
+function cityConfigSnapshot() {
+  return {
+    center: { ...cityConfig.center },
+    zoomLevel: cityConfig.zoomLevel,
+    streetPosition: cityConfig.streetPosition ? { ...cityConfig.streetPosition } : undefined,
+  }
+}
 
 const originalFetch = globalThis.fetch
 
@@ -217,5 +228,52 @@ describe('useCityData', () => {
     // 轮询失败时保留上一次的读数（拿旧值冒充新值是不行的，但也别清空）
     await refreshCityOverview()
     expect(cityOverview.value).not.toBeNull()
+  })
+})
+
+describe('多城', () => {
+  it('可选城市与场景参数一一对应', () => {
+    // 少一个场景参数 → 切到那座城时相机还用着上一座城的城心。
+    for (const option of CITY_OPTIONS) {
+      expect(CITY_SCENES[option.id]).toBeDefined()
+    }
+  })
+
+  it('城心是逐城不同的（不是通用常量）', () => {
+    const centers = CITY_OPTIONS.map(option => CITY_SCENES[option.id].center)
+    const unique = new Set(centers.map(center => `${center.lng},${center.lat}`))
+    expect(unique.size).toBe(CITY_OPTIONS.length)
+  })
+
+  it('setActiveCityScene 换城心、鸟瞰高度与平视落点', () => {
+    const before = { ...cityConfigSnapshot() }
+    expect(setActiveCityScene('nuernberg')).toBe(true)
+    const after = cityConfigSnapshot()
+    expect(after.center.lng).toBeCloseTo(CITY_SCENES.nuernberg.center.lng, 6)
+    expect(after.center.lat).toBeCloseTo(CITY_SCENES.nuernberg.center.lat, 6)
+    expect(after.streetPosition).toBeDefined()
+    // 换回去，别把后面的用例带偏
+    setActiveCityScene('barcelona')
+    expect(cityConfigSnapshot().center.lng).toBeCloseTo(before.center.lng, 6)
+  })
+
+  it('未知城市不改任何东西', () => {
+    const before = cityConfigSnapshot()
+    expect(setActiveCityScene('atlantis')).toBe(false)
+    expect(cityConfigSnapshot().center).toEqual(before.center)
+  })
+
+  it('地址栏里的 ?city= 决定初始城市，认不出的值回落到默认城市', () => {
+    const original = window.location.search
+    try {
+      window.history.replaceState({}, '', '/?city=nuernberg')
+      expect(readCityFromLocation()).toBe('nuernberg')
+      window.history.replaceState({}, '', '/?city=atlantis')
+      expect(readCityFromLocation()).toBe('barcelona')
+      window.history.replaceState({}, '', '/')
+      expect(readCityFromLocation()).toBe('barcelona')
+    } finally {
+      window.history.replaceState({}, '', original || '/')
+    }
   })
 })

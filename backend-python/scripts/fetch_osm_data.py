@@ -82,6 +82,7 @@ DEFAULT_BBOX = (41.3900, 2.1580, 41.4050, 2.1780)
 CITY_BBOXES = {
     "barcelona": DEFAULT_BBOX,
     "milano": (45.4590, 9.1830, 45.4700, 9.1990),
+    "nuernberg": (49.4470, 11.0680, 49.4600, 11.0900),
 }
 DEFAULT_CITY = "barcelona"
 

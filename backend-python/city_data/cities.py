@@ -81,6 +81,16 @@ CITIES: Dict[str, City] = {
         longitude=9.1919,
         timezone="Europe/Rome",
     ),
+    # 纽伦堡：中世纪老城（城墙 + 塔楼）。**高度标注覆盖最好的一座**
+    # （实测 59%，巴塞罗那 68%、米兰 45%），城墙塔楼在 OSM 里是独立建模的，
+    # 所以天际线有辨识度。
+    "nuernberg": City(
+        id="nuernberg",
+        name="纽伦堡",
+        latitude=49.4539,
+        longitude=11.0770,
+        timezone="Europe/Berlin",
+    ),
 }
 
 # 不传 city 参数时用它。

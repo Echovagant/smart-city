@@ -140,7 +140,7 @@ CSP_REPORT_ONLY=
 | `geojson/<城市 id>/buildings.geojson` | 建筑面（`Polygon` / `MultiPolygon`） |
 | `geojson/<城市 id>/roads.geojson` | 道路（`LineString` / `Polygon`） |
 
-当前有 **巴塞罗那（`barcelona`）** 与 **米兰（`milano`）** 两座城。
+当前有三座城：**巴塞罗那（`barcelona`）**、**米兰（`milano`）**、**纽伦堡（`nuernberg`）**。
 城市 id 与 `city_data/cities.py` 的表一一对应。
 
 全新 clone 之后用抓取脚本重新生成（只需要 Python 标准库）：
@@ -149,6 +149,7 @@ CSP_REPORT_ONLY=
 cd backend-python
 ./.venv/Scripts/python.exe scripts/fetch_osm_data.py --city barcelona --out-dir geojson/barcelona
 ./.venv/Scripts/python.exe scripts/fetch_osm_data.py --city milano    --out-dir geojson/milano
+./.venv/Scripts/python.exe scripts/fetch_osm_data.py --city nuernberg --out-dir geojson/nuernberg
 ```
 
 `--city` 给出**每座城市各自的默认取景范围**（取景范围是逐城的事实：密度差很多）。

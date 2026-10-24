@@ -36,6 +36,7 @@
 |---|---|---|
 | `barcelona`（默认） | `41.3900,2.1580,41.4050,2.1780` | 巴塞罗那 Eixample 街区与圣家堂一带，约 1.7 km × 1.9 km |
 | `milano` | `45.4590,9.1830,45.4700,9.1990` | 米兰大教堂与老城一带，约 1.2 km × 1.1 km |
+| `nuernberg` | `49.4470,11.0680,49.4600,11.0900` | 纽伦堡中世纪老城与城墙一带，约 1.4 km × 1.4 km |
 
 `--bbox` 可以覆盖 `--city` 给的范围。
 
@@ -120,7 +121,7 @@ OVERPASS_ENDPOINTS="https://a.example/api/interpreter,https://b.example/api/inte
 | 参数 | 默认值 | 说明 |
 |---|---|---|
 | `--endpoint URL` | 无 | 只用这一个 Overpass 端点（不给就按上面的顺序逐个试） |
-| `--city barcelona\|milano` | `barcelona` | 选哪座城市的默认取景范围（`--bbox` 可覆盖） |
+| `--city barcelona\|milano\|nuernberg` | `barcelona` | 选哪座城市的默认取景范围（`--bbox` 可覆盖） |
 | `--bbox s,w,n,e` | 按 `--city` 给的范围 | 抓取范围，顺序是 `south,west,north,east` |
 | `--out-dir DIR` | `backend-python/geojson` | GeoJSON 输出目录，不存在会自动创建 |
 | `--only buildings\|roads` | 两者都抓 | 只抓其中一类数据 |
