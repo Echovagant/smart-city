@@ -48,7 +48,7 @@ function payloadSource() {
   }
 }
 
-const CENTER = { lng: 2.165, lat: 41.395 }
+const CENTER = { lng: 2.1652, lat: 41.39585 }
 
 describe('AreaStats', () => {
   it('还没选区域时给出空态与半径档位', () => {
@@ -110,7 +110,7 @@ describe('AreaStats', () => {
     expect(text).toContain('历史建筑 9')
 
     // 选中范围与来源
-    expect(wrapper.find('.dc-area-selection').text()).toBe('2.165000, 41.395000 · 半径 300 m')
+    expect(wrapper.find('.dc-area-selection').text()).toBe('2.165200, 41.395850 · 半径 300 m')
     expect(wrapper.find('.dc-area-source').text()).toContain('OpenStreetMap 本地快照')
     // 本地快照不是实时数据，要照实标
     expect(wrapper.find('.dc-area-source').text()).toContain('（非实时）')

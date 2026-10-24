@@ -1323,16 +1323,16 @@ describe('深色底座', () => {
 describe('SmartCity city metrics strip', () => {
   /** 指标带上的三个来源标注。 */
   const SOURCE_AIR = {
-    name: '中国环境监测总站',
-    url: 'https://air.cnemc.cn:18007/CityData/GetAllCityRealTimeAQIModels',
+    name: 'Open-Meteo 空气质量（CAMS 模型再分析）',
+    url: 'https://air-quality-api.open-meteo.com/v1/air-quality',
     observed_at: '2026-10-22T04:00:00Z',
     fetched_at: '2026-10-22T04:30:00Z',
     realtime: true,
     estimated: false,
   }
   const SOURCE_WEATHER = {
-    name: '中国天气网',
-    url: 'http://www.weather.com.cn/data/sk/101010100.html',
+    name: 'Open-Meteo 天气预报',
+    url: 'https://api.open-meteo.com/v1/forecast',
     observed_at: '2026-10-21T09:05:00Z',
     fetched_at: '2026-10-22T04:30:00Z',
     realtime: false,
@@ -1354,7 +1354,7 @@ describe('SmartCity city metrics strip', () => {
     const tempValue = degrade.includes('weather_temp') ? null : 18
     const loadValue = degrade.includes('road_load_index') ? null : 63.5
     return {
-      city: { id: 'barcelona', name: '巴塞罗那', latitude: 41.395, longitude: 2.165, timezone: 'Europe/Madrid' },
+      city: { id: 'barcelona', name: '巴塞罗那', latitude: 41.39585, longitude: 2.1652, timezone: 'Europe/Madrid' },
       generated_at: '2026-10-22T04:00:00Z',
       metrics: [
         {
@@ -1393,7 +1393,7 @@ describe('SmartCity city metrics strip', () => {
         },
       ],
       series: [],
-      degraded: degrade.map(key => (key === 'aqi' ? '中国环境监测总站' : key)),
+      degraded: degrade.map(key => (key === 'aqi' ? 'Open-Meteo 空气质量（CAMS 模型再分析）' : key)),
     }
   }
 
@@ -1422,8 +1422,8 @@ describe('SmartCity city metrics strip', () => {
     // 空气质量的等级徽标
     expect(text).toContain('良')
     // 来源标注：来源名 + 观测时间
-    expect(text).toContain('中国环境监测总站')
-    expect(text).toContain('中国天气网')
+    expect(text).toContain('Open-Meteo 空气质量（CAMS 模型再分析）')
+    expect(text).toContain('Open-Meteo 天气预报')
     expect(text).toContain('本地 OSM 路网数据')
     // 模型估算项必须标出来
     expect(text).toContain('（模型估算）')
@@ -1500,7 +1500,7 @@ describe('SmartCity city metrics strip', () => {
 // ---------------------------------------------------------------------------
 describe('大屏骨架的 DOM 契约', () => {
   const overviewStub = {
-    city: { id: 'barcelona', name: '巴塞罗那', latitude: 41.395, longitude: 2.165, timezone: 'Europe/Madrid' },
+    city: { id: 'barcelona', name: '巴塞罗那', latitude: 41.39585, longitude: 2.1652, timezone: 'Europe/Madrid' },
     generated_at: '2026-10-22T04:00:00Z',
     metrics: [
       {
@@ -1512,8 +1512,8 @@ describe('大屏骨架的 DOM 契约', () => {
         level_label: '良',
         extra: {},
         source: {
-          name: '中国环境监测总站',
-          url: 'https://air.cnemc.cn:18007/x',
+          name: 'Open-Meteo 空气质量（CAMS 模型再分析）',
+          url: 'https://air-quality-api.open-meteo.com/v1/air-quality',
           observed_at: '2026-10-22T04:00:00Z',
           fetched_at: '2026-10-22T04:30:00Z',
           realtime: true,
@@ -1630,8 +1630,8 @@ describe('大屏骨架的 DOM 契约', () => {
 
 /** 事件流的来源标注。 */
 const S3_SOURCE = {
-  name: '中国环境监测总站',
-  url: 'https://air.cnemc.cn:18007/x',
+  name: 'Open-Meteo 空气质量（CAMS 模型再分析）',
+  url: 'https://air-quality-api.open-meteo.com/v1/air-quality',
   observed_at: '2026-10-22T04:00:00Z',
   fetched_at: '2026-10-22T04:30:00Z',
   realtime: true,
@@ -1702,7 +1702,7 @@ const s3RoadFeature = {
 }
 
 const s3Overview = (events: CityEvent[]): CityOverview => ({
-  city: { id: 'barcelona', name: '巴塞罗那', latitude: 41.395, longitude: 2.165, timezone: 'Europe/Madrid' },
+  city: { id: 'barcelona', name: '巴塞罗那', latitude: 41.39585, longitude: 2.1652, timezone: 'Europe/Madrid' },
   generated_at: '2026-10-22T04:00:00Z',
   metrics: [
     {
@@ -2121,7 +2121,7 @@ describe('事件标记的屏幕位置', () => {
     // 回归对照：后端的「数据范围中心」（OSM 围盒中心）比城心偏北约 1.1 km。
     // 用它当标记落点，相机转到某些方位角时它会掉到屏幕下方之外 ——
     // 这正是修掉的缺陷，所以这条断言钉住「不能退回那个位置」。
-    const CITY_CENTER = { lng: 2.165, lat: 41.395 }
+    const CITY_CENTER = { lng: 2.1652, lat: 41.39585 }
     const DATA_EXTENT_CENTER = { lng: 2.1694155, lat: 41.4048679 }
     const altitude = 1500
     const distance = 1500

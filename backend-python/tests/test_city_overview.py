@@ -150,8 +150,8 @@ class TestCityOverviewEndpoint:
         payload = response.json()
         assert payload["city"]["id"] == "barcelona"
         assert payload["city"]["name"] == "巴塞罗那"
-        assert payload["city"]["latitude"] == pytest.approx(41.3950)
-        assert payload["city"]["longitude"] == pytest.approx(2.1650)
+        assert payload["city"]["latitude"] == pytest.approx(41.39585)
+        assert payload["city"]["longitude"] == pytest.approx(2.1652)
         assert payload["city"]["timezone"] == "Europe/Madrid"
         # 旧的数字代码字段已经不存在了
         assert "code" not in payload["city"]

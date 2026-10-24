@@ -54,12 +54,21 @@ class City:
 
 # 本项目当前支持的城市。取数点落在 Eixample 街区腹地，
 # 圣家堂（41.4036, 2.1744）落在取景范围的北侧。
+#
+# 这个坐标同时是三件事，**刻意取同一个值**：
+# - 指标源的取数点（open-meteo 按它取数）；
+# - 前端 ``cityConfig.center``（相机绕行中心）；
+# - 全市级事件光柱的落点。
+#
+# 选它的原因不是「好看」，而是**实测**：这个点在 Eixample 的一处开口，
+# 离最近的建筑边界 24.6 m（站在露天，不是站在某栋楼的屋顶上）。
+# 之前取的那个点落在两栋楼的里面 —— 光柱会有一截插在建筑里。
 CITIES: Dict[str, City] = {
     "barcelona": City(
         id="barcelona",
         name="巴塞罗那",
-        latitude=41.3950,
-        longitude=2.1650,
+        latitude=41.39585,
+        longitude=2.1652,
         timezone="Europe/Madrid",
     ),
 }

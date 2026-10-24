@@ -15,8 +15,8 @@ import type { CityEvent, CityOverview, SourceInfo } from '../../../types/city'
  */
 
 const SOURCE: SourceInfo = {
-  name: '中国环境监测总站',
-  url: 'https://air.cnemc.cn:18007/CityData/GetAllCityRealTimeAQIModels',
+  name: 'Open-Meteo 空气质量（CAMS 模型再分析）',
+  url: 'https://air-quality-api.open-meteo.com/v1/air-quality',
   observed_at: '2026-10-22T04:00:00Z',
   fetched_at: '2026-10-22T04:30:00Z',
   realtime: true,
@@ -36,7 +36,7 @@ const event = (overrides: Partial<CityEvent> = {}): CityEvent => ({
 })
 
 const overview = (overrides: Partial<CityOverview> = {}): CityOverview => ({
-  city: { id: 'barcelona', name: '巴塞罗那', latitude: 41.395, longitude: 2.165, timezone: 'Europe/Madrid' },
+  city: { id: 'barcelona', name: '巴塞罗那', latitude: 41.39585, longitude: 2.1652, timezone: 'Europe/Madrid' },
   generated_at: '2026-10-22T04:00:00Z',
   metrics: [],
   series: [],
@@ -117,7 +117,7 @@ describe('formatEventTime', () => {
 })
 
 describe('resolveEventLocation', () => {
-  const CITY_CENTER = { lng: 2.165, lat: 41.395 }
+  const CITY_CENTER = { lng: 2.1652, lat: 41.39585 }
 
   it('puts a city-level event on the city centre', () => {
     // 全市级事件没有空间位置 → 落在城心（`cityConfig.center`，也是相机的绕行中心）

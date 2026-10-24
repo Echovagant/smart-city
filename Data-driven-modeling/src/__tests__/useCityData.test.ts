@@ -9,7 +9,7 @@ const originalFetch = globalThis.fetch
 
 /** 城市指标端点的一份最小载荷。 */
 const overviewPayload = {
-  city: { id: 'barcelona', name: '巴塞罗那', latitude: 41.395, longitude: 2.165, timezone: 'Europe/Madrid' },
+  city: { id: 'barcelona', name: '巴塞罗那', latitude: 41.39585, longitude: 2.1652, timezone: 'Europe/Madrid' },
   generated_at: '2026-10-22T04:00:00Z',
   metrics: [
     {
@@ -21,8 +21,8 @@ const overviewPayload = {
       level_label: '良',
       extra: {},
       source: {
-        name: '中国环境监测总站',
-        url: 'https://air.cnemc.cn:18007/CityData/GetAllCityRealTimeAQIModels',
+        name: 'Open-Meteo 空气质量（CAMS 模型再分析）',
+        url: 'https://air-quality-api.open-meteo.com/v1/air-quality',
         observed_at: '2026-10-22T04:00:00Z',
         fetched_at: '2026-10-22T04:30:00Z',
         realtime: true,
@@ -169,7 +169,7 @@ describe('useCityData', () => {
     await loadCityOverview()
 
     expect(cityOverview.value?.metrics).toHaveLength(1)
-    expect(cityOverview.value?.metrics[0].source.name).toBe('中国环境监测总站')
+    expect(cityOverview.value?.metrics[0].source.name).toBe('Open-Meteo 空气质量（CAMS 模型再分析）')
     expect(cityOverviewError.value).toBeNull()
     const urls = fetchMock.mock.calls.map(call => call[0])
     expect(urls).toContain('/api/city/overview?city=barcelona')

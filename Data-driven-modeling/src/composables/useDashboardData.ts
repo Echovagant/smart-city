@@ -52,7 +52,7 @@ const POLLUTANT_METRICS: Array<{ key: string; label: string }> = [
 ]
 
 /**
- * CO 的单位是 mg/m³，其余污染物是 μg/m³（cnemc 的口径）。
+ * CO 的单位是 mg/m³，其余污染物是 μg/m³（上游给的是 μg/m³，这里换算成 mg/m³）。
  * 环形图要比较各污染物的相对浓度，必须先统一到 μg/m³ 才能相加。
  */
 const POLLUTANT_UNIT_SCALE: Record<string, number> = { co: 1000 }

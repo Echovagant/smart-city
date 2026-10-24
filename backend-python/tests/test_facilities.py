@@ -72,6 +72,19 @@ class TestClassify:
         # OSM 里 historic=yes 的值就是字符串 "yes"
         assert facilities.classify({"historic": "yes"}) == "heritage"
 
+    def test_european_tag_spellings_are_covered(self):
+        """标签规则覆盖欧洲常见的写法（实测：那一带 building=hospital 一栋都没有）。"""
+        assert facilities.classify({"amenity": "clinic"}) == "medical"
+        assert facilities.classify({"healthcare": "pharmacy"}) == "medical"
+        assert facilities.classify({"amenity": "school"}) == "education"
+        assert facilities.classify({"building": "college"}) == "education"
+        assert facilities.classify({"historic": "heritage"}) == "heritage"
+        assert facilities.classify({"historic": "monument"}) == "heritage"
+        assert facilities.classify({"building": "church"}) == "heritage"
+        assert facilities.classify({"amenity": "place_of_worship"}) == "heritage"
+        assert facilities.classify({"tourism": "attraction"}) == "heritage"
+        assert facilities.classify({"tourism": "artwork"}) == "heritage"
+
     def test_unmatched_buildings_have_no_category(self):
         assert facilities.classify({"building": "yes"}) is None
         assert facilities.classify({"name": "某住宅"}) is None
@@ -111,7 +124,10 @@ class TestCountByCategory:
         assert counts["medical"] == 1
 
     def test_criteria_of_unknown_category_is_empty(self):
-        assert facilities.criteria_of("medical") == ["building=hospital"]
+        medical = facilities.criteria_of("medical")
+        assert "building=hospital" in medical
+        assert "amenity=clinic" in medical
+        # 未知分类是空列表
         assert facilities.criteria_of("不存在的分类") == []
 
 
@@ -146,13 +162,17 @@ class TestFetch:
 
         # 分类名与依据标签都要带上（前端显示「依据 OSM 标签统计」）
         assert by_key["medical"].label == "医疗设施"
-        assert by_key["medical"].criteria == ["building=hospital"]
-        assert by_key["public_safety"].criteria == [
+        # 规则按巴塞罗那的实测标签分布扩过（那一带 building=hospital 一栋都没有），
+        # 所以清单不止一条 —— 断言的是**包含**关系，不是全等。
+        assert "building=hospital" in by_key["medical"].criteria
+        assert "amenity=clinic" in by_key["medical"].criteria
+        for tag in (
             "amenity=police",
             "amenity=fire_station",
             "building=guardhouse",
             "amenity=shelter",
-        ]
+        ):
+            assert tag in by_key["public_safety"].criteria
 
         # 每个分类都带来源；这是**实测**计数，不是模型估算
         for item in result.facilities:

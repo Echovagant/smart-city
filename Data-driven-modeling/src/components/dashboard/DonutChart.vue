@@ -64,10 +64,22 @@ const legend = computed(() =>
   props.slices.map((slice, index) => ({
     key: slice.key,
     label: slice.label,
-    value: slice.value,
+    value: formatNumber(slice.value),
     color: chartColor(index),
   })),
 )
+
+/**
+ * 数值显示：**最多两位小数**，整数就显示整数。
+ *
+ * 原始值可能是 12.570833333333333 这种（24 小时滑动平均除出来的），
+ * 直接渲染会在界面上糊一长串小数 —— 那是原始精度，不是信息量。
+ */
+function formatNumber(value: number): string {
+  if (!Number.isFinite(value)) return '—'
+  const rounded = Math.round(value * 100) / 100
+  return String(rounded)
+}
 </script>
 
 <template>
@@ -102,7 +114,7 @@ const legend = computed(() =>
           :stroke-dashoffset="segment.dashoffset"
           :transform="`rotate(-90 ${CENTER} ${CENTER})`"
         />
-        <text :x="CENTER" :y="CENTER - 2" class="dc-donut-value">{{ centerValue }}</text>
+        <text :x="CENTER" :y="CENTER - 2" class="dc-donut-value">{{ formatNumber(centerValue) }}</text>
         <text :x="CENTER" :y="CENTER + 12" class="dc-donut-label">{{ centerLabel }}</text>
       </svg>
       <ul class="dc-donut-legend">

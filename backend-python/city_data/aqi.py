@@ -132,16 +132,50 @@ def aqi_from_pollutants(concentrations: Mapping[str, Optional[float]]) -> Option
     ``concentrations`` 的键是 ``pm25`` / ``pm10`` / ``o3`` / ``no2`` /
     ``so2`` / ``co``，值是 μg/m³。全部取不到 → 返回 ``None``。
     """
-    best: Optional[float] = None
+    best = _max_iaqi(concentrations)
+    if best is None:
+        return None
+    return int(round(min(best[1], 500.0)))
+
+
+# 首要污染物的中文名（国标里「首要污染物」就是 IAQI 最高的那一项）。
+POLLUTANT_LABELS: Dict[str, str] = {
+    "pm25": "PM2.5",
+    "pm10": "PM10",
+    "o3": "O3",
+    "no2": "NO2",
+    "so2": "SO2",
+    "co": "CO",
+}
+
+
+def primary_pollutant(concentrations: Mapping[str, Optional[float]]) -> Optional[str]:
+    """首要污染物 —— **IAQI 最高的那一项**（国标定义）。
+
+    全部取不到时返回 ``None``（不编一个污染物出来）。
+    """
+    best = _max_iaqi(concentrations)
+    if best is None:
+        return None
+    return POLLUTANT_LABELS.get(best[0], best[0])
+
+
+def _max_iaqi(
+    concentrations: Mapping[str, Optional[float]]
+) -> Optional[Tuple[str, float]]:
+    """(污染物 key, 最大 IAQI)。全取不到时返回 ``None``。"""
+    best_key: Optional[str] = None
+    best_value = -1.0
     for pollutant in BREAKPOINTS:
         value = iaqi(pollutant, concentrations.get(pollutant))
         if value is None:
             continue
-        if best is None or value > best:
-            best = value
-    if best is None:
+        if value > best_value:
+            best_key = pollutant
+            best_value = value
+    if best_key is None:
         return None
-    return int(round(min(best, 500.0)))
+    return best_key, best_value
 
 
 def aqi_level(value: Optional[float]) -> Optional[Tuple[int, str]]:

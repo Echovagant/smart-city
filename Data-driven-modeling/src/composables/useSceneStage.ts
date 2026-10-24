@@ -85,30 +85,37 @@ export interface CityConfig {
 }
 
 export const cityConfig: CityConfig = {
-  // Eixample 街区腹地：全项目只有一个「城心」—— 就是这里的 `center`，
+  // Eixample 街区腹地的一处开口：全项目只有一个「城心」—— 就是这里的 `center`，
   // 相机的绕行中心、全市级事件标记的落点都指向它。
   // 后端那个「数据范围中心」（OSM 围盒中心）与它**不是同一个点**，
   // **不能**拿来放标记（默认鸟瞰视角下会落在屏幕之外）。
-  center: { lng: 2.165, lat: 41.395 },
+  //
+  // 选这个点是因为**实测**：它离最近的建筑边界 24.6 m —— 站在露天，
+  // 而不是站在某栋楼的屋顶上（事件光柱是 300 m 高的，落点被楼压着不好看）。
+  center: { lng: 2.1652, lat: 41.39585 },
   zoomLevel: 1500,
   // 平视模式的落点**单独给一个**：城心在街区内部，1.7 m 的相机停在那里会钻进建筑里。
-  // 这里取圣家堂南侧的开放广场，正南朝北（heading=0）能看见圣家堂的塔尖。
-  streetPosition: { lng: 2.1744, lat: 41.4005 },
+  // 这里取圣家堂南侧的**加泰罗尼亚广场**（离最近建筑 47.5 m，离圣家堂 113 m），
+  // 正南朝北（heading=0）能看见圣家堂的塔尖。
+  streetPosition: { lng: 2.1736, lat: 41.4026 },
   // 平视视角：1.7m 是人眼高度，朝向正北（heading=0）
   streetLevel: { height: 1.7, heading: 0 },
   // 建筑没有任何高度标签时的兜底高度（米）
   defaultBuildingHeight: 30,
   // 道路分级表：按 OSM 的 highway 标签分级渲染。
   //
-  // 读的是 highway，不是 type：实测提取数据里 2260 条道路全部带 highway，
+  // 读的是 highway，不是 type：实测提取数据里每条道路都带 highway，
   // 而 type 一个都没有（建筑上的 type 是 'multipolygon' 几何标签，与道路等级无关）。
   //
-  // 实测标签分布（backend-python/geojson/roads.geojson，2026-10-20）：
-  //   footway 1117、pedestrian 314、service 263、steps 235、residential 118、
-  //   tertiary 47、primary 40、unclassified 27、path 26、secondary 21、……
-  // 分级就是照这个分布定的：人行道/步行区占了一半，所以给它们最细最浅的线。
+  // 实测标签分布（backend-python/geojson/roads.geojson，2026-10-24，3794 条道路）：
+  //   footway 2138、cycleway 470、living_street 209、residential 201、secondary 179、
+  //   pedestrian 129、tertiary 125、steps 105、service 93、primary 56、
+  //   tertiary_link 38、corridor 33、secondary_link 12、construction 5、bus_stop 1
+  // 分级就是照这个分布定的：人行道/步行区占了一半以上，所以给它们最细最浅的线。
+  // `*_link` 是上级道路的匝道（归次干道），`living_street` 是共享居住街道（归支路）——
+  // 不收进来的话近 300 条路会掉进「其他道路」兜底档。
   //
-  // 宽度是**几何属性**，只能在装载时定：运行时改宽度会触发 2260 条路的几何重建
+  // 宽度是**几何属性**，只能在装载时定：运行时改宽度会触发每条路的几何重建
   // （与「换材质对象」同源的禁忌，见 applyTheme 的说明）。所以宽度**不做成主题项** ——
   // 全局默认一份、所有主题共享，否则切主题会出现「颜色变了、宽度没变」的割裂。
   //
@@ -128,7 +135,7 @@ export const cityConfig: CityConfig = {
     },
     {
       name: '次干道',
-      highway: ['secondary', 'tertiary'],
+      highway: ['secondary', 'tertiary', 'secondary_link', 'tertiary_link'],
       roadKey: 'secondary',
       flowing: true,
       width: 5,
@@ -138,7 +145,7 @@ export const cityConfig: CityConfig = {
     },
     {
       name: '支路',
-      highway: ['residential', 'unclassified', 'service'],
+      highway: ['residential', 'unclassified', 'service', 'living_street'],
       roadKey: 'local',
       flowing: true,
       width: 3,
@@ -172,7 +179,7 @@ export const cityConfig: CityConfig = {
   }
 }
 
-/** highway 标签 → 分级 的查表，建一次就够（2260 条道路各查一次）。 */
+/** highway 标签 → 分级 的查表，建一次就够（几千条道路各查一次）。 */
 export const ROAD_TIER_BY_HIGHWAY = cityConfig.roadTiers.reduce((map, tier) => {
   tier.highway?.forEach(tag => map.set(tag, tier))
   return map

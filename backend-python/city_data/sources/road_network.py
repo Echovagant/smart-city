@@ -55,10 +55,18 @@ SLOTS = (("road_load_index", "路网负载（模型估算）", "指数"),)
 
 # 道路分级表 —— **必须与前端 SmartCity.vue 的 roadTiers 保持一致**，
 # 否则「画出来的路」与「统计出来的路」会对不上。
+#
+# 取值按实测标签分布选的（巴塞罗那取景范围 3794 条道路，2026-10-24）：
+#   footway 2138、cycleway 470、living_street 209、residential 201、secondary 179、
+#   pedestrian 129、tertiary 125、steps 105、service 93、primary 56、
+#   tertiary_link 38、corridor 33、secondary_link 12、construction 5、bus_stop 1
+# `*_link` 是上级道路的匝道/支路（`tertiary_link` 归次干道），
+# `living_street` 是共享居住街道（按支路处理）—— 不收进来的话近 300 条路
+# 会掉进「其他道路」兜底档。
 ROAD_TIERS: Tuple[Tuple[str, str, Tuple[str, ...]], ...] = (
     ("main", "主干道", ("motorway", "trunk", "primary")),
-    ("secondary", "次干道", ("secondary", "tertiary")),
-    ("local", "支路", ("residential", "unclassified", "service")),
+    ("secondary", "次干道", ("secondary", "tertiary", "secondary_link", "tertiary_link")),
+    ("local", "支路", ("residential", "unclassified", "service", "living_street")),
     ("footway", "人行道/步行区", ("footway", "pedestrian", "steps", "path", "cycleway")),
 )
 TIER_OTHER = "other"

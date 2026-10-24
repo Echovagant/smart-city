@@ -106,7 +106,7 @@ const jsonResponse = (payload: unknown) =>
   })
 
 const OVERVIEW = {
-  city: { id: 'barcelona', name: '巴塞罗那', latitude: 41.395, longitude: 2.165, timezone: 'Europe/Madrid' },
+  city: { id: 'barcelona', name: '巴塞罗那', latitude: 41.39585, longitude: 2.1652, timezone: 'Europe/Madrid' },
   generated_at: '2026-10-22T04:00:00Z',
   metrics: [],
   series: [],

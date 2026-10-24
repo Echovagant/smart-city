@@ -210,7 +210,7 @@ describe('useAreaQuery', () => {
     const { center, stats, loading, error, pickAt } = withSetup(() => useAreaQuery())
 
     expect(loading.value).toBe(false)
-    const pending = pickAt(2.165, 41.395)
+    const pending = pickAt(2.1652, 41.39585)
     expect(loading.value).toBe(true)
     await pending
     await flushPromises()
@@ -220,12 +220,12 @@ describe('useAreaQuery', () => {
     expect(url.startsWith('/api/city/area?bbox=')).toBe(true)
     const bbox = decodeURIComponent(url.split('bbox=')[1]!).split(',').map(Number)
     expect(bbox).toHaveLength(4)
-    expect(bbox[0]).toBeLessThan(2.165)
-    expect(bbox[1]).toBeLessThan(41.395)
-    expect(bbox[2]).toBeGreaterThan(2.165)
-    expect(bbox[3]).toBeGreaterThan(41.395)
+    expect(bbox[0]).toBeLessThan(2.1652)
+    expect(bbox[1]).toBeLessThan(41.39585)
+    expect(bbox[2]).toBeGreaterThan(2.1652)
+    expect(bbox[3]).toBeGreaterThan(41.39585)
 
-    expect(center.value).toEqual({ lng: 2.165, lat: 41.395 })
+    expect(center.value).toEqual({ lng: 2.1652, lat: 41.39585 })
     expect(stats.value?.building_count).toBe(1039)
     expect(stats.value?.road_length_km).toBe(54.4386)
     expect(loading.value).toBe(false)

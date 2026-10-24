@@ -30,7 +30,7 @@ export const EVENT_RULE_THRESHOLDS = {
   weatherHigh: 35,
 } as const
 
-/** AQI 分级带（上界含端点）：与后端、cnemc 的 `AqiLevel` 一致。 */
+/** AQI 分级带（上界含端点）：与后端 `city_data/aqi.py` 的分级一致。 */
 const AQI_LEVEL_BANDS: Array<{ upper: number; grade: number; label: string }> = [
   { upper: 50, grade: 1, label: '优' },
   { upper: 100, grade: 2, label: '良' },

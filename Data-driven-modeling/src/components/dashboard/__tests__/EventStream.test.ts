@@ -13,8 +13,8 @@ import type { CityEvent } from '../../../../types/city'
  */
 
 const SOURCE = {
-  name: '中国环境监测总站',
-  url: 'https://air.cnemc.cn:18007/CityData/GetAllCityRealTimeAQIModels',
+  name: 'Open-Meteo 空气质量（CAMS 模型再分析）',
+  url: 'https://air-quality-api.open-meteo.com/v1/air-quality',
   observed_at: '2026-10-22T03:00:00Z',
   fetched_at: '2026-10-22T04:30:00Z',
   realtime: true,

@@ -16,8 +16,8 @@ import type { DashboardLine, SourceInfo } from '../../../../types/city'
 
 /** 逐小时源。 */
 const SOURCE_HOURLY: SourceInfo = {
-  name: '中国环境监测总站（逐小时历史）',
-  url: 'https://air.cnemc.cn:18007/HourChangesPublish/GetCityRealTimeAqiHistoryByCondition',
+  name: 'Open-Meteo 空气质量（CAMS 模型再分析）',
+  url: 'https://air-quality-api.open-meteo.com/v1/air-quality',
   observed_at: '2026-10-22T04:00:00Z',
   fetched_at: '2026-10-22T04:30:00Z',
   realtime: false,
@@ -26,8 +26,8 @@ const SOURCE_HOURLY: SourceInfo = {
 
 /** 逐日源。 */
 const SOURCE_DAILY: SourceInfo = {
-  name: '中国环境监测总站（逐日历史）',
-  url: 'https://air.cnemc.cn:18007/HourChangesPublish/GetCityDayAqiHistoryByCondition',
+  name: 'Open-Meteo 空气质量（CAMS 模型再分析）',
+  url: 'https://air-quality-api.open-meteo.com/v1/air-quality',
   observed_at: '2026-10-22T16:00:00Z',
   fetched_at: '2026-10-22T16:30:00Z',
   realtime: false,

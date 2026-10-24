@@ -21,8 +21,8 @@ import type { SourceInfo } from '../../../../types/city'
 
 /** 一份来源标注。 */
 const SOURCE: SourceInfo = {
-  name: '中国环境监测总站',
-  url: 'https://air.cnemc.cn:18007/CityData/GetAllCityRealTimeAQIModels',
+  name: 'Open-Meteo 空气质量（CAMS 模型再分析）',
+  url: 'https://air-quality-api.open-meteo.com/v1/air-quality',
   observed_at: '2026-10-22T04:00:00Z',
   fetched_at: '2026-10-22T04:30:00Z',
   realtime: true,
@@ -66,10 +66,10 @@ describe('MetricCard', () => {
       props: {
         label: '气温',
         value: 18,
-        source: { ...SOURCE, name: '中国天气网', realtime: false },
+        source: { ...SOURCE, name: 'Open-Meteo 天气预报', realtime: false },
       },
     })
-    expect(wrapper.text()).toContain('中国天气网')
+    expect(wrapper.text()).toContain('Open-Meteo 天气预报')
     expect(wrapper.text()).toContain('（非实时）')
   })
 
@@ -93,7 +93,7 @@ describe('MetricCard', () => {
       props: { label: 'AQI', value: 51, source: SOURCE },
     })
     const title = wrapper.find('.dc-metric-source').attributes('title')
-    expect(title).toContain('中国环境监测总站')
+    expect(title).toContain('Open-Meteo 空气质量（CAMS 模型再分析）')
     expect(title).toContain(SOURCE.url)
     expect(title).toContain('取数时间')
   })

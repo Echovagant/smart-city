@@ -17,7 +17,12 @@ import uvicorn
 
 import main
 
-GZIP_THRESHOLD_KB = 400
+# 线缆字节数上限（KB）。这是**回归护栏**：gzip 失效时响应会退回明文，
+# 体积会翻十几倍，立刻越线。
+#
+# 上限跟着数据集走：巴塞罗那取景范围 4366 栋建筑（明文约 8.3 MB），
+# gzip 后实测约 487 KB。原来的 400 KB 是按更小的数据集定的。
+GZIP_THRESHOLD_KB = 600
 
 # 真实 OSM 提取数据（未纳入版本管理），缺失时相关用例跳过。
 OSM_BUILDINGS = Path(__file__).resolve().parent.parent / "geojson" / "buildings.geojson"
@@ -81,7 +86,7 @@ def test_buildings_response_is_gzipped_on_the_wire(live_server):
 
     decompressed = gzip.decompress(raw)
     assert len(decompressed) > len(raw), "压缩后的字节数必须小于解压后"
-    # 真实数据约 1341 KB，gzip 后应落在 400 KB 以内
+    # 真实数据明文约 8.3 MB，gzip 后应落在上限以内
     assert len(raw) <= GZIP_THRESHOLD_KB * 1024, (
         f"线缆字节数 {len(raw) / 1024:.0f} KB 超过 {GZIP_THRESHOLD_KB} KB 上限"
     )

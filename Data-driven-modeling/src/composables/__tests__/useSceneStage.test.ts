@@ -465,8 +465,8 @@ describe('useSceneStage', () => {
   })
 
   it('城心与网格间距是约定的常量', () => {
-    expect(cityConfig.center).toEqual({ lng: 2.165, lat: 41.395 })
-    expect(cityConfig.streetPosition).toEqual({ lng: 2.1744, lat: 41.4005 })
+    expect(cityConfig.center).toEqual({ lng: 2.1652, lat: 41.39585 })
+    expect(cityConfig.streetPosition).toEqual({ lng: 2.1736, lat: 41.4026 })
     expect(cityConfig.zoomLevel).toBe(1500)
     expect(cityConfig.streetLevel).toEqual({ height: 1.7, heading: 0 })
     expect(GRID_SPACING_M).toBe(200)

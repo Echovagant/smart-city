@@ -101,7 +101,7 @@ LOCATION_KIND_GEOMETRY = "geometry"
 # 全项目只有一个城心：前端 ``cityConfig.center``（也是相机的绕行中心）。
 # 全市级事件的坐标由前端按 ``location_kind`` 解析到城心，这里只是后端自己的参考点。
 SCENE_CENTER_FALLBACK = EventLocation(
-    lng=2.1650, lat=41.3950, label="数据范围中心（默认位置）"
+    lng=2.1680, lat=41.3975, label="数据范围中心（默认位置）"
 )
 
 

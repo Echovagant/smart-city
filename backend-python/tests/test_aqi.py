@@ -159,6 +159,29 @@ class TestAqiFromPollutants:
             is None
         )
 
+
+class TestPrimaryPollutant:
+    """首要污染物 = **IAQI 最高的那一项**（国标定义）。"""
+
+    def test_is_the_highest_iaqi_pollutant(self):
+        # pm25=55 → IAQI 75；pm10=100 → IAQI 66.7；其余更低
+        name = aqi.primary_pollutant(
+            {"pm25": 55, "pm10": 100, "o3": 130, "no2": 60, "so2": 100, "co": 3000}
+        )
+        assert name == "PM2.5"
+
+    def test_switches_with_the_concentrations(self):
+        # pm25=55 → IAQI 75；o3=160 → IAQI 100（8 小时口径），更高
+        name = aqi.primary_pollutant({"pm25": 55, "o3": 160})
+        assert name == "O3"
+
+    def test_all_none_is_none(self):
+        assert aqi.primary_pollutant({}) is None
+        assert aqi.primary_pollutant({"pm25": None, "pm10": None}) is None
+
+    def test_labels_cover_every_pollutant(self):
+        assert set(aqi.POLLUTANT_LABELS) == set(aqi.BREAKPOINTS)
+
     def test_result_is_an_integer_between_0_and_500(self):
         value = aqi.aqi_from_pollutants({"pm25": 17.5})
         assert isinstance(value, int)

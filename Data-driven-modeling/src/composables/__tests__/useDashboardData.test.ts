@@ -13,8 +13,8 @@ import type { CityOverview, DashboardMetricCard, SourceInfo } from '../../../typ
 
 /** 空气质量源。 */
 const SOURCE_AIR: SourceInfo = {
-  name: '中国环境监测总站',
-  url: 'https://air.cnemc.cn:18007/CityData/GetAllCityRealTimeAQIModels',
+  name: 'Open-Meteo 空气质量（CAMS 模型再分析）',
+  url: 'https://air-quality-api.open-meteo.com/v1/air-quality',
   observed_at: '2026-10-22T04:00:00Z',
   fetched_at: '2026-10-22T04:30:00Z',
   realtime: true,
@@ -23,8 +23,8 @@ const SOURCE_AIR: SourceInfo = {
 
 /** 天气源（上游时间戳不新鲜 → realtime 为 false）。 */
 const SOURCE_WEATHER: SourceInfo = {
-  name: '中国天气网',
-  url: 'http://www.weather.com.cn/data/sk/101010100.html',
+  name: 'Open-Meteo 天气预报',
+  url: 'https://api.open-meteo.com/v1/forecast',
   observed_at: '2026-10-21T09:05:00Z',
   fetched_at: '2026-10-22T04:30:00Z',
   realtime: false,
@@ -53,7 +53,7 @@ const SOURCE_FACILITIES: SourceInfo = {
 
 /** 造一份城市指标载荷。 */
 const overviewPayload = (): CityOverview => ({
-  city: { id: 'barcelona', name: '巴塞罗那', latitude: 41.395, longitude: 2.165, timezone: 'Europe/Madrid' },
+  city: { id: 'barcelona', name: '巴塞罗那', latitude: 41.39585, longitude: 2.1652, timezone: 'Europe/Madrid' },
   generated_at: '2026-10-22T04:00:00Z',
   metrics: [
     {
@@ -313,7 +313,7 @@ describe('resolveTabView 的趋势序列', () => {
       'so2',
       'co',
     ])
-    // CO 是 mg/m³，其余是 μg/m³（cnemc 的口径）
+    // CO 是 mg/m³，其余是 μg/m³（上游给的是 μg/m³，这里换算成 mg/m³）
     expect(view.line.dailyMetrics.find(metric => metric.key === 'co')?.unit).toBe('mg/m³')
     expect(view.line.dailyMetrics.find(metric => metric.key === 'pm25')?.unit).toBe('μg/m³')
   })

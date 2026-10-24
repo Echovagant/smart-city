@@ -64,7 +64,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from urllib.parse import urlencode
 
 from .. import http
-from ..aqi import AVERAGING_HOURS, aqi_from_pollutants, aqi_level
+from ..aqi import AVERAGING_HOURS, aqi_from_pollutants, aqi_level, primary_pollutant
 from ..cities import City
 from ..http import SourceUnavailable
 from ..models import Metric, Series, SeriesPoint, SourceInfo, SourceResult
@@ -274,10 +274,20 @@ def _aqi_at(records: Sequence[Dict[str, Any]], index: int) -> Optional[int]:
     各污染物的平均窗口按 ``aqi.AVERAGING_HOURS`` 走（O3 是 8 小时，
     其余 24 小时）—— 换算本身交给 ``aqi.aqi_from_pollutants``。
     """
+    concentrations = _concentrations_at(records, index)
+    return aqi_from_pollutants(concentrations)
+
+
+def _concentrations_at(
+    records: Sequence[Dict[str, Any]], index: int
+) -> Dict[str, Optional[float]]:
+    """某个小时上的各污染物平均浓度（**上游单位 μg/m³**）。"""
     concentrations: Dict[str, Optional[float]] = {}
     for _var, key, _label, _unit in POLLUTANTS:
-        concentrations[key] = _window_average(records, index, key, AVERAGING_HOURS[key])
-    return aqi_from_pollutants(concentrations)
+        concentrations[key] = _window_average(
+            records, index, key, AVERAGING_HOURS[key]
+        )
+    return concentrations
 
 
 def _daily_mean(values: Sequence[Optional[float]]) -> Optional[float]:
@@ -333,9 +343,12 @@ def _daily_point(
 
     # 对外的日统计值：键与指标 key 一致，CO 换算成 mg/m³。
     values: Dict[str, Optional[float]] = {
-        key: means.get(key) for key in ("pm25", "pm10", "o3", "no2", "so2")
+        key: (None if means.get(key) is None else round(means[key], 2))
+        for key in ("pm25", "pm10", "o3", "no2", "so2")
     }
-    values["co"] = None if means.get("co") is None else means["co"] * CO_SCALE
+    values["co"] = (
+        None if means.get("co") is None else round(means["co"] * CO_SCALE, 3)
+    )
     return aqi, values
 
 
@@ -375,6 +388,10 @@ def fetch(city: City, timeout: float = http.DEFAULT_TIMEOUT_SECONDS) -> SourceRe
 
     aqi_value = _aqi_at(records, index)
     level = aqi_level(aqi_value)
+    # 首要污染物 = **IAQI 最高的那一项**（国标定义）。
+    # 上游不直接给这个字段，但换算过程本来就知道每一项的 IAQI ——
+    # 自己算出来，别让界面退化成「数据源暂不可用」。
+    primary = primary_pollutant(_concentrations_at(records, index))
 
     aqi_extra: Dict[str, Any] = {
         "aqi_basis": AQI_BASIS,
@@ -382,6 +399,8 @@ def fetch(city: City, timeout: float = http.DEFAULT_TIMEOUT_SECONDS) -> SourceRe
         "attribution": ATTRIBUTION,
         "observed_hour": to_iso(observed_at),
     }
+    if primary is not None:
+        aqi_extra["primary_pollutant"] = primary
     for field_name in EXTRA_CURRENT_FIELDS:
         value = _to_float(current.get(field_name))
         if value is not None:
@@ -410,7 +429,9 @@ def fetch(city: City, timeout: float = http.DEFAULT_TIMEOUT_SECONDS) -> SourceRe
             Metric(
                 key=key,
                 label=label,
-                value=value,
+                # 两位小数：24 小时滑动平均的原始值是 12.570833333333333 这种，
+                # 直接给前端会在界面上糊一长串。
+                value=None if value is None else round(value, 2),
                 unit=unit,
                 extra={
                     "basis": "24 小时滑动平均",

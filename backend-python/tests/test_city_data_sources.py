@@ -442,6 +442,20 @@ class TestAirQualityFetch:
         assert aqi.level == 2
         assert aqi.level_label == "良"
 
+    def test_aqi_carries_the_primary_pollutant(self, monkeypatch):
+        """首要污染物 = IAQI 最高的那一项（国标定义）—— 自己算出来。
+
+        上游不提供这个字段；不补的话界面上的「首要污染物」卡片会退化成
+        「数据源暂不可用」。
+        """
+        payload = _make_air_payload(CONSTANT_CONCENTRATIONS)
+        monkeypatch.setattr(
+            air_quality.http, "request_json", lambda url, **kwargs: payload
+        )
+
+        aqi = _by_key(air_quality.fetch(CITIES["barcelona"]))["aqi"]
+        assert aqi.extra["primary_pollutant"] == "PM2.5"
+
     def test_source_is_marked_estimated_and_carries_the_url(self, monkeypatch):
         payload = _make_air_payload(CONSTANT_CONCENTRATIONS)
         monkeypatch.setattr(

@@ -37,12 +37,28 @@ SLOTS = (("facility_total", "设施分类总数", "处"),)
 #
 # 每条规则是一组 ``(标签名, 标签值)``。注释里写清依据的是哪个 OSM 标签，
 # 前端会把这份清单原样显示出来（「依据 OSM 标签统计」）。
+#
+# 标签取值**按实测数据分布选的**（巴塞罗那 Eixample 一带的建筑普查，
+# 2026-10-24，见 `backend-python/README.md` 的「数据来源」小节）：
+# 那一带 72% 的建筑是 ``building=apartments``，而 ``building=hospital``
+# **一栋都没有** —— 沿用中国的标签习惯会几乎命不中，
+# 所以这里补进了欧洲常见的写法（``amenity=clinic`` / ``healthcare=*`` /
+# ``historic=heritage`` / ``amenity=place_of_worship`` / ``tourism=attraction` …）。
 FACILITY_CATEGORIES: Tuple[Tuple[str, str, Tuple[Tuple[str, str], ...]], ...] = (
     (
         "medical",
         "医疗设施",
         (
             ("building", "hospital"),
+            ("building", "clinic"),
+            ("amenity", "hospital"),
+            ("amenity", "clinic"),
+            ("amenity", "doctors"),
+            ("amenity", "pharmacy"),
+            ("healthcare", "hospital"),
+            ("healthcare", "clinic"),
+            ("healthcare", "doctor"),
+            ("healthcare", "pharmacy"),
         ),
     ),
     (
@@ -51,6 +67,8 @@ FACILITY_CATEGORIES: Tuple[Tuple[str, str, Tuple[Tuple[str, str], ...]], ...] = 
         (
             ("amenity", "police"),
             ("amenity", "fire_station"),
+            ("building", "police"),
+            ("building", "fire_station"),
             ("building", "guardhouse"),
             ("amenity", "shelter"),
         ),
@@ -61,20 +79,37 @@ FACILITY_CATEGORIES: Tuple[Tuple[str, str, Tuple[Tuple[str, str], ...]], ...] = 
         (
             ("building", "school"),
             ("building", "university"),
+            ("building", "college"),
             ("building", "kindergarten"),
+            ("amenity", "school"),
             ("amenity", "college"),
+            ("amenity", "university"),
+            ("amenity", "kindergarten"),
         ),
     ),
     (
         "heritage",
         "历史建筑",
         (
+            ("historic", "yes"),
+            ("historic", "building"),
+            ("historic", "heritage"),
+            ("historic", "monument"),
             ("historic", "city_gate"),
             ("historic", "palace"),
             ("historic", "temple"),
-            ("historic", "building"),
-            ("historic", "yes"),
             ("historic", "monastery"),
+            ("historic", "church"),
+            ("historic", "castle"),
+            ("heritage", "1"),
+            ("building", "palace"),
+            ("building", "church"),
+            ("building", "cathedral"),
+            ("building", "ruins"),
+            ("amenity", "place_of_worship"),
+            ("tourism", "attraction"),
+            ("tourism", "artwork"),
+            ("tourism", "museum"),
         ),
     ),
     (
@@ -85,8 +120,10 @@ FACILITY_CATEGORIES: Tuple[Tuple[str, str, Tuple[Tuple[str, str], ...]], ...] = 
             ("building", "retail"),
             ("building", "office"),
             ("building", "hotel"),
+            ("building", "supermarket"),
             ("shop", "mall"),
             ("office", "government"),
+            ("office", "company"),
         ),
     ),
 )
