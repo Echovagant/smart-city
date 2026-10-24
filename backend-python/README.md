@@ -14,7 +14,8 @@ backend-python/
 ├── city_data/         # 城市运行指标数据层（公开数据源 + 聚合 + 降级）
 │   ├── models.py      #   Pydantic 契约（每个指标都必须带 source）
 │   ├── http.py        #   只用标准库的 JSON 取数封装
-│   ├── city_codes.py  #   cnemc 城市/省份代码表静态快照（只有代码，参数校验用）
+│   ├── cities.py     #   城市表静态快照（含取数点与时区，参数校验用）
+│   ├── aqi.py        #   国标 GB/T 3095-2012 的 IAQI 分段与换算（纯函数）
 │   ├── aggregator.py  #   并发取数 + 缓存 + 降级
 │   ├── events.py      #   纯函数：从真实指标派生事件流
 │   └── sources/       #   一个源一个模块（空气质量 / 天气 / 本地路网 / 设施 / 区域统计）
@@ -145,9 +146,10 @@ cd backend-python
 ./.venv/Scripts/python.exe scripts/fetch_osm_data.py
 ```
 
-脚本默认抓取北京天安门周边 `39.905,116.380,39.925,116.420`
-（south,west,north,east）的范围，多端点轮询 + 重试；**空结果会被当成失败**，
-不会把空文件覆盖到现有数据上。完整参数表和注意事项见 `scripts/README.md`。
+脚本默认抓取巴塞罗那 Eixample 街区与圣家堂一带
+`41.385,2.145,41.405,2.185`（south,west,north,east）的范围，多端点轮询 + 重试；
+**空结果会被当成失败**，不会把空文件覆盖到现有数据上。
+完整参数表和注意事项见 `scripts/README.md`。
 
 **文件缺失或损坏的后果**：`/api/buildings` 与 `/api/roads` 会返回 **503**
 （统一文案「城市数据暂时不可用，请稍后重试」），而不是空集合 —— 详见
@@ -278,7 +280,7 @@ font-src 'self' data:
 - `GET /api/buildings` —— 获取建筑数据
 - `GET /api/roads` —— 获取道路数据
 - `GET /api/traffic-status` —— 获取交通状态（**值由时间确定性推导，随时间变化**，不再是写死的固定值）
-- `GET /api/city/overview?cityCode=110000` —— **城市运行指标聚合**（空气质量 / 天气 / 路网静态指标 / 设施分类），每个指标都带来源标注与时间戳
+- `GET /api/city/overview?city=barcelona` —— **城市运行指标聚合**（空气质量 / 天气 / 路网静态指标 / 设施分类），每个指标都带来源标注与时间戳
 - `GET /api/city/area?bbox=min_lon,min_lat,max_lon,max_lat` —— **矩形范围的空间统计**（`bbox` 必填）
 
 `/api/traffic-status` 不校验 API key（前端不携带 key，这个端点必须始终可访问）。
@@ -315,11 +317,11 @@ font-src 'self' data:
 ### `GET /api/city/overview` —— 城市运行指标
 
 把**真实公开数据**聚合成一份带来源标注与时间戳的统一契约。实现在 `city_data/` 包里
-（`models.py` 契约 / `http.py` 取数 / `sources/*` 一个源一个模块 / `aggregator.py`
-并发 + 缓存 + 降级）。
+（`models.py` 契约 / `http.py` 取数 / `cities.py` 城市表 / `aqi.py` AQI 换算 /
+`sources/*` 一个源一个模块 / `aggregator.py` 并发 + 缓存 + 降级）。
 
-- `cityCode` 默认 `110000`（北京），**只接受 cnemc 城市/省份代码表里的值**，
-  否则 400（代码表是静态快照，校验**不依赖网络** —— 上游挂了也不会把端点变成 400）。
+- `city` 默认 `barcelona`（巴塞罗那），**只接受本地城市表 `city_data/cities.py` 里的 id**，
+  否则 400（城市表是静态快照，校验**不依赖网络** —— 上游挂了也不会把端点变成 400）。
 - **端点永不 500**：任何一个上游失败或超时都只是把它放进 `degraded`，
   其余指标照常返回；聚合器整体出意外也返回一份「全部降级」的 200。
 - 响应带 `Cache-Control: public, max-age=30` 与 `X-Data-Generated-At`。
@@ -329,10 +331,10 @@ font-src 'self' data:
 
 | 键 | 类型 | 含义 |
 |---|---|---|
-| `city` | object | `{code, name, latitude, longitude}`（取不到经纬度时为 `null`） |
+| `city` | object | `{id, name, latitude, longitude, timezone}` |
 | `generated_at` | str | 本次响应生成的时间，ISO8601 UTC |
 | `metrics` | array | 指标列表，**每个都带 `source`** |
-| `series` | array | 时间序列（24 小时 AQI + 14 天逐日 AQI） |
+| `series` | array | 时间序列（24 小时 AQI + 逐日 AQI） |
 | `facilities` | array | **设施分类计数**（本地 OSM 快照；取不到时是**空数组**，不编数字） |
 | `degraded` | array | **取不到的源的名字**（前端据此显示「数据源暂不可用」） |
 
@@ -352,7 +354,7 @@ font-src 'self' data:
 
 | 键 | 类型 | 含义 |
 |---|---|---|
-| `name` | str | 来源名（「中国环境监测总站」…） |
+| `name` | str | 来源名（「Open-Meteo 天气预报」…） |
 | `url` | str | 真实取数地址（本地文件用仓库相对路径） |
 | `observed_at` | str \| null | 上游**数据自身**的时间戳；取不到时是 `null` |
 | `fetched_at` | str | 我们**取到**它的时间；缓存命中时仍是**首次**取数的时间 |
@@ -363,13 +365,29 @@ font-src 'self' data:
 
 | 源 | 地址 | 凭据 | 实时性 | 降级 |
 |---|---|---|---|---|
-| 空气质量（AQI / 分级 / 首要污染物） | `https://air.cnemc.cn:18007/CityData/GetAllCityRealTimeAQIModels`（GET） | 免凭据，**必须带 `Referer: https://air.cnemc.cn:18007/`** | 实时（小时级） | 取不到 → 进 `degraded`，指标值 `null` |
-| 污染物浓度 + 24 小时序列 | `https://air.cnemc.cn:18007/HourChangesPublish/GetCityRealTimeAqiHistoryByCondition?citycode=<code>`（**POST，body 为 `{}`**） | 同上 | 实时 | 同上 |
-| 逐日序列（14 天，AQI + 六项污染物日均值） | `https://air.cnemc.cn:18007/HourChangesPublish/GetCityDayAqiHistoryByCondition?citycode=<code>`（**POST，body 为 `{}`**） | 同上 | 按定义不是实时（最旧的一条是 14 天前） | 同上；**只产出序列**，不产出指标 |
-| 气温 / 湿度 | `http://www.weather.com.cn/data/sk/101010100.html` | 免凭据 | **不新鲜**（见下） | 同上 |
+| 气温 / 湿度 / 体感温度 / 风速 / 降水 | `https://api.open-meteo.com/v1/forecast?…&current=…&timezone=<tz>&timeformat=unixtime` | 免凭据 | 小时级（**数值模式**，不是站点实测） | 取不到 → 进 `degraded`，指标值 `null` |
+| AQI / 六项污染物浓度 + 24 小时序列 + 逐日序列 | `https://air-quality-api.open-meteo.com/v1/air-quality?…&hourly=…&timezone=<tz>&timeformat=unixtime` | 免凭据 | 小时级（**CAMS 模型再分析**，11 km 网格） | 同上 |
 | 建筑 / 道路数量、路网总长、覆盖面积、各等级道路条数 | 本地 `geojson/*.geojson` | 无 | 静态快照 | 文件读不到 → 进 `degraded` |
 | 路网负载指数 | 上面那份本地数据**自己算** | 无 | —— | **模型估算**（`estimated: true`） |
 | 设施分类（医疗 / 公共安全 / 教育 / 历史建筑 / 商业办公） | 本地 `geojson/buildings.geojson` **按 OSM 标签统计** | 无 | 静态快照 | 文件读不到 → 进 `degraded`，`facilities` 是**空数组** |
+
+**两个远程源都是模式数据**（数值天气预报 / CAMS 再分析），所以它们的
+`estimated` 是 `true` —— 界面会显示「（模型估算）」。本地 OSM 快照是实测，
+`estimated` 是 `false`。
+
+#### AQI 的口径（**自己算的，不是谁发布的**）
+
+open-meteo 只给**污染物浓度**（μg/m³），不给中国国标口径的 AQI。
+本项目按 **GB/T 3095-2012** 的 IAQI 分段表自己换算（`city_data/aqi.py`）：
+
+- 分段点：`0 / 50 / 100 / 150 / 200 / 300 / 400 / 500`，
+  各污染物的浓度区间与线性内插公式见 `city_data/aqi.py` 的模块 docstring。
+- 统计口径：PM2.5 / PM10 / NO2 / SO2 / CO 取 **24 小时滑动平均**，O3 取 **8 小时滑动平均**。
+- `AQI = max(各污染物的 IAQI)`；全部取不到时是 `null`（**不许填 0** —— 0 在国标里是「优」）。
+- CO 的国标单位是 mg/m³，上游给的是 μg/m³，换算在模块内部做。
+
+**这是「按国标分段表换算出来的 AQI」，不是任何机构发布的 AQI。**
+界面与文档都按这个口径表述，不含糊。
 
 设施分类的规则**只写在 `city_data/sources/facilities.py`**（前端只渲染）：
 医疗 `building=hospital`；公共安全 `amenity=police` / `amenity=fire_station` /
@@ -379,45 +397,42 @@ font-src 'self' data:
 商业与办公 `building=commercial|retail|office|hotel` / `shop=mall` / `office=government`。
 
 **一个建筑只归一类**（按上面顺序取第一个命中）—— 环形图要能对上账，所以不许重复计数。
-2026-10-22 实测（3854 栋建筑，**去重后**）：医疗 **24**、公共安全 **18**、教育 **19**、
-历史建筑 **87**、商业与办公 **55**，合计 **203** 处。`estimated = false`（实测计数，不是模型估算）。
+`estimated = false`（实测计数，不是模型估算）。
 
-三个必须记住的坑（都是实测踩出来的）：
+实测（2026-10-24，本机，巴塞罗那取景范围 4366 栋建筑，**去重后**）：
+医疗 **2**、公共安全 **2**、教育 **24**、历史建筑 **86**、商业与办公 **339**，
+合计 **453** 处。比例悬殊是**数据事实**：Eixample 一带 72% 的建筑是
+`building=apartments`（住宅），不命中任何设施分类；而 `building=hospital`
+在这个范围里**一栋都没有**（医疗的 2 处是 `amenity=clinic` / `healthcare=clinic`）。
 
-1. cnemc 的历史接口**必须 POST 且 body 为空对象**，用 GET 一律 404。
-2. cnemc 的 `TimePoint` 有两种格式：`"/Date(1792558800000)/"`（.NET 毫秒时间戳）
-   与 `"2026-10-22T11:00:00"`（不带时区的本地时间），两种都要能解析。
-3. **天气源只有北京 `101010100` 通**（上海 `101020100`、深圳 `101280601` 都返回
-   HTML 错误页），别的城市直接判为不可用 —— 不去瞎试别的 cityid。
-   而且它的时间戳**不可靠**：只给 `HH:MM`，没有日期，实测本地 12:00 时它报 17:05
-   （落在未来）。本项目的处理是补上今天的日期、落在未来就回退一天，
-   并用「观测时间与当前时间差 > 1 小时」把 `realtime` 标成 `false` ——
-   **不新鲜就说不新鲜**。
+#### 许可与署名
+
+| 数据 | 许可 | 本项目需要做什么 |
+|---|---|---|
+| Open-Meteo 天气 / 空气质量 | **CC BY 4.0** | **必须署名**：Open-Meteo + CAMS ENSEMBLE 数据提供方 |
+| Open-Meteo 免费档 | —— | **仅限非商业用途**；商业用途需要付费档与 API key |
+| OpenStreetMap | **ODbL** | 展示数据时必须标注「© OpenStreetMap contributors」 |
+
+界面里已经有 OSM 署名行（删掉它等于违反许可证）。open-meteo 的署名写在
+README 的「数据来源」小节与 `source.name` 里（源名自带「（CAMS 模型再分析）」）。
 
 #### 缓存与超时
 
-- 六个源**并发**取数（`asyncio.gather` + `asyncio.wait_for`），
+- 四个源**并发**取数（`asyncio.gather` + `asyncio.wait_for`），
   **每个源独立 5 秒预算**：慢源只拖慢自己。
-- 缓存：空气质量 30 分钟、**逐日历史 60 分钟**、天气 10 分钟、静态路网指标进程内常驻。
+- 缓存：空气质量 30 分钟、天气 10 分钟、静态路网指标进程内常驻。
 - **缓存命中时 `fetched_at` 仍是首次取数的时间** —— 那才是真实的数据年龄。
 - 取数失败**不写缓存**（否则坏数据会被缓存住 30 分钟）。
 
-实测（2026-10-22，本机）：冷缓存首次 1125 ms（外部源的真实往返 + 本地 GeoJSON
-统计），第二次起 0–16 ms（走缓存）。
-
 #### 逐日序列
 
-`aqi_daily` 序列是**第 6 个源**（中国环境监测总站 · 逐日历史）产出的：
-**14 天**逐日的 24 小时均值（AQI / PM2.5 / PM10 / O3 / NO2 / SO2 / CO）。
+`aqi_daily` 序列由**同一个**空气质量源产出：**最近 7 个完整的本地日**
+（本地日按响应里的 `utc_offset_seconds` 切分，open-meteo 的日边界也是这么算的）。
 序列点的结构是 `{t, v, values}`：`v` 是当天的 AQI，`values` 是六项污染物的日均值。
 
 **向后兼容**：单指标序列（`aqi_24h`）的点仍然是 `{"t": …, "v": …}` ——
 空的 `values` 键被 `SeriesPoint` 上的 `@model_serializer(mode="wrap")` **整个省掉**，
 所以既有序列的点形状**一个字节都没变**。
-
-上游路径是 `POST` + **空 body** + `Referer` 头，控制器是 **`HourChangesPublish`**
-（站点上没有 `DayChangesPublish` 那个控制器）。逐日与逐小时是**两个源**，
-逐日挂了不影响 24 小时曲线。
 
 ### `GET /api/city/area` —— 矩形范围的空间统计
 
@@ -683,9 +698,13 @@ stats = processor.calculate_building_statistics(data)
 
 - 区域统计的 `facility_categories[].members` **恒为空数组**（只给分类计数，不给成员 id）——
   「点某个分类、高亮该范围内的建筑」还做不到，目前只回答「范围内有多少」
-- 天气源**只有北京可用**（`101010100`），且上游只给 `HH:MM`，时间戳可能落在未来
-  —— 契约里标 `realtime: false`，**不新鲜就说不新鲜**
-- 城市代码表是**静态快照**（**368 个代码**，只有代码没有名称），上游新增城市要重新抓
+- **两个远程源都是模式数据**：天气是数值天气预报，空气质量是 CAMS 模型再分析
+  （11 km 网格）。所以它们的 `source.estimated` 是 `true`，界面上会标「（模型估算）」。
+  AQI 也是**按国标分段表自己换算**的，不是任何机构发布的 AQI
+- 空气质量 API **只有 `hourly` 与 `current`，没有 `daily`**：逐日序列由逐小时数据
+  自己按本地日聚合（本地日用响应里的 `utc_offset_seconds` 切分）
+- 城市表是**静态快照**（手工维护），表里没有的城市 id 会被判为未知（保守的假阴性）
+- Open-Meteo 的免费档**仅限非商业用途**；商业用途需要付费档与 API key
 - `Dockerfile` / `docker-compose.yml` / `deploy/nginx.conf` **未经过 `docker build` /
   `nginx -t` 验证**（本机没有 Docker 与 nginx）
 

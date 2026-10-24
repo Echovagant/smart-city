@@ -19,7 +19,7 @@
   默认列表是若干公开实例，**本机链路不同时可以自行补充**（给了就替代默认列表；
   空值或全是非法值则回落到默认列表）。
 - **空结果当成失败**：HTTP 200 不等于抓到了数据。Overpass 会在 `remark` 字段里
-  报告运行时错误；只收录部分区域数据的实例会对本项目的北京 bbox 直接
+  报告运行时错误；只收录部分区域数据的实例会对本项目的 bbox 直接
   返回 0 个元素。这两种情况都会换下一个端点继续重试，**绝不会把空结果写成
   GeoJSON 覆盖掉现有数据**。所有端点都拿不到有效数据时脚本以非 0 退出，
   现有数据集保持原样。
@@ -33,10 +33,15 @@
 默认 bbox 为 `south,west,north,east`：
 
 ```
-39.905,116.380,39.925,116.420
+41.385,2.145,41.405,2.185
 ```
 
-即北京天安门周边约 4 km × 2 km 的范围。
+即巴塞罗那 Eixample 街区与圣家堂一带约 3.3 km × 2.2 km 的范围。
+
+> **数据量提醒**：这一带的建筑密度约为 1500 栋/km²，**一次性查询会超时** ——
+> 响应体过大时端点会回 502 或读超时。抓这一片请用 `--bbox` 切成小片分次抓，
+> 再按要素 id 去重合并（跨片的要素会在相邻两片各命中一次，合并时去重即可；
+> Overpass 返回的是**完整几何**、不按 bbox 裁剪，所以去重后几何是完整的那一份）。
 
 前端不再默认带 bbox 发请求（见 Plan 011：默认 bbox 和这份 OSM 抽取的范围完全重合，
 过滤等于没过滤），只有需要看子区域时才会显式传一个 bbox 进来。
@@ -48,8 +53,8 @@
 ```overpass
 [out:json][timeout:180];
 (
-  way["building"](39.905,116.380,39.925,116.420);
-  relation["building"](39.905,116.380,39.925,116.420);
+  way["building"](41.385,2.145,41.405,2.185);
+  relation["building"](41.385,2.145,41.405,2.185);
 );
 out body geom;
 ```
@@ -58,7 +63,7 @@ out body geom;
 
 ```overpass
 [out:json][timeout:180];
-way["highway"](39.905,116.380,39.925,116.420);
+way["highway"](41.385,2.145,41.405,2.185);
 out body geom;
 ```
 
@@ -78,7 +83,7 @@ OVERPASS_ENDPOINTS="https://a.example/api/interpreter,https://b.example/api/inte
 ```
 
 > **端点覆盖范围不一样**：只收录部分区域数据的实例，查别处可能什么都查不到。
-> 实测（第 3 个端点）：用它查北京的 `way["highway"]` 会返回 HTTP 200 +
+> 实测（第 3 个端点）：用它查巴塞罗那的 `way["highway"]` 会返回 HTTP 200 +
 > 0 个元素 —— 脚本会把这种「成功但没数据」的情况当成失败，继续换下一个端点，
 > 不会写出空文件。前两个是全球实例，但在部分网络下会比较慢甚至超时，
 > 所以留了重试；而**死端点由健康探测在 12 秒内排除**（正式查询的 180 秒超时只留给
@@ -98,7 +103,7 @@ OVERPASS_ENDPOINTS="https://a.example/api/interpreter,https://b.example/api/inte
 
 # 换范围
 ./.venv/Scripts/python.exe scripts/fetch_osm_data.py \
-    --bbox 39.900,116.370,39.930,116.430
+    --bbox 41.390,2.158,41.405,2.178
 
 # 只抓一类 / 换输出目录
 ./.venv/Scripts/python.exe scripts/fetch_osm_data.py --only buildings
@@ -110,15 +115,17 @@ OVERPASS_ENDPOINTS="https://a.example/api/interpreter,https://b.example/api/inte
 | 参数 | 默认值 | 说明 |
 |---|---|---|
 | `--endpoint URL` | 无 | 只用这一个 Overpass 端点（不给就按上面的顺序逐个试） |
-| `--bbox s,w,n,e` | `39.905,116.380,39.925,116.420` | 抓取范围，顺序是 `south,west,north,east` |
+| `--bbox s,w,n,e` | `41.385,2.145,41.405,2.185` | 抓取范围，顺序是 `south,west,north,east` |
 | `--out-dir DIR` | `backend-python/geojson` | GeoJSON 输出目录，不存在会自动创建 |
 | `--only buildings\|roads` | 两者都抓 | 只抓其中一类数据 |
+| `--probe-timeout SEC` | `12` | 健康探测的超时秒数。**慢实例不是死实例** —— 实测有的实例对最轻量的探活查询都要十几秒才响应，调大它，别把慢端点误判成不可达 |
 
 环境变量：
 
 | 变量 | 说明 |
 |---|---|
 | `OVERPASS_ENDPOINTS` | 覆盖端点列表（逗号分隔的 URL）；给了就替代默认列表，空值 / 全非法值回落到默认列表 |
+| `OVERPASS_PROBE_TIMEOUT` | 同 `--probe-timeout`（命令行优先级更高） |
 
 ## 输出
 
@@ -129,7 +136,7 @@ OVERPASS_ENDPOINTS="https://a.example/api/interpreter,https://b.example/api/inte
 
 > **`MultiPolygon` 为什么是 50 而不是 1**：仓库里原来那份抽取（文件时间戳
 > 2026-06-21）只有 1 个 `MultiPolygon`，而现在这份有 50 个。这是 **OSM 数据本身的变化** ——
-> 天安门周边这些年补了不少 `building` 关系（带内环的多边形建筑），Overpass 会把它们
+> 这一带这些年补了不少 `building` 关系（带内环的多边形建筑），Overpass 会把它们
 > 作为 relation 返回，本脚本按 `outer`/`inner` 拼成 `MultiPolygon`。不是转换出了问题：
 > 要素总数（3914 vs 3854）和道路的构成（1957 / 328 vs 1955 / 305）都在同一量级。
 > 拿新旧两份数据对比时别把这个差异当成 bug。
@@ -143,7 +150,7 @@ OVERPASS_ENDPOINTS="https://a.example/api/interpreter,https://b.example/api/inte
     {
       "type": "Feature",
       "properties": { "@id": "way/41662973", "highway": "pedestrian", "surface": "cobblestone" },
-      "geometry": { "type": "Polygon", "coordinates": [[[116.39, 39.91], ...]] },
+      "geometry": { "type": "Polygon", "coordinates": [[[2.17, 41.4], ...]] },
       "id": "way/41662973"
     }
   ]
