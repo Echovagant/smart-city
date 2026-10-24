@@ -114,8 +114,9 @@ describe('useCityData', () => {
     await loadAll()
 
     const urls = fetchMock.mock.calls.map(call => call[0])
-    expect(urls).toContain('/api/buildings')
-    expect(urls).toContain('/api/roads')
+    // 请求带城市 id（后端按它选数据目录）
+    expect(urls).toContain('/api/buildings?city=barcelona')
+    expect(urls).toContain('/api/roads?city=barcelona')
   })
 
   it('loadAll still supports an explicit bbox', async () => {
@@ -128,7 +129,23 @@ describe('useCityData', () => {
     await loadAll({ bbox: '2.1474,41.3945,2.1874,41.4145' })
 
     const urls = fetchMock.mock.calls.map(call => call[0])
-    expect(urls).toContain('/api/buildings?bbox=2.1474%2C41.3945%2C2.1874%2C41.4145')
+    expect(urls).toContain(
+      '/api/buildings?bbox=2.1474%2C41.3945%2C2.1874%2C41.4145&city=barcelona',
+    )
+  })
+
+  it('setCity 之后请求带上新的城市 id', async () => {
+    fetchMock.mockImplementation(
+      async () => new Response(JSON.stringify({ type: 'FeatureCollection', features: [] }), { status: 200 }),
+    )
+
+    const { loadAll, setCity, cityId } = withSetup(useCityData)
+    setCity('milano')
+    expect(cityId.value).toBe('milano')
+
+    await loadAll()
+    const urls = fetchMock.mock.calls.map(call => call[0])
+    expect(urls).toContain('/api/buildings?city=milano')
   })
 
   it('does not touch the refs when the component unmounts while the request is in flight', async () => {

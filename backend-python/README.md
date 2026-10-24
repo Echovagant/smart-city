@@ -131,25 +131,34 @@ CSP_REPORT_ONLY=
 
 ### 3. 准备必需的数据文件
 
-`backend-python/geojson/` 下的两个文件是**运行时必需输入，不在 git 里**
-（`backend-python/.gitignore:28-31` 忽略了 `geojson/`）：
+`backend-python/geojson/` 下的数据文件是**运行时必需输入，不在 git 里**
+（`backend-python/.gitignore:28-31` 忽略了 `geojson/`），
+**按城市分目录**：
 
 | 文件 | 内容 |
 |---|---|
-| `geojson/buildings.geojson` | 建筑面（`Polygon` / `MultiPolygon`） |
-| `geojson/roads.geojson` | 道路（`LineString` / `Polygon`） |
+| `geojson/<城市 id>/buildings.geojson` | 建筑面（`Polygon` / `MultiPolygon`） |
+| `geojson/<城市 id>/roads.geojson` | 道路（`LineString` / `Polygon`） |
+
+当前有 **巴塞罗那（`barcelona`）** 与 **米兰（`milano`）** 两座城。
+城市 id 与 `city_data/cities.py` 的表一一对应。
 
 全新 clone 之后用抓取脚本重新生成（只需要 Python 标准库）：
 
 ```bash
 cd backend-python
-./.venv/Scripts/python.exe scripts/fetch_osm_data.py
+./.venv/Scripts/python.exe scripts/fetch_osm_data.py --city barcelona --out-dir geojson/barcelona
+./.venv/Scripts/python.exe scripts/fetch_osm_data.py --city milano    --out-dir geojson/milano
 ```
 
-脚本默认抓取巴塞罗那 Eixample 街区与圣家堂一带
-`41.385,2.145,41.405,2.185`（south,west,north,east）的范围，多端点轮询 + 重试；
-**空结果会被当成失败**，不会把空文件覆盖到现有数据上。
+`--city` 给出**每座城市各自的默认取景范围**（取景范围是逐城的事实：密度差很多）。
+脚本默认抓取巴塞罗那 Eixample 街区与圣家堂一带约 1.7 km × 1.9 km 的范围，
+多端点轮询 + 重试；**空结果会被当成失败**，不会把空文件覆盖到现有数据上。
 完整参数表和注意事项见 `scripts/README.md`。
+
+> **数据量提醒**：Eixample 一带约 1500 栋/km²，**一次全量查询会超时**（响应体过大，
+> 端点回 502 或读超时）。抓这一片要按 `--bbox` 切小片分次抓，再按要素 id 去重合并
+> （脚本 README 里有方法）。
 
 **文件缺失或损坏的后果**：`/api/buildings` 与 `/api/roads` 会返回 **503**
 （统一文案「城市数据暂时不可用，请稍后重试」），而不是空集合 —— 详见
@@ -277,11 +286,11 @@ font-src 'self' data:
 
 ### 数据接口
 
-- `GET /api/buildings` —— 获取建筑数据
-- `GET /api/roads` —— 获取道路数据
+- `GET /api/buildings` —— 获取建筑数据（可选 `?city=<城市 id>`）
+- `GET /api/roads` —— 获取道路数据（可选 `?city=<城市 id>`）
 - `GET /api/traffic-status` —— 获取交通状态（**值由时间确定性推导，随时间变化**，不再是写死的固定值）
 - `GET /api/city/overview?city=barcelona` —— **城市运行指标聚合**（空气质量 / 天气 / 路网静态指标 / 设施分类），每个指标都带来源标注与时间戳
-- `GET /api/city/area?bbox=min_lon,min_lat,max_lon,max_lat` —— **矩形范围的空间统计**（`bbox` 必填）
+- `GET /api/city/area?bbox=min_lon,min_lat,max_lon,max_lat` —— **矩形范围的空间统计**（`bbox` 必填，可选 `?city=`）
 
 `/api/traffic-status` 不校验 API key（前端不携带 key，这个端点必须始终可访问）。
 响应体 5 个键，120 字节左右：

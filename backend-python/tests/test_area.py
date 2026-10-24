@@ -274,8 +274,8 @@ class TestAreaEndpoint:
         assert "road_network.area_km2" in method["area"]
         assert method["density"].startswith("building_density_per_km2")
         assert method["files"] == [
-            "backend-python/geojson/buildings.geojson",
-            "backend-python/geojson/roads.geojson",
+            "backend-python/geojson/barcelona/buildings.geojson",
+            "backend-python/geojson/barcelona/roads.geojson",
         ]
         # 两个数据文件各自的观测时间都可见。
         assert method["observed_at"]["buildings"] == BUILDINGS_TIMESTAMP

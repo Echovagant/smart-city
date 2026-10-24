@@ -68,6 +68,51 @@ export interface RenderedRoadTier extends RoadTier {
   flowing: boolean
 }
 
+/**
+ * 一座城市的场景参数。
+ *
+ * 城心 / 平视落点**逐城不同** —— 它们是这套数据的事实，不是通用常量。
+ */
+export interface CityScene {
+  /**
+   * 城心：相机绕行中心 + 全市级事件标记的落点。
+   *
+   * 选它的依据是**实测**：不在任何建筑多边形内，且离最近的建筑边界够远 ——
+   * 站在露天，而不是站在某栋楼的屋顶上（事件光柱是 300 m 高的，落点被楼压着不好看）。
+   */
+  center: LngLat
+  /** 鸟瞰高度（米）。 */
+  zoomLevel: number
+  /**
+   * 平视模式的落点。
+   *
+   * 缺省时回落到 `center`。
+   */
+  streetPosition?: LngLat
+}
+
+/**
+ * 每座城市的场景参数。键是城市 id（与后端 `city_data/cities.py` 一致）。
+ *
+ * 巴塞罗那：Eixample 街区腹地的一处开口，离最近建筑 24.6 m；
+ * 平视落点取圣家堂南侧的**加泰罗尼亚广场**（离最近建筑 47.5 m，离圣家堂 113 m），
+ * 正南朝北（heading=0）能看见圣家堂的塔尖。
+ *
+ * 米兰：大教堂与老城之间；平视落点取大教堂正南的**大教堂广场**。
+ */
+export const CITY_SCENES: Record<string, CityScene> = {
+  barcelona: {
+    center: { lng: 2.1652, lat: 41.39585 },
+    zoomLevel: 1500,
+    streetPosition: { lng: 2.1736, lat: 41.4026 },
+  },
+  milano: {
+    center: { lng: 9.1919, lat: 45.4642 },
+    zoomLevel: 1500,
+    streetPosition: { lng: 9.1919, lat: 45.46355 },
+  },
+}
+
 /** 城市配置参数。 */
 export interface CityConfig {
   center: LngLat
@@ -89,9 +134,6 @@ export const cityConfig: CityConfig = {
   // 相机的绕行中心、全市级事件标记的落点都指向它。
   // 后端那个「数据范围中心」（OSM 围盒中心）与它**不是同一个点**，
   // **不能**拿来放标记（默认鸟瞰视角下会落在屏幕之外）。
-  //
-  // 选这个点是因为**实测**：它离最近的建筑边界 24.6 m —— 站在露天，
-  // 而不是站在某栋楼的屋顶上（事件光柱是 300 m 高的，落点被楼压着不好看）。
   center: { lng: 2.1652, lat: 41.39585 },
   zoomLevel: 1500,
   // 平视模式的落点**单独给一个**：城心在街区内部，1.7 m 的相机停在那里会钻进建筑里。
@@ -177,6 +219,28 @@ export const cityConfig: CityConfig = {
       return getActiveTheme().roadColors.fallback
     },
   }
+}
+
+/**
+ * 切到某座城市的场景参数。
+ *
+ * **就地改** `cityConfig` 的城心 / 鸟瞰高度 / 平视落点 ——
+ * 相机绕行、事件标记落点、交通生成这些都读的是 `cityConfig`，
+ * 改完立刻生效，不用改各自的代码。
+ *
+ * 未知城市 id 不改任何东西（调用方负责先校验）。
+ */
+export function setActiveCityScene(cityId: string): boolean {
+  const scene = CITY_SCENES[cityId]
+  if (!scene) return false
+  cityConfig.center = { ...scene.center }
+  cityConfig.zoomLevel = scene.zoomLevel
+  if (scene.streetPosition) {
+    cityConfig.streetPosition = { ...scene.streetPosition }
+  } else {
+    cityConfig.streetPosition = { ...scene.center }
+  }
+  return true
 }
 
 /** highway 标签 → 分级 的查表，建一次就够（几千条道路各查一次）。 */

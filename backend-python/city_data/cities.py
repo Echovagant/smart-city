@@ -71,6 +71,16 @@ CITIES: Dict[str, City] = {
         longitude=2.1652,
         timezone="Europe/Madrid",
     ),
+    # 米兰：取数点落在大教堂与老城之间。建筑密度只有巴塞罗那的 1/4
+    # （那一带的建筑是一整个街区的体量，不是逐栋），街区形态完全不同。
+    # ⚠️ 米兰的经度是 **9.19**（不是 2.19 —— 那是巴塞罗那的）。
+    "milano": City(
+        id="milano",
+        name="米兰",
+        latitude=45.4642,
+        longitude=9.1919,
+        timezone="Europe/Rome",
+    ),
 }
 
 # 不传 city 参数时用它。

@@ -1,5 +1,6 @@
 import { ref, shallowRef, onUnmounted } from 'vue'
 import { apiGet, ApiError } from '@/api/client'
+import { CITY_OPTIONS, DEFAULT_CITY_ID, isKnownCity } from './cityRegistry'
 import type {
   BBoxParam,
   BuildingsResponse,
@@ -12,16 +13,20 @@ import type {
 // 带 bbox 反而要把全部要素原样过滤一遍——每次请求白白多付一遍几何过滤的 CPU，
 // 看起来像在做空间裁剪，其实没有。
 // 需要按范围取数时仍然可以显式传 bbox。
+//
+// **城市**通过 `?city=<城市 id>` 选：后端按它选数据目录与指标源。
 
 /**
- * 当前城市的 id（slug）。
+ * 从地址栏的 `?city=` 读当前城市。
  *
- * 后端按它选数据源与城市表条目；换城市只改这一处。
+ * 认不出的值一律回落到默认城市（不报错、不空着 —— 界面必须有内容）。
+ * 这样 `?city=milano` 就是**米兰视图的固定链接**，可以直接分享。
  */
-export const CITY_ID = 'barcelona'
-
-/** 城市运行指标端点（带城市 id）。 */
-export const CITY_OVERVIEW_PATH = `/api/city/overview?city=${CITY_ID}`
+export function readCityFromLocation(): string {
+  if (typeof window === 'undefined') return DEFAULT_CITY_ID
+  const raw = new URLSearchParams(window.location.search).get('city')
+  return isKnownCity(raw) ? (raw as string) : DEFAULT_CITY_ID
+}
 
 export function useCityData() {
   // buildings / roads 是几 MB 的 GeoJSON（几万个坐标）。
@@ -39,15 +44,19 @@ export function useCityData() {
   const loading = ref(false)
   const error = ref<ApiError | null>(null)
   const cancelled = ref(false)
+  // 当前城市（与后端城市表一致）。
+  const cityId = ref<string>(readCityFromLocation())
 
   const loadAll = async ({ bbox = null }: { bbox?: BBoxParam | null } = {}) => {
     loading.value = true
     error.value = null
     const query = bbox ? `?bbox=${encodeURIComponent(bbox)}` : ''
+    const sep = bbox ? '&' : '?'
+    const city = `city=${encodeURIComponent(cityId.value)}`
     try {
       const [b, r, t] = await Promise.all([
-        apiGet<BuildingsResponse>(`/api/buildings${query}`),
-        apiGet<RoadsResponse>(`/api/roads${query}`),
+        apiGet<BuildingsResponse>(`/api/buildings${query}${sep}${city}`),
+        apiGet<RoadsResponse>(`/api/roads${query}${sep}${city}`),
         apiGet<TrafficStatus>('/api/traffic-status'),
       ])
       if (cancelled.value) return
@@ -82,11 +91,15 @@ export function useCityData() {
    * 绝不能拖慢首屏的场景装配。失败只记在 cityOverviewError 上，
    * 不动全局的 error 横幅 —— 3D 城市本身还是好的。
    */
+  /** 城市指标端点（带当前城市 id）。 */
+  const cityOverviewPath = () =>
+    `/api/city/overview?city=${encodeURIComponent(cityId.value)}`
+
   const loadCityOverview = async () => {
     cityOverviewLoading.value = true
     cityOverviewError.value = null
     try {
-      const overview = await apiGet<CityOverview>(CITY_OVERVIEW_PATH)
+      const overview = await apiGet<CityOverview>(cityOverviewPath())
       if (cancelled.value) return
       cityOverview.value = overview
     } catch (e) {
@@ -106,12 +119,18 @@ export function useCityData() {
    */
   const refreshCityOverview = async () => {
     try {
-      const overview = await apiGet<CityOverview>(CITY_OVERVIEW_PATH)
+      const overview = await apiGet<CityOverview>(cityOverviewPath())
       if (cancelled.value) return
       cityOverview.value = overview
     } catch {
       // 轮询失败保持上一次的读数即可。
     }
+  }
+
+  /** 切城市：只改 id，数据与场景由调用方重新加载。 */
+  const setCity = (next: string) => {
+    if (next === cityId.value) return
+    cityId.value = next
   }
 
   onUnmounted(() => {
@@ -131,5 +150,8 @@ export function useCityData() {
     loading,
     error,
     loadAll,
+    cityId,
+    setCity,
+    cityOptions: CITY_OPTIONS,
   }
 }

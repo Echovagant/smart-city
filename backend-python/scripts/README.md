@@ -30,18 +30,23 @@
 
 ## 抓取范围（bbox）
 
-默认 bbox 为 `south,west,north,east`：
+取景范围**逐城不同**（密度差很多），所以按城市各存一份，用 `--city` 选：
 
-```
-41.385,2.145,41.405,2.185
-```
+| `--city` | 默认 bbox（south,west,north,east） | 范围 |
+|---|---|---|
+| `barcelona`（默认） | `41.3900,2.1580,41.4050,2.1780` | 巴塞罗那 Eixample 街区与圣家堂一带，约 1.7 km × 1.9 km |
+| `milano` | `45.4590,9.1830,45.4700,9.1990` | 米兰大教堂与老城一带，约 1.2 km × 1.1 km |
 
-即巴塞罗那 Eixample 街区与圣家堂一带约 3.3 km × 2.2 km 的范围。
+`--bbox` 可以覆盖 `--city` 给的范围。
 
-> **数据量提醒**：这一带的建筑密度约为 1500 栋/km²，**一次性查询会超时** ——
+> **数据量提醒**：Eixample 一带的建筑密度约为 1500 栋/km²，**一次性查询会超时** ——
 > 响应体过大时端点会回 502 或读超时。抓这一片请用 `--bbox` 切成小片分次抓，
 > 再按要素 id 去重合并（跨片的要素会在相邻两片各命中一次，合并时去重即可；
 > Overpass 返回的是**完整几何**、不按 bbox 裁剪，所以去重后几何是完整的那一份）。
+
+> **别用探活判断端点死活**：实测有的实例对最轻量的探活查询都要十几秒才响应，
+> 探活一失败就整批跳过 —— 等于白丢一个还能用的实例。脚本的 `--probe-timeout`
+> 就是给这种情况调大窗口用的。
 
 前端不再默认带 bbox 发请求（见 Plan 011：默认 bbox 和这份 OSM 抽取的范围完全重合，
 过滤等于没过滤），只有需要看子区域时才会显式传一个 bbox 进来。
@@ -53,8 +58,8 @@
 ```overpass
 [out:json][timeout:180];
 (
-  way["building"](41.385,2.145,41.405,2.185);
-  relation["building"](41.385,2.145,41.405,2.185);
+  way["building"](41.3900,2.1580,41.4050,2.1780);
+  relation["building"](41.3900,2.1580,41.4050,2.1780);
 );
 out body geom;
 ```
@@ -63,7 +68,7 @@ out body geom;
 
 ```overpass
 [out:json][timeout:180];
-way["highway"](41.385,2.145,41.405,2.185);
+way["highway"](41.3900,2.1580,41.4050,2.1780);
 out body geom;
 ```
 
@@ -94,7 +99,7 @@ OVERPASS_ENDPOINTS="https://a.example/api/interpreter,https://b.example/api/inte
 在 `backend-python/` 目录下：
 
 ```bash
-# 默认：按顺序尝试所有端点，写到 backend-python/geojson/
+# 默认：按顺序尝试所有端点，写到 backend-python/geojson/<城市 id>/
 ./.venv/Scripts/python.exe scripts/fetch_osm_data.py
 
 # 指定端点
@@ -115,7 +120,8 @@ OVERPASS_ENDPOINTS="https://a.example/api/interpreter,https://b.example/api/inte
 | 参数 | 默认值 | 说明 |
 |---|---|---|
 | `--endpoint URL` | 无 | 只用这一个 Overpass 端点（不给就按上面的顺序逐个试） |
-| `--bbox s,w,n,e` | `41.385,2.145,41.405,2.185` | 抓取范围，顺序是 `south,west,north,east` |
+| `--city barcelona\|milano` | `barcelona` | 选哪座城市的默认取景范围（`--bbox` 可覆盖） |
+| `--bbox s,w,n,e` | 按 `--city` 给的范围 | 抓取范围，顺序是 `south,west,north,east` |
 | `--out-dir DIR` | `backend-python/geojson` | GeoJSON 输出目录，不存在会自动创建 |
 | `--only buildings\|roads` | 两者都抓 | 只抓其中一类数据 |
 | `--probe-timeout SEC` | `12` | 健康探测的超时秒数。**慢实例不是死实例** —— 实测有的实例对最轻量的探活查询都要十几秒才响应，调大它，别把慢端点误判成不可达 |
@@ -131,8 +137,8 @@ OVERPASS_ENDPOINTS="https://a.example/api/interpreter,https://b.example/api/inte
 
 | 文件 | 内容 | 2026-10-20 实测规模 |
 |---|---|---|
-| `geojson/buildings.geojson` | 建筑面 | 3914 个要素（`Polygon` 3864，`MultiPolygon` 50） |
-| `geojson/roads.geojson` | 道路 | 2285 个要素（`LineString` 1957，`Polygon` 328） |
+| `geojson/barcelona/buildings.geojson` | 建筑面 | 4366 个要素 |
+| `geojson/barcelona/roads.geojson` | 道路 | 3794 个要素（`LineString` 3717，`Polygon` 77） |
 
 > **`MultiPolygon` 为什么是 50 而不是 1**：仓库里原来那份抽取（文件时间戳
 > 2026-06-21）只有 1 个 `MultiPolygon`，而现在这份有 50 个。这是 **OSM 数据本身的变化** ——

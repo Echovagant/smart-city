@@ -13,6 +13,7 @@ import { resolveTabView } from '@/composables/useDashboardData'
 import { explainEmptyEvents } from '@/composables/useEventStream'
 import { resolveSceneLinkage } from '@/composables/useSceneLinkage'
 import { AREA_EMPTY_TEXT, AREA_STAGE_NOT_READY_TEXT, useAreaQuery } from '@/composables/useAreaQuery'
+import { readCityFromLocation } from '@/composables/useCityData'
 import { applyDashboardVariables } from '@/theme/dashboard'
 import type { SceneStage } from '@/composables/useSceneStage'
 import type { CityEvent, CityOverview, DashboardTab } from '../../types/city'
@@ -99,7 +100,12 @@ const onSelectEvent = (event: CityEvent) => emit('select-event', event)
  * 生产构建里 `<script setup>` 的顶层绑定不会挂到 `setupState` 上，
  * 所以这里不翻组件实例 —— 接线只有这一条路，dev 与生产行为一致。
  */
-const areaQuery = useAreaQuery({ stage: props.stage })
+const areaQuery = useAreaQuery({
+  stage: props.stage,
+  // 区域统计要读**当前城市**的数据：城市从地址栏的 ?city= 来（换城市是整页导航），
+  // 所以这里每次取都重新读，不用等父组件通知。
+  cityId: () => readCityFromLocation(),
+})
 const { radiusM, center, stats, loading, error, errorDetail, hint } = areaQuery
 
 /** 场景底座在不在：不在就没有拾取，面板要**直说**，不装成「在场景里点一下地面」。 */

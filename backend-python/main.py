@@ -259,37 +259,66 @@ os.makedirs(GEOJSON_DIR, exist_ok=True)
 processor = get_data_processor(str(DATA_DIR))
 
 # GeoJSON 文件路径（user-provided OSM data）。
-_buildings_path = GEOJSON_DIR / "buildings.geojson"
-_roads_path = GEOJSON_DIR / "roads.geojson"
+#
+# **按城市分目录**：`geojson/<城市 id>/buildings.geojson` 与 `roads.geojson`。
+# 默认城市用模块常量（测试会 monkeypatch 这两个常量），
+# 其余城市按目录约定解析 —— 加一座城就是放一个目录，不用改代码。
+_buildings_path = GEOJSON_DIR / cities.DEFAULT_CITY_ID / "buildings.geojson"
+_roads_path = GEOJSON_DIR / cities.DEFAULT_CITY_ID / "roads.geojson"
+
+
+def _city_paths(city_id: str) -> Tuple[Path, Path]:
+    """某个城市的（建筑, 道路）数据文件路径。
+
+    文件不存在时读取会失败 → 端点按「数据缺失」返回 503（与缺数据时同一条路）。
+    """
+    if city_id == cities.DEFAULT_CITY_ID:
+        return _buildings_path, _roads_path
+    base = GEOJSON_DIR / city_id
+    return base / "buildings.geojson", base / "roads.geojson"
+
+
+def _require_city(city_id: str) -> str:
+    """校验城市 id，返回**规范化后**的 id；未知城市返回 400。
+
+    与其它参数校验同一套口径：参数问题与数据是否可用无关，先校验再动数据。
+    """
+    city = cities.get_city(city_id)
+    if city is None:
+        raise HTTPException(status_code=400, detail=CITY_PARAM_DETAIL)
+    return city.id
+
 
 # 启动时缓存已加载的 GeoJSON；如加载失败则在第一次请求时再试并返回 5xx。
-_buildings_cache: Optional[Dict[str, Any]] = None
-_roads_cache: Optional[Dict[str, Any]] = None
+# **按城市分桶**：每个城市一份原始数据对象（换城不会互相污染）。
+_buildings_cache: Dict[str, Dict[str, Any]] = {}
+_roads_cache: Dict[str, Dict[str, Any]] = {}
 
 # 按 bbox 的过滤结果缓存。
 # key 是校验过的规范化 bbox 元组（同一个 bbox 无论字符串里有多少空白、多少位小数，
 # 都落到同一个条目）；条目同时记下产生它的那份原始数据对象——
 # 原始数据重新加载后（换了一个对象）旧条目自动作废，
 # 这样过滤结果不会和 _buildings_cache / _roads_cache 不同步。
+# **key 前面带城市 id**：不同城市的数据不能互相命中。
 # 容量有上限：客户端不能靠发一堆不同 bbox 把内存撑爆。
 _BBOX_CACHE_MAX_ENTRIES = 8
 
-_buildings_bbox_cache: "OrderedDict[Tuple[float, float, float, float], Tuple[Any, Dict[str, Any]]]" = OrderedDict()
-_roads_bbox_cache: "OrderedDict[Tuple[float, float, float, float], Tuple[Any, Dict[str, Any]]]" = OrderedDict()
+_buildings_bbox_cache: "OrderedDict[Tuple[str, float, float, float, float], Tuple[Any, Dict[str, Any]]]" = OrderedDict()
+_roads_bbox_cache: "OrderedDict[Tuple[str, float, float, float, float], Tuple[Any, Dict[str, Any]]]" = OrderedDict()
 
 # 全量响应（不带 bbox）的序列化结果缓存。
 #
 # 模块级的 GeoJSON 缓存存的是**解析后**的 Python 对象，每次请求仍要重新
-# jsonable_encoder + json.dumps 一遍（实测 3854 个要素约 190 ms），
+# jsonable_encoder + json.dumps 一遍（实测 4366 个要素约 190 ms），
 # 再由 GZipMiddleware 压一遍（实测 3.4 MB 在 level 9 下约 110 ms）。
 # 源数据不变时全量响应是**逐字节确定**的，所以序列化结果与压缩结果都能缓存。
 #
-# key 是 "buildings" / "roads"：全量响应只有一个变体（不带 bbox）。
+# key 是 (城市 id, "buildings" / "roads")：全量响应只有一个变体（不带 bbox）。
 # 带 bbox 的路径**不缓存**——参数组合无界，缓存多少都救不了。
 # 值是 (原始数据对象, 未压缩字节, gzip 字节或 None)：
 #   - 记下原始数据对象是多一道保险：数据重新加载后（换了对象）旧条目自动作废；
 #   - gzip 字节为 None 表示响应体小于 GZIP_MINIMUM_SIZE，不压缩（与中间件规则一致）。
-_full_response_cache: Dict[str, Tuple[Any, bytes, Optional[bytes]]] = {}
+_full_response_cache: Dict[Tuple[str, str], Tuple[Any, bytes, Optional[bytes]]] = {}
 
 # 按 bbox 的空间统计缓存（GET /api/city/area）。
 #
@@ -306,37 +335,42 @@ _full_response_cache: Dict[str, Tuple[Any, bytes, Optional[bytes]]] = {}
 # 聚合本身（纯函数、不含 HTTP）中位 4.14 ms，本来每次请求都要重跑一遍。
 # 再缓存一层聚合结果，热请求从中位 6.21 ms 降到 2.64 ms（快一倍以上），
 # 代价只是一份 AreaStats 的内存（上限 8 条）—— 值得。
-_area_stats_cache: "OrderedDict[Tuple[float, float, float, float], Tuple[Any, Any, AreaStats]]" = OrderedDict()
+_area_stats_cache: "OrderedDict[Tuple[str, float, float, float, float], Tuple[Any, Any, AreaStats]]" = OrderedDict()
 
 
 def _clear_caches() -> None:
     """清空全部模块级缓存：原始 GeoJSON + 按 bbox 的过滤结果 + 全量响应序列化结果 + 区域统计。"""
-    global _buildings_cache, _roads_cache
-    _buildings_cache = None
-    _roads_cache = None
+    _buildings_cache.clear()
+    _roads_cache.clear()
     _buildings_bbox_cache.clear()
     _roads_bbox_cache.clear()
     _full_response_cache.clear()
     _area_stats_cache.clear()
 
 
-def _load_buildings() -> Dict[str, Any]:
-    global _buildings_cache
-    if _buildings_cache is None:
-        _buildings_cache = processor.load_geojson(str(_buildings_path))
-    return _buildings_cache
+def _load_buildings(city_id: str) -> Dict[str, Any]:
+    """加载某个城市的建筑数据（按城市缓存原始对象）。"""
+    cached = _buildings_cache.get(city_id)
+    if cached is None:
+        path, _roads = _city_paths(city_id)
+        cached = processor.load_geojson(str(path))
+        _buildings_cache[city_id] = cached
+    return cached
 
 
-def _load_roads() -> Dict[str, Any]:
-    global _roads_cache
-    if _roads_cache is None:
-        _roads_cache = processor.load_geojson(str(_roads_path))
-    return _roads_cache
+def _load_roads(city_id: str) -> Dict[str, Any]:
+    """加载某个城市的道路数据（按城市缓存原始对象）。"""
+    cached = _roads_cache.get(city_id)
+    if cached is None:
+        _buildings, path = _city_paths(city_id)
+        cached = processor.load_geojson(str(path))
+        _roads_cache[city_id] = cached
+    return cached
 
 
-def _bbox_cache_key(bbox: "BBox") -> Tuple[float, float, float, float]:
-    """规范化缓存 key：同一组边界值总是得到同一个 key。"""
-    return (bbox.min_lon, bbox.min_lat, bbox.max_lon, bbox.max_lat)
+def _bbox_cache_key(city_id: str, bbox: "BBox") -> Tuple[str, float, float, float, float]:
+    """规范化缓存 key：同一组边界值总是得到同一个 key（城市 id 也在里面）。"""
+    return (city_id, bbox.min_lon, bbox.min_lat, bbox.max_lon, bbox.max_lat)
 
 
 def _as_feature_collection(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -351,15 +385,16 @@ def _as_feature_collection(data: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _filtered_collection(
-    cache: "OrderedDict[Tuple[float, float, float, float], Tuple[Any, Dict[str, Any]]]",
+    cache: "OrderedDict[Tuple[str, float, float, float, float], Tuple[Any, Dict[str, Any]]]",
     data: Dict[str, Any],
     bbox: "BBox",
+    city_id: str,
 ) -> Dict[str, Any]:
     """按 bbox 过滤原始集合，并缓存结果。
 
     同一份数据 + 同一个 bbox 只过滤一次；重复请求直接命中缓存。
     """
-    key = _bbox_cache_key(bbox)
+    key = _bbox_cache_key(city_id, bbox)
     entry = cache.get(key)
     if entry is not None:
         source, result = entry
@@ -416,20 +451,23 @@ def _render_full_payload(collection: Dict[str, Any]) -> Tuple[bytes, Optional[by
     return plain, _gzip_bytes(plain)
 
 
-async def _full_response(request: Request, kind: str, data: Dict[str, Any]) -> Response:
+async def _full_response(
+    request: Request, kind: str, data: Dict[str, Any], city_id: str
+) -> Response:
     """返回「不带 bbox」的全量响应，序列化结果与压缩结果都走缓存。
 
     缓存挂在 _clear_caches() 上：源数据换了必须重新序列化，
     否则就是线上返回过期数据（改了数据还是旧城市）。
     """
-    entry = _full_response_cache.get(kind)
+    key = (city_id, kind)
+    entry = _full_response_cache.get(key)
     if entry is None or entry[0] is not data:
         # 序列化 + 压缩实测约 300 ms，丢到线程池里做，别把事件循环堵住。
         plain, gzipped = await run_in_threadpool(
             _render_full_payload, _as_feature_collection(data)
         )
         entry = (data, plain, gzipped)
-        _full_response_cache[kind] = entry
+        _full_response_cache[key] = entry
 
     _, plain, gzipped = entry
     headers = {"Vary": "Accept-Encoding"}
@@ -552,36 +590,43 @@ async def health_check():
 
 # 模拟数据接口
 @app.get("/api/buildings", dependencies=[Depends(require_api_key)])
-async def get_buildings(request: Request, bbox: Optional[str] = None):
+async def get_buildings(
+    request: Request, bbox: Optional[str] = None, city: str = cities.DEFAULT_CITY_ID
+):
     """获取建筑数据。
 
     可选 query 参数 bbox=min_lon,min_lat,max_lon,max_lat 用来按范围过滤。
     不带 bbox 走全量响应缓存（序列化结果复用），带 bbox 每次现算。
+    可选 query 参数 city=<城市 id> 选择城市（默认城市之外取该城自己的数据目录）。
     """
+    city_id = _require_city(city)
     # 参数不合法是调用方的问题（400），先校验再动数据。
     parsed = _parse_bbox(bbox) if bbox is not None else None
     try:
-        data = _load_buildings()
+        data = _load_buildings(city_id)
         if parsed is not None:
-            return _filtered_collection(_buildings_bbox_cache, data, parsed)
-        return await _full_response(request, "buildings", data)
+            return _filtered_collection(_buildings_bbox_cache, data, parsed, city_id)
+        return await _full_response(request, "buildings", data, city_id)
     except DataProcessorError:
         # 数据缺失或损坏是我们的问题（503）：细节只写日志，不回显给调用方。
-        logger.exception("建筑数据不可用")
+        logger.exception("建筑数据不可用（城市 %s）", city_id)
         raise HTTPException(status_code=503, detail=DATA_UNAVAILABLE_DETAIL)
 
 
 @app.get("/api/roads", dependencies=[Depends(require_api_key)])
-async def get_roads(request: Request, bbox: Optional[str] = None):
-    """获取道路数据。可选 bbox query 参数。"""
+async def get_roads(
+    request: Request, bbox: Optional[str] = None, city: str = cities.DEFAULT_CITY_ID
+):
+    """获取道路数据。可选 bbox 与 city query 参数。"""
+    city_id = _require_city(city)
     parsed = _parse_bbox(bbox) if bbox is not None else None
     try:
-        data = _load_roads()
+        data = _load_roads(city_id)
         if parsed is not None:
-            return _filtered_collection(_roads_bbox_cache, data, parsed)
-        return await _full_response(request, "roads", data)
+            return _filtered_collection(_roads_bbox_cache, data, parsed, city_id)
+        return await _full_response(request, "roads", data, city_id)
     except DataProcessorError:
-        logger.exception("道路数据不可用")
+        logger.exception("道路数据不可用（城市 %s）", city_id)
         raise HTTPException(status_code=503, detail=DATA_UNAVAILABLE_DETAIL)
 
 
@@ -707,8 +752,8 @@ async def get_city_overview(city: str = cities.DEFAULT_CITY_ID):
     try:
         overview = await city_aggregator.build_city_overview(
             city_obj,
-            buildings_path=_buildings_path,
-            roads_path=_roads_path,
+            buildings_path=_city_paths(city_obj.id)[0],
+            roads_path=_city_paths(city_obj.id)[1],
         )
     except Exception:
         # 聚合器已经把「单个源失败」处理成降级了；走到这里说明是聚合器自身的
@@ -733,12 +778,13 @@ async def get_city_overview(city: str = cities.DEFAULT_CITY_ID):
 
 
 @app.get("/api/city/area")
-async def get_city_area(bbox: str = ""):
+async def get_city_area(bbox: str = "", city: str = cities.DEFAULT_CITY_ID):
     """按矩形范围聚合的空间统计。
 
     - ``bbox`` 必填，格式 ``min_lon,min_lat,max_lon,max_lat``；非法输入一律 400
       —— **复用** ``_parse_bbox``，所以原因文案与 ``/api/buildings`` 的同类错误完全一致。
-    - 只读**本地** OSM 快照：不走「五源并发 + 降级」那套聚合器。
+    - ``city`` 可选，默认城市；取别的城市时读该城自己的数据目录。
+    - 只读**本地** OSM 快照：不走「多源并发 + 降级」那套聚合器。
       数据文件读不到时返回 **503**（与 ``/api/buildings`` 一致），
       **绝不返回**编出来的 0。
     - 范围里没有任何要素是**正常结果**：200 + 数字 0（空范围，不是故障）。
@@ -748,20 +794,23 @@ async def get_city_area(bbox: str = ""):
     不挂 ``require_api_key``：与 ``/api/city/overview`` 同理，
     大屏的前端不携带 key，这个端点必须始终可访问。
     """
+    city_id = _require_city(city)
     # 参数不合法是调用方的问题（400），先校验再动数据。
     parsed = _parse_bbox(bbox)
     try:
-        buildings_data = _load_buildings()
-        roads_data = _load_roads()
+        buildings_data = _load_buildings(city_id)
+        roads_data = _load_roads(city_id)
 
-        key = _bbox_cache_key(parsed)
+        key = _bbox_cache_key(city_id, parsed)
         entry = _area_stats_cache.get(key)
         if entry is not None and entry[0] is buildings_data and entry[1] is roads_data:
             _area_stats_cache.move_to_end(key)  # LRU：刚用过的条目留在最后
             stats = entry[2]
         else:
-            buildings = _filtered_collection(_buildings_bbox_cache, buildings_data, parsed)
-            roads = _filtered_collection(_roads_bbox_cache, roads_data, parsed)
+            buildings = _filtered_collection(
+                _buildings_bbox_cache, buildings_data, parsed, city_id
+            )
+            roads = _filtered_collection(_roads_bbox_cache, roads_data, parsed, city_id)
             buildings_timestamp = buildings_data.get("timestamp")
             roads_timestamp = roads_data.get("timestamp")
             observed_at = (
@@ -777,7 +826,9 @@ async def get_city_area(bbox: str = ""):
                 observed_at_by_file={
                     "buildings": buildings_timestamp,
                     "roads": roads_timestamp,
-                },)
+                },
+                city_id=city_id,
+            )
             _area_stats_cache[key] = (buildings_data, roads_data, stats)
             _area_stats_cache.move_to_end(key)
             while len(_area_stats_cache) > _BBOX_CACHE_MAX_ENTRIES:

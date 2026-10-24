@@ -57,7 +57,7 @@ WEATHER_SOURCE = SourceInfo(
 # 一个**实测**来源：用来证明事件的 estimated 是「继承」来的，不是写死的。
 MEASURED_SOURCE = SourceInfo(
     name="本地 OSM 快照",
-    url="backend-python/geojson/buildings.geojson",
+    url="backend-python/geojson/barcelona/buildings.geojson",
     observed_at="2026-10-24T08:00:00Z",
     fetched_at="2026-10-24T10:30:00Z",
     realtime=False,
@@ -66,7 +66,7 @@ MEASURED_SOURCE = SourceInfo(
 
 ROAD_SOURCE = SourceInfo(
     name="本地 OSM 路网数据",
-    url="backend-python/geojson/roads.geojson",
+    url="backend-python/geojson/barcelona/roads.geojson",
     observed_at="2026-06-21T11:40:10Z",
     fetched_at="2026-10-22T04:30:00Z",
     realtime=False,
@@ -539,7 +539,7 @@ class TestRealRoadAnchor:
     数据不在时**跳过**（CI 上不下载 OSM 数据）。
     """
 
-    roads_path = Path(__file__).resolve().parent.parent / "geojson" / "roads.geojson"
+    roads_path = Path(__file__).resolve().parent.parent / "geojson" / "barcelona" / "roads.geojson"
 
     @pytest.fixture(autouse=True)
     def _require_data(self):

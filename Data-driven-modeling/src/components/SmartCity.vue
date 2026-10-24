@@ -72,6 +72,18 @@
             </div>
 
             <div class="control-panel-actions">
+              <!-- 城市切换：换一整套场景数据（建筑 / 道路 / 指标 / 相机），
+                   所以走**整页导航**（带 ?city= 的固定链接），不做局部热替换 ——
+                   局部热替换要重装几千个实体，还要重算相机轨道与底座网格，
+                   容易出「画面是旧城的、数字是新城的」这种不一致。 -->
+              <label class="control-panel-city">
+                <span>城市</span>
+                <select :value="cityId" @change="onCityChange">
+                  <option v-for="option in cityOptions" :key="option.id" :value="option.id">
+                    {{ option.label }}
+                  </option>
+                </select>
+              </label>
               <button @click="toggleBuildings">
                 {{ state.buildingVisible ? '隐藏建筑' : '显示建筑' }}
               </button>
@@ -118,7 +130,7 @@ import { useDashboardState } from '@/composables/useDashboardState'
 import { useCameraRig } from '@/composables/useCameraRig'
 import { useEventMarkers } from '@/composables/useEventMarkers'
 import { useSceneLinkageEffect } from '@/composables/useSceneLinkageEffect'
-import { useSceneStage, computeExtent, nextPaint } from '@/composables/useSceneStage'
+import { useSceneStage, computeExtent, nextPaint, setActiveCityScene } from '@/composables/useSceneStage'
 import { useTheme } from '@/composables/useTheme'
 import { useTrafficFleet } from '@/composables/useTrafficFleet'
 import DashboardOverlay from './DashboardOverlay.vue'
@@ -168,7 +180,18 @@ const {
   refreshCityOverview,
   error,
   loading,
+  cityId,
+  cityOptions,
 } = useCityData()
+
+/** 换城市：整页导航到新城市的固定链接（?city=milano）。 */
+function onCityChange(event: Event) {
+  const next = (event.target as HTMLSelectElement).value
+  if (!next || next === cityId.value) return
+  const url = new URL(window.location.href)
+  url.searchParams.set('city', next)
+  window.location.assign(url.toString())
+}
 
 // 大屏页签状态是**模块级单例**（S2 做的）：大屏与 3D 场景共用同一份 ——
 // 「页签切换 → 场景联动」就靠它。
@@ -499,6 +522,9 @@ watch([() => cityOverview.value, () => buildings.value], () => {
  * ------------------------------------------------------------------------- */
 
 onMounted(async () => {
+  // 先把场景参数切到当前城市（城心 / 鸟瞰高度 / 平视落点都是**逐城不同**的事实）。
+  // 必须在 initCesium 之前 —— 相机第一次定位读的就是它们。
+  setActiveCityScene(cityId.value)
   // 色板写进 CSS 自定义属性：面板样式表与 3D 场景共用同一份配色
   applyThemeVariables()
   // 交通状态与 Cesium 无关：先把轮询挂上，
@@ -599,6 +625,35 @@ onUnmounted(() => {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px;
+}
+
+/* 城市切换：占满一行（它比按钮重要 —— 它决定整套数据）。
+   下拉框沿用按钮的视觉：同样的底色、描边与字号。 */
+.control-panel-city {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--dc-label-size, 11px);
+  color: var(--dc-text, #cbd5e1);
+}
+
+.control-panel-city select {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: var(--dc-label-size, 11px);
+  color: var(--dc-text, #cbd5e1);
+  background: var(--dc-panel, #0b1526);
+  border: 1px solid var(--dc-border, #1e3a5f);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.control-panel-city select:focus-visible {
+  outline: 2px solid var(--dc-flow, #0e7490);
+  outline-offset: 1px;
 }
 
 /* 主题入口按钮：和其它控制按钮同一套视觉。

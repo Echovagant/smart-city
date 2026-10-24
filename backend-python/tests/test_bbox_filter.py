@@ -22,12 +22,12 @@ import main  # noqa: E402
 from data_processor import DataProcessor, DataProcessorError  # noqa: E402
 
 # 真实 OSM 提取数据（未纳入版本管理），缺失时相关用例跳过。
-OSM_BUILDINGS = ROOT / "geojson" / "buildings.geojson"
+OSM_BUILDINGS = ROOT / "geojson" / "barcelona" / "buildings.geojson"
 
 requires_osm_data = pytest.mark.skipif(
     not OSM_BUILDINGS.exists(),
     reason=(
-        "OSM 提取数据不存在（backend-python/geojson/buildings.geojson）；"
+        "OSM 提取数据不存在（backend-python/geojson/<城市 id>/buildings.geojson）；"
         "用 backend-python/scripts/fetch_osm_data.py 重新抓取"
         "（用法见 backend-python/scripts/README.md）"
     ),
@@ -336,12 +336,12 @@ def test_filtered_cache_is_invalidated_when_source_data_is_reloaded(client, monk
     )
 
     monkeypatch.setattr(main, "_buildings_path", first_path)
-    main._buildings_cache = None
+    main._buildings_cache.clear()
     first = client.get("/api/buildings", params={"bbox": "0.0,0.0,0.15,0.15"})
     assert len(first.json()["features"]) == 1
 
     monkeypatch.setattr(main, "_buildings_path", second_path)
-    main._buildings_cache = None
+    main._buildings_cache.clear()
     second = client.get("/api/buildings", params={"bbox": "0.0,0.0,0.15,0.15"})
     assert len(second.json()["features"]) == 2
 
@@ -350,14 +350,14 @@ def test_clear_caches_clears_raw_and_filtered_caches(client):
     """_clear_caches() 必须把原始缓存和过滤缓存一起清掉。"""
     client.get("/api/buildings", params={"bbox": "0.0,0.0,0.15,0.15"})
     client.get("/api/roads", params={"bbox": "0.0,0.0,0.15,0.15"})
-    assert main._buildings_cache is not None
-    assert main._roads_cache is not None
+    assert main._buildings_cache
+    assert main._roads_cache
     assert len(main._buildings_bbox_cache) == 1
     assert len(main._roads_bbox_cache) == 1
 
     main._clear_caches()
 
-    assert main._buildings_cache is None
-    assert main._roads_cache is None
+    assert main._buildings_cache == {}
+    assert main._roads_cache == {}
     assert len(main._buildings_bbox_cache) == 0
     assert len(main._roads_bbox_cache) == 0

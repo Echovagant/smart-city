@@ -11,12 +11,12 @@ from fastapi.testclient import TestClient  # noqa: E402
 import main  # noqa: E402
 
 # 真实 OSM 提取数据（未纳入版本管理），缺失时相关用例跳过。
-OSM_BUILDINGS = ROOT / "geojson" / "buildings.geojson"
+OSM_BUILDINGS = ROOT / "geojson" / "barcelona" / "buildings.geojson"
 
 requires_osm_data = pytest.mark.skipif(
     not OSM_BUILDINGS.exists(),
     reason=(
-        "OSM 提取数据不存在（backend-python/geojson/buildings.geojson）；"
+        "OSM 提取数据不存在（backend-python/geojson/<城市 id>/buildings.geojson）；"
         "用 backend-python/scripts/fetch_osm_data.py 重新抓取"
         "（用法见 backend-python/scripts/README.md）"
     ),
@@ -76,18 +76,21 @@ def test_client_fixture_clears_both_cache_families(request):
     回归防护：夹具早先只把 _buildings_cache / _roads_cache 赋回 None，
     漏掉了 plan 011 新增的 bbox 过滤缓存。两族缓存一旦不同步，
     上一个用例留下的过滤结果就可能泄漏到下一个用例。
+
+    多城之后两族缓存都**按城市分桶**（键是城市 id），
+    所以「清空」= 桶本身被清掉，而不是某个值被置空。
     """
     # 先人为污染两族缓存，模拟上一个用例留下的残留。
-    main._buildings_cache = {"type": "FeatureCollection", "features": []}
-    main._roads_cache = {"type": "FeatureCollection", "features": []}
-    main._buildings_bbox_cache[(0.0, 0.0, 1.0, 1.0)] = (object(), {})
-    main._roads_bbox_cache[(0.0, 0.0, 1.0, 1.0)] = (object(), {})
+    main._buildings_cache["barcelona"] = {"type": "FeatureCollection", "features": []}
+    main._roads_cache["barcelona"] = {"type": "FeatureCollection", "features": []}
+    main._buildings_bbox_cache[("barcelona", 0.0, 0.0, 1.0, 1.0)] = (object(), {})
+    main._roads_bbox_cache[("barcelona", 0.0, 0.0, 1.0, 1.0)] = (object(), {})
 
     # 申请 client 夹具：它的初始化必须把上面两族缓存都清掉。
     request.getfixturevalue("client")
 
-    assert main._buildings_cache is None
-    assert main._roads_cache is None
+    assert main._buildings_cache == {}
+    assert main._roads_cache == {}
     assert len(main._buildings_bbox_cache) == 0
     assert len(main._roads_bbox_cache) == 0
 
@@ -103,6 +106,80 @@ def test_api_roads_bad_bbox_returns_400(client):
     response = client.get("/api/roads", params={"bbox": "not,a,bbox"})
     assert response.status_code == 400
     assert "bbox" in response.json()["detail"]
+
+
+class TestCityParameter:
+    """``?city=`` 选城市：数据、路径、错误口径都要跟着走。"""
+
+    def test_unknown_city_is_rejected(self, client):
+        for path in ("/api/buildings", "/api/roads", "/api/city/overview", "/api/city/area"):
+            response = client.get(path, params={"city": "atlantis"})
+            assert response.status_code == 400, path
+            assert "city" in response.json()["detail"]
+
+    def test_default_city_is_used_when_the_parameter_is_absent(self, client):
+        response = client.get("/api/buildings")
+        assert response.status_code == 200
+        assert response.json()["type"] == "FeatureCollection"
+
+    def test_city_selects_its_own_data_directory(self, client, monkeypatch, tmp_path):
+        """两座城的数据不能互相串：过滤缓存的 key 里必须带城市 id。"""
+        first = tmp_path / "first.geojson"
+        second = tmp_path / "second.geojson"
+        for path, count in ((first, 1), (second, 2)):
+            path.write_text(
+                json.dumps(
+                    {
+                        "type": "FeatureCollection",
+                        "features": [
+                            {
+                                "type": "Feature",
+                                "properties": {"name": "n%d" % index},
+                                "geometry": {
+                                    "type": "Polygon",
+                                    "coordinates": [
+                                        [
+                                            [0, 0],
+                                            [0, 0.01],
+                                            [0.01, 0.01],
+                                            [0.01, 0],
+                                            [0, 0],
+                                        ]
+                                    ],
+                                },
+                            }
+                            for index in range(count)
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+        # 让两座城各自指向不同的文件
+        monkeypatch.setattr(
+            main,
+            "_city_paths",
+            lambda city_id: (
+                (first, first) if city_id == "barcelona" else (second, second)
+            ),
+        )
+        main._clear_caches()
+
+        barcelona = client.get("/api/buildings").json()
+        milano = client.get("/api/buildings", params={"city": "milano"}).json()
+        assert len(barcelona["features"]) == 1
+        assert len(milano["features"]) == 2
+
+    def test_area_stats_accept_a_city(self, client):
+        response = client.get(
+            "/api/city/area", params={"bbox": "0.0,0.0,0.15,0.15", "city": "barcelona"}
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        # method.files 里要带上城市 id
+        assert payload["method"]["files"] == [
+            "backend-python/geojson/barcelona/buildings.geojson",
+            "backend-python/geojson/barcelona/roads.geojson",
+        ]
 
 
 def test_api_buildings_nan_bbox_returns_400(client):

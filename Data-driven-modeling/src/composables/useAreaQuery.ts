@@ -96,6 +96,13 @@ export interface AreaQueryOptions {
    * 没有底座就没有拾取：界面会显示「场景底座未就绪，无法拾取」，不假装能用。
    */
   stage?: SceneStage | null
+  /**
+   * 当前城市 id —— 后端按它选数据目录。
+   *
+   * 可以给字符串，也可以给**取值函数**（换城市时不用重建整个 composable）。
+   * 不给就**不带** city 参数（后端用默认城市）。
+   */
+  cityId?: string | (() => string | null)
 }
 
 /** 区域统计对外暴露的东西。 */
@@ -153,6 +160,12 @@ export const areaErrorDetail = (error: unknown): string => {
 }
 
 export function useAreaQuery(options: AreaQueryOptions = {}): AreaQuery {
+  const { cityId } = options
+  /** 解析当前城市 id（字符串或取值函数都行）。 */
+  const resolveCity = (): string | null => {
+    if (!cityId) return null
+    return typeof cityId === 'function' ? cityId() : cityId
+  }
   const radiusM = ref<number>(DEFAULT_AREA_RADIUS_M)
   const center = ref<LngLat | null>(null)
   // 载荷是整体替换的，用 shallowRef：不值得让 Vue 把整棵对象图深度响应式包装一遍。
@@ -181,8 +194,10 @@ export function useAreaQuery(options: AreaQueryOptions = {}): AreaQuery {
     error.value = null
     errorDetail.value = null
     try {
+      const city = resolveCity()
       const payload = await apiGet<AreaStats>(
-        `/api/city/area?bbox=${encodeURIComponent(formatAreaBBox(bbox))}`,
+        `/api/city/area?bbox=${encodeURIComponent(formatAreaBBox(bbox))}` +
+          (city ? `&city=${encodeURIComponent(city)}` : ''),
       )
       if (disposed || seq !== requestSeq) return
       stats.value = payload

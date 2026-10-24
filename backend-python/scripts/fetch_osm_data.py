@@ -69,10 +69,21 @@ DEFAULT_ENDPOINTS = [
 # 环境变量名：逗号分隔的端点 URL 列表。给了就替代默认列表。
 ENDPOINTS_ENV_VAR = "OVERPASS_ENDPOINTS"
 
-# 抓取范围：south, west, north, east = 41.385,2.145,41.405,2.185，
-# 即西班牙巴塞罗那 Eixample 街区与圣家堂一带，约 2.2 km × 3.4 km。
+# 抓取范围：south, west, north, east = 41.390,2.158,41.405,2.178，
+# 即西班牙巴塞罗那 Eixample 街区与圣家堂一带，约 1.7 km × 1.9 km。
 # 前端不再默认带 bbox 请求（见 Plan 011），只有需要子区域时才显式传一个进来。
-DEFAULT_BBOX = (41.385, 2.145, 41.405, 2.185)
+DEFAULT_BBOX = (41.3900, 2.1580, 41.4050, 2.1780)
+
+# 每座城市的默认取景范围（south, west, north, east）。
+#
+# 取景范围是**逐城的事实**（密度差很多：Eixample 一带约 1500 栋/km²，
+# 米兰市中心只有约 600 栋/km²），所以按城市各存一份。
+# 键与后端 `city_data/cities.py` 的城市 id 一致。
+CITY_BBOXES = {
+    "barcelona": DEFAULT_BBOX,
+    "milano": (45.4590, 9.1830, 45.4700, 9.1990),
+}
+DEFAULT_CITY = "barcelona"
 
 # 读取超时。查询本身声明了 [timeout:180]（服务端最多算 180 秒），
 # 所以客户端的读超时必须比它大一点，否则服务端还在算的时候客户端就断了。
@@ -532,9 +543,15 @@ def parse_args(argv=None):
         % ENDPOINTS_ENV_VAR,
     )
     parser.add_argument(
+        "--city",
+        default=DEFAULT_CITY,
+        choices=sorted(CITY_BBOXES),
+        help="要抓哪座城市的默认取景范围（默认 %(default)s）",
+    )
+    parser.add_argument(
         "--bbox",
-        default=",".join(str(value) for value in DEFAULT_BBOX),
-        help="south,west,north,east（默认 %(default)s）",
+        default=None,
+        help="south,west,north,east（不给就用 --city 的默认范围）",
     )
     parser.add_argument(
         "--out-dir",
@@ -560,12 +577,13 @@ def parse_args(argv=None):
 
 def main(argv=None) -> int:
     args = parse_args(argv)
-    bbox = parse_bbox(args.bbox)
+    bbox = parse_bbox(args.bbox) if args.bbox else CITY_BBOXES[args.city]
     endpoints = resolve_endpoints(args.endpoint)
     probe_timeout = resolve_probe_timeout(args.probe_timeout)
     out_dir = Path(args.out_dir)
     datasets = ["buildings", "roads"] if args.only is None else [args.only]
 
+    print(f"[fetch_osm_data] city = {args.city}")
     print(f"[fetch_osm_data] bbox (south,west,north,east) = {bbox}")
     print(f"[fetch_osm_data] out-dir = {out_dir}")
     print(f"[fetch_osm_data] probe timeout = {probe_timeout}s")

@@ -25,12 +25,12 @@ import main
 GZIP_THRESHOLD_KB = 600
 
 # 真实 OSM 提取数据（未纳入版本管理），缺失时相关用例跳过。
-OSM_BUILDINGS = Path(__file__).resolve().parent.parent / "geojson" / "buildings.geojson"
+OSM_BUILDINGS = Path(__file__).resolve().parent.parent / "geojson" / "barcelona" / "buildings.geojson"
 
 requires_osm_data = pytest.mark.skipif(
     not OSM_BUILDINGS.exists(),
     reason=(
-        "OSM 提取数据不存在（backend-python/geojson/buildings.geojson）；"
+        "OSM 提取数据不存在（backend-python/geojson/<城市 id>/buildings.geojson）；"
         "用 backend-python/scripts/fetch_osm_data.py 重新抓取"
         "（用法见 backend-python/scripts/README.md）"
     ),

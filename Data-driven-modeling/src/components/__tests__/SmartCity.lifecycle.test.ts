@@ -789,8 +789,8 @@ describe('SmartCity behaviour', () => {
     urls.forEach((url) => {
       expect(url.startsWith('/api/')).toBe(true)
     })
-    expect(urls).toContain('/api/buildings')
-    expect(urls).toContain('/api/roads')
+    expect(urls).toContain('/api/buildings?city=barcelona')
+    expect(urls).toContain('/api/roads?city=barcelona')
 
     // 每次请求都带 AbortSignal —— 说明走的是 apiGet() 封装，而不是裸 fetch
     fetchMock.mock.calls.forEach(([, options]) => {

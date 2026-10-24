@@ -33,9 +33,10 @@ from .road_network import (
 )
 
 # 仓库相对路径：不回显服务端绝对路径。
+# 数据**按城市分目录**，所以路径里带城市 id。
 GEOJSON_REF = "backend-python/geojson/"
-BUILDINGS_REF = "backend-python/geojson/buildings.geojson"
-ROADS_REF = "backend-python/geojson/roads.geojson"
+BUILDINGS_REF = "backend-python/geojson/%s/buildings.geojson"
+ROADS_REF = "backend-python/geojson/%s/roads.geojson"
 
 # 长度与面积保留 4 位小数（km / km²）。
 #
@@ -90,6 +91,7 @@ def aggregate_area(
     observed_at: Optional[str] = None,
     fetched_at: Optional[str] = None,
     observed_at_by_file: Optional[Dict[str, Any]] = None,
+    city_id: str = "barcelona",
 ) -> AreaStats:
     """把一片范围里的建筑与道路汇总成一份空间统计。
 
@@ -106,6 +108,8 @@ def aggregate_area(
     observed_at_by_file
         各数据文件自己的观测时间，写进 ``method``，
         让「建筑快照」与「道路快照」之间的时间差可见。
+    city_id
+        城市 id —— 只用来拼 ``method.files`` 里显示的数据文件路径。
 
     空范围（一个要素都没有）是**正常结果**：数字是 0，不是故障。
     """
@@ -165,7 +169,7 @@ def aggregate_area(
         "road_count": "计入全部道路要素；面要素（广场、人造地面）只计数，不计入路网长度。",
         "facility_counts": "按 OSM 标签统计，一个建筑只归一类"
         "（分类规则见 city_data/sources/facilities.py）。",
-        "files": [BUILDINGS_REF, ROADS_REF],
+        "files": [BUILDINGS_REF % city_id, ROADS_REF % city_id],
         "observed_at": observed_at_by_file or {},
         "line_features": line_features,
         "area_features": area_features,

@@ -214,10 +214,13 @@ def test_new_data_object_invalidates_cache_without_explicit_clear(client, monkey
         main,
         "_buildings_cache",
         {
-            "type": "FeatureCollection",
-            "features": [
-                {"type": "Feature", "properties": {"name": "fresh"}, "geometry": None}
-            ],
+            # 多城之后原始数据缓存**按城市分桶**。
+            "barcelona": {
+                "type": "FeatureCollection",
+                "features": [
+                    {"type": "Feature", "properties": {"name": "fresh"}, "geometry": None}
+                ],
+            }
         },
     )
 

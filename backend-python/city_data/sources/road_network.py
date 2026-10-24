@@ -33,12 +33,12 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from ..models import EventLocation, Metric, RoadAnchor, SourceInfo, SourceResult
 
-# 数据目录：默认在 backend-python/geojson/。
+# 数据目录：默认在 backend-python/geojson/ 下，**按城市分目录**。
 # 上层（main.py）会把实际使用的文件路径传进来，避免两处路径漂移。
 BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
 GEOJSON_DIR = BACKEND_DIR / "geojson"
-DEFAULT_BUILDINGS_PATH = GEOJSON_DIR / "buildings.geojson"
-DEFAULT_ROADS_PATH = GEOJSON_DIR / "roads.geojson"
+DEFAULT_BUILDINGS_PATH = GEOJSON_DIR / "barcelona" / "buildings.geojson"
+DEFAULT_ROADS_PATH = GEOJSON_DIR / "barcelona" / "roads.geojson"
 
 SOURCE_NAME = "本地 OSM 路网数据"
 
