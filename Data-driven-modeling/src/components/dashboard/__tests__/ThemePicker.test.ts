@@ -26,10 +26,12 @@ const themeMock = vi.hoisted(() => ({
 
 vi.mock('@/composables/useTheme', async () => {
   const { computed, ref } = await import('vue')
-  const { resolveTheme } = await import('@/theme/themes')
+  const { resolveTheme, DEFAULT_THEME_ID } = await import('@/theme/themes')
   return {
     useTheme: () => {
-      const themeId = ref('deep-space')
+      // 初始主题跟着**真实的默认主题**走（默认是哑光白模），
+      // 写死 'deep-space' 会让用例与主题顺序耦合。
+      const themeId = ref(DEFAULT_THEME_ID)
       const overrides = ref<ThemeOverrides>({})
       const theme = computed(() => resolveTheme(themeId.value, overrides.value))
       const controller = {

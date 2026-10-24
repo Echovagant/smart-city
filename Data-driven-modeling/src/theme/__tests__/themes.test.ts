@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
+  CLAY,
   DEFAULT_THEME_ID,
   DEEP_SEA,
   DEEP_SPACE,
@@ -12,7 +13,8 @@ import {
 describe('主题契约', () => {
   it('四套主题，id 唯一', () => {
     expect(THEMES).toHaveLength(4)
-    expect(THEMES.map(theme => theme.id)).toEqual(['deep-space', 'graphite', 'deep-sea', 'clay'])
+    // 顺序即界面里的展示顺序，第一个是默认主题（哑光白模）。
+    expect(THEMES.map(theme => theme.id)).toEqual(['clay', 'deep-space', 'graphite', 'deep-sea'])
     expect(new Set(THEMES.map(theme => theme.id)).size).toBe(THEMES.length)
   })
 
@@ -42,26 +44,38 @@ describe('主题契约', () => {
     expect(clay.palette.buildingEdge).not.toBe(clay.palette.accent)
   })
 
-  it('默认主题是深空蓝', () => {
-    expect(DEFAULT_THEME_ID).toBe('deep-space')
-    expect(themeById(DEFAULT_THEME_ID)).toBe(DEEP_SPACE)
+  it('默认主题是哑光白模', () => {
+    expect(DEFAULT_THEME_ID).toBe('clay')
+    expect(themeById(DEFAULT_THEME_ID)).toBe(CLAY)
   })
 
   it('themeById 取不到就回落到默认主题（不返回 null）', () => {
     expect(themeById('graphite')).toBe(GRAPHITE)
     expect(themeById('deep-sea')).toBe(DEEP_SEA)
-    expect(themeById('不存在')).toBe(DEEP_SPACE)
-    expect(themeById('')).toBe(DEEP_SPACE)
+    expect(themeById('不存在')).toBe(CLAY)
+    expect(themeById('')).toBe(CLAY)
   })
 
-  it('三套主题的形状完全一致（切主题不碰几何）', () => {
+  it('四套主题的形状完全一致（切主题不碰几何）', () => {
     const shape = (theme: typeof DEEP_SPACE) => ({
       palette: Object.keys(theme.palette).sort(),
       roadColors: Object.keys(theme.roadColors).sort(),
       glow: Object.keys(theme.glow).sort(),
+      fog: Object.keys(theme.fog).sort(),
     })
     expect(shape(GRAPHITE)).toEqual(shape(DEEP_SPACE))
     expect(shape(DEEP_SEA)).toEqual(shape(DEEP_SPACE))
+    expect(shape(CLAY)).toEqual(shape(DEEP_SPACE))
+  })
+
+  it('深度雾：far 必须大于 near，回落段为正，强度在 0~1 之间', () => {
+    for (const theme of THEMES) {
+      expect(theme.fog.far).toBeGreaterThan(theme.fog.near)
+      expect(theme.fog.near).toBeGreaterThan(0)
+      expect(theme.fog.falloff).toBeGreaterThan(0)
+      expect(theme.fog.strength).toBeGreaterThan(0)
+      expect(theme.fog.strength).toBeLessThanOrEqual(1)
+    }
   })
 })
 

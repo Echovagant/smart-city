@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { DEFAULT_THEME_ID, DEEP_SPACE, GRAPHITE } from '@/theme/themes'
+import { CLAY, DEFAULT_THEME_ID, GRAPHITE } from '@/theme/themes'
 import { CHART_COLORS, chartColor } from '@/theme/dashboard'
 import { THEME_STORAGE_KEY, useTheme } from '../useTheme'
 
@@ -19,10 +19,10 @@ describe('useTheme —— 主题控制器', () => {
     expect(a.theme).toBe(b.theme)
   })
 
-  it('默认主题是深空蓝', () => {
+  it('默认主题是哑光白模', () => {
     const { themeId, theme } = useTheme()
     expect(themeId.value).toBe(DEFAULT_THEME_ID)
-    expect(theme.value.id).toBe('deep-space')
+    expect(theme.value.id).toBe('clay')
   })
 
   it('setTheme 换主题（解析结果跟着变）', () => {
@@ -55,7 +55,7 @@ describe('useTheme —— 主题控制器', () => {
 
     setOverride('building', undefined)
     expect(overrides.value.building).toBeUndefined()
-    expect(theme.value.palette.building).toBe(DEEP_SPACE.palette.building)
+    expect(theme.value.palette.building).toBe(CLAY.palette.building)
   })
 
   it('setOverride 拒绝语义色与图表色（白名单只有四项）', () => {
@@ -72,8 +72,8 @@ describe('useTheme —— 主题控制器', () => {
     setOverride('glowPower', 0.3)
     resetOverrides()
     expect(overrides.value).toEqual({})
-    expect(theme.value.roadColors.main).toBe(DEEP_SPACE.roadColors.main)
-    expect(theme.value.glow.roadPower).toBe(DEEP_SPACE.glow.roadPower)
+    expect(theme.value.roadColors.main).toBe(CLAY.roadColors.main)
+    expect(theme.value.glow.roadPower).toBe(CLAY.glow.roadPower)
   })
 })
 
@@ -81,10 +81,10 @@ describe('useTheme —— CSS 变量', () => {
   it('首次调用就把主题写进 CSS 变量', () => {
     useTheme()
     expect(document.documentElement.style.getPropertyValue('--dc-screen')).toBe(
-      DEEP_SPACE.palette.screen,
+      CLAY.palette.screen,
     )
     expect(document.documentElement.style.getPropertyValue('--dc-accent')).toBe(
-      DEEP_SPACE.palette.accent,
+      CLAY.palette.accent,
     )
   })
 

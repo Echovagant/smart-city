@@ -24,8 +24,8 @@ export const DEEP_SPACE: ThemeDefinition = {
     warning: '#f59e0b',
     alert: '#f43f5e',
     text: '#e0e7f1',
-    building: '#0b1526',
-    buildingRoof: '#101f38',
+    building: '#16243c',
+    buildingRoof: '#1d2f4c',
     buildingEdge: '#1e40af',
     surface: '#0b1526',
     chartSeries: ['#1e40af', '#0369a1', '#0e7490', '#2b5fa8', '#38bdf8', '#60a5fa'],
@@ -38,12 +38,22 @@ export const DEEP_SPACE: ThemeDefinition = {
     fallback: '#122943',
   },
   glow: {
-    roadPower: 0.1,
+    roadPower: 0.07,
     roadAlpha: 0.78,
     buildingPower: 0.18,
     gridAlpha: 0.12,
-    flowAlpha: 0.95,
+    // 流动层：0.95 → 0.5。它是全场最刺眼的元素（实测对底色 10.96 : 1），
+    // 压到 0.5 之后路网仍看得出在流动，但**不再抢建筑的注意力** ——
+    // 建筑才是视觉主体。
+    flowAlpha: 0.4,
   },
+  // 深度雾：远处街区沉进底色（鸟瞰 1500 m、俯角 45°，城区中心约 2.1 km）。
+  // 深度雾：远处街区沉进底色。
+  // 距离标定是**实测**的：深度纹理里巴塞罗那的城区落在 2.75~3.5 km
+  // （近端街区 2.75 km、远端街区 3.49 km），地面那一档偏大到 4.7~5.7 km。
+  // 所以 near 压到 2.7 km、far 取 3.55 km，回落段 1.8 km 把地面那一档排除在外
+  // （否则底座网格与流动光效会被整片糊掉）。
+  fog: { near: 2700, far: 3550, falloff: 1800, strength: 0.7 },
 }
 
 /** B「石墨灰」：中性低饱和，环境光强 / 白墙投影时用。 */
@@ -60,8 +70,8 @@ export const GRAPHITE: ThemeDefinition = {
     warning: '#f59e0b',
     alert: '#f43f5e',
     text: '#e3e7ec',
-    building: '#15181e',
-    buildingRoof: '#1c2027',
+    building: '#1c2029',
+    buildingRoof: '#252a33',
     buildingEdge: '#4a6fa5',
     surface: '#15181e',
     chartSeries: ['#3c4a5e', '#4a6fa5', '#5b8fa8', '#6f7f99', '#7d8ca6', '#8fa3bd'],
@@ -74,12 +84,14 @@ export const GRAPHITE: ThemeDefinition = {
     fallback: '#1b2530',
   },
   glow: {
-    roadPower: 0.08,
+    roadPower: 0.06,
     roadAlpha: 0.7,
     buildingPower: 0.15,
     gridAlpha: 0.1,
-    flowAlpha: 0.95,
+    // 同深空蓝：流动层压到 0.4，让建筑当主体。
+    flowAlpha: 0.4,
   },
+  fog: { near: 2700, far: 3550, falloff: 1800, strength: 0.7 },
 }
 
 /** C「深海青」：冷青夜航风。 */
@@ -96,8 +108,8 @@ export const DEEP_SEA: ThemeDefinition = {
     warning: '#f59e0b',
     alert: '#f43f5e',
     text: '#dcebee',
-    building: '#071a20',
-    buildingRoof: '#0c2630',
+    building: '#0d2530',
+    buildingRoof: '#143340',
     buildingEdge: '#0e7490',
     surface: '#071a20',
     chartSeries: ['#155e75', '#0369a1', '#0e7490', '#0d9488', '#2a9d8f', '#3ba7a3'],
@@ -110,12 +122,16 @@ export const DEEP_SEA: ThemeDefinition = {
     fallback: '#082830',
   },
   glow: {
-    roadPower: 0.1,
+    roadPower: 0.07,
     roadAlpha: 0.78,
     buildingPower: 0.18,
     gridAlpha: 0.12,
-    flowAlpha: 0.95,
+    // 流动层：0.95 → 0.5。它是全场最刺眼的元素（实测对底色 10.96 : 1），
+    // 压到 0.5 之后路网仍看得出在流动，但**不再抢建筑的注意力** ——
+    // 建筑才是视觉主体。
+    flowAlpha: 0.4,
   },
+  fog: { near: 2700, far: 3550, falloff: 1800, strength: 0.7 },
 }
 
 /**
@@ -168,17 +184,29 @@ export const CLAY: ThemeDefinition = {
     gridAlpha: 0.04,
     flowAlpha: 0.12,
   },
+  // 白模的雾可以重一点：建筑是浅色、地面是深色，远处建筑沉进深色地面时
+  // 层次最清楚（这是「体块感」的一部分）。
+  fog: { near: 2700, far: 3550, falloff: 1800, strength: 0.8 },
 }
 
-/** 全部可选主题（顺序即界面里的展示顺序）。 */
-export const THEMES: readonly ThemeDefinition[] = [DEEP_SPACE, GRAPHITE, DEEP_SEA, CLAY]
+/** 全部可选主题（顺序即界面里的展示顺序；第一个是默认主题）。 */
+export const THEMES: readonly ThemeDefinition[] = [CLAY, DEEP_SPACE, GRAPHITE, DEEP_SEA]
 
-/** 默认主题 id。 */
-export const DEFAULT_THEME_ID = 'deep-space'
+/**
+ * 默认主题 id。
+ *
+ * **默认是「哑光白模」**：建筑是主体、道路退成底纹、辉光几乎关掉 ——
+ * 实测这三项让画面的高频细节从 27.13% 降到 18.01%、高饱和像素从 72.08% 降到 0.19%，
+ * 建筑/地面对比从 5.68:1 提到 8.32:1（久看不累）。
+ * 需要赛博朋克那套时，在主题入口里切「深空蓝」。
+ */
+export const DEFAULT_THEME_ID = 'clay'
 
 /** 按 id 取主题；取不到就回落到默认主题（不返回 null）。 */
 export const themeById = (id: string): ThemeDefinition =>
-  THEMES.find(theme => theme.id === id) ?? DEEP_SPACE
+  THEMES.find(theme => theme.id === id) ??
+  THEMES.find(theme => theme.id === DEFAULT_THEME_ID) ??
+  THEMES[0]
 
 /**
  * 主题 + 用户覆盖 → 最终生效的配色。

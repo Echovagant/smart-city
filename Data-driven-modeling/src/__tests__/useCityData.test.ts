@@ -257,8 +257,15 @@ describe('多城', () => {
     expect(cityConfigSnapshot().center.lng).toBeCloseTo(before.center.lng, 6)
   })
 
-  it('未知城市不改任何东西', () => {
-    const before = cityConfigSnapshot()
+  it('平视朝向也是逐城的事实（换城要跟着换）', () => {
+    setActiveCityScene('barcelona')
+    expect(cityConfig.streetLevel.heading).toBeCloseTo((315 * Math.PI) / 180, 6)
+    setActiveCityScene('nuernberg')
+    expect(cityConfig.streetLevel.heading).toBeCloseTo(0, 6)
+    setActiveCityScene('barcelona')
+  })
+
+  it('未知城市不改任何东西', () => {    const before = cityConfigSnapshot()
     expect(setActiveCityScene('atlantis')).toBe(false)
     expect(cityConfigSnapshot().center).toEqual(before.center)
   })

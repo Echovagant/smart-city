@@ -24,7 +24,7 @@ import {
   setLiveGlow,
   withAlpha,
 } from '../dark'
-import { DEEP_SPACE, DEEP_SEA, GRAPHITE, THEMES, themeById } from '../themes'
+import { CLAY, DEEP_SPACE, DEEP_SEA, GRAPHITE, THEMES, themeById } from '../themes'
 
 beforeAll(() => {
   // jsdom 里没有 ImageBitmap / OffscreenCanvas / VideoFrame，
@@ -48,14 +48,14 @@ afterEach(() => {
 // 本文件直接用**真实的 Cesium**：要断言的就是「glowPower 是不是常量属性」，
 // 用 mock 断言就变成了「断言我自己的 mock」。
 describe('深色大屏色板', () => {
-  it('色板取自当前主题（默认是深空蓝）', () => {
-    expect(DARK_PALETTE.screen).toBe(DEEP_SPACE.palette.screen)
-    expect(DARK_PALETTE.panel).toBe(DEEP_SPACE.palette.panel)
-    expect(DARK_PALETTE.accent).toBe(DEEP_SPACE.palette.accent)
-    expect(DARK_PALETTE.flow).toBe(DEEP_SPACE.palette.flow)
-    expect(DARK_PALETTE.warning).toBe(DEEP_SPACE.palette.warning)
-    expect(DARK_PALETTE.alert).toBe(DEEP_SPACE.palette.alert)
-    expect(DARK_PALETTE.text).toBe(DEEP_SPACE.palette.text)
+  it('色板取自当前主题（默认是哑光白模）', () => {
+    expect(DARK_PALETTE.screen).toBe(CLAY.palette.screen)
+    expect(DARK_PALETTE.panel).toBe(CLAY.palette.panel)
+    expect(DARK_PALETTE.accent).toBe(CLAY.palette.accent)
+    expect(DARK_PALETTE.flow).toBe(CLAY.palette.flow)
+    expect(DARK_PALETTE.warning).toBe(CLAY.palette.warning)
+    expect(DARK_PALETTE.alert).toBe(CLAY.palette.alert)
+    expect(DARK_PALETTE.text).toBe(CLAY.palette.text)
   })
 
   it('换主题后色板跟着换（同一份导出名，读到的是新主题的值）', () => {
@@ -328,6 +328,6 @@ describe('压暗 / 提亮信号色', () => {
 describe('themeById', () => {
   it('按 id 取主题，取不到回落到默认主题', () => {
     expect(themeById('graphite').id).toBe('graphite')
-    expect(themeById('不存在').id).toBe('deep-space')
+    expect(themeById('不存在').id).toBe('clay')
   })
 })

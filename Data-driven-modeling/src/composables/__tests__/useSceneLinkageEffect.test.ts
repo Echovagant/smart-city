@@ -85,12 +85,12 @@ const makeLinkage = (options: { members?: string[] } = {}) => {
 }
 
 describe('useSceneLinkageEffect', () => {
-  it('默认页签：描边保持强调色，流动光效保持常态', () => {
+  it('默认页签：描边保持描边色（buildingEdge，不是界面 accent），流动光效保持常态', () => {
     const { linkage, primitives } = makeLinkage()
     linkage.applySceneLinkage()
     const glow = primitives.buildingGlowMaterial as unknown as { uniforms: { color: { name: string } } }
     const flow = primitives.flowMaterial as unknown as { uniforms: { color: { name: string } } }
-    expect(glow.uniforms.color.name).toBe(DARK_PALETTE.accent)
+    expect(glow.uniforms.color.name).toBe(DARK_PALETTE.buildingEdge)
     expect(flow.uniforms.color.name).toBe(DARK_PALETTE.flow)
   })
 
@@ -111,7 +111,7 @@ describe('useSceneLinkageEffect', () => {
     linkage.applySceneLinkage()
     const glow = primitives.buildingGlowMaterial as unknown as { uniforms: { color: { name: string } } }
     const flow = primitives.flowMaterial as unknown as { uniforms: { color: { name: string } } }
-    expect(glow.uniforms.color.name).toBe(DARK_PALETTE.accent)
+    expect(glow.uniforms.color.name).toBe(DARK_PALETTE.buildingEdge)
     expect(flow.uniforms.color.name).toBe(FLOW_HIGHLIGHT)
     // 没有焦点建筑 → 不画焦点描边
     expect(stubViewer.scene.primitives.add).not.toHaveBeenCalled()
@@ -147,7 +147,7 @@ describe('useSceneLinkageEffect', () => {
     useDashboardState().setTab(DEFAULT_TAB_KEY)
     linkage.applySceneLinkage()
     const glow = primitives.buildingGlowMaterial as unknown as { uniforms: { color: { name: string } } }
-    expect(glow.uniforms.color.name).toBe(DARK_PALETTE.accent)
+    expect(glow.uniforms.color.name).toBe(DARK_PALETTE.buildingEdge)
     expect(primitives.focusGlow).toBeNull()
     expect(stubViewer.scene.primitives.remove).toHaveBeenCalledWith(focus)
   })

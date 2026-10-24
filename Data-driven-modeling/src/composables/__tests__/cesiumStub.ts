@@ -32,6 +32,10 @@ export interface StubViewer {
   camera: {
     flyTo: Mock<(options: unknown) => void>
     setView: Mock<(options: unknown) => void>
+    /** 平视锁定：把相机钉在一个点上（range = 0 → 只转头不挪位置）。 */
+    lookAt: Mock<(target: unknown, offset: unknown) => void>
+    /** 解除锁定：传 `Matrix4.IDENTITY`。 */
+    lookAtTransform: Mock<(transform: unknown) => void>
     /** 自转恢复时用它反算轨道（经纬度是**弧度**）。 */
     positionCartographic: { longitude: number; latitude: number; height: number }
   }
@@ -40,8 +44,20 @@ export interface StubViewer {
     skyAtmosphere: { show: boolean }
     skyBox: { show: boolean }
     backgroundColor: unknown
-    fog: { density: number; near: number; far: number }
-    postProcessStages: { fxaa: { enabled: boolean } }
+    /**
+     * Cesium 自带的雾。
+     *
+     * **只有 `enabled` 是真的** —— 1.134 的 `Fog` 类没有 `near` / `far` / `color`
+     * （那是本项目早期版本写上去、运行时被完全忽略的假属性）。
+     */
+    fog: { enabled: boolean }
+    postProcessStages: {
+      fxaa: { enabled: boolean }
+      add: Mock<(stage: unknown) => void>
+      remove: Mock<(stage: unknown) => void>
+    }
+    /** 平视期间要关缩放与碰撞检测（否则相机会被顶上去）。 */
+    screenSpaceCameraController: { enableZoom: boolean; enableCollisionDetection: boolean }
     maximumFrameRate: number
     preRender: {
       addEventListener: Mock<(listener: () => void) => void>
@@ -82,6 +98,14 @@ export interface CesiumStub {
   PolylineGeometry: Mock<(options: Record<string, unknown>) => Record<string, unknown>>
   PolylineMaterialAppearance: Mock<(options: Record<string, unknown>) => Record<string, unknown>> &
     { VERTEX_FORMAT: { position: boolean; st: boolean } }
+  /** 后处理阶段：深度雾用（见 composables/sceneFog.ts）。 */
+  PostProcessStage: Mock<
+    (options: Record<string, unknown>) => {
+      name: string
+      fragmentShader: string
+      uniforms: Record<string, unknown>
+    }
+  >
   ArcType: { GEODESIC: number; RHUMB: number }
   ScreenSpaceEventHandler: Mock<
     () => { setInputAction: Mock<(action: () => void) => void>; destroy: Mock<() => void> }
@@ -96,6 +120,16 @@ export interface CesiumStub {
   >
   GeoJsonDataSource: { load: Mock<(data: unknown, options?: unknown) => Promise<unknown>> }
   SceneMode: { SCENE3D: number }
+  /** 4×4 变换矩阵：平视锁定解除时传 `Matrix4.IDENTITY`。 */
+  Matrix4: { IDENTITY: Record<string, never> }
+  /** 相机朝向 + 半径（平视锁定用；range = 0 → 钉在原地只转头）。 */
+  HeadingPitchRange: Mock<
+    (heading: number, pitch: number, range: number) => {
+      heading: number
+      pitch: number
+      range: number
+    }
+  >
   /** 桩里创建出来的 Viewer（按创建顺序）。 */
   viewers: StubViewer[]
 }
@@ -119,6 +153,7 @@ export const makeScenePrimitives = (): ScenePrimitives => ({
   buildingMaterial: null,
   surfaceMaterial: null,
   roadMaterials: new Map(),
+  fogStage: null,
 })
 
 /** 取当前这份 Cesium 桩。 */
@@ -143,6 +178,8 @@ export const createCesiumStub = (): CesiumStub => {
     camera: {
       flyTo: vi.fn(),
       setView: vi.fn(),
+      lookAt: vi.fn(),
+      lookAtTransform: vi.fn(),
       positionCartographic: { longitude: 0, latitude: 0, height: 0 },
     },
     scene: {
@@ -150,8 +187,9 @@ export const createCesiumStub = (): CesiumStub => {
       skyAtmosphere: { show: true },
       skyBox: { show: true },
       backgroundColor: null,
-      fog: { density: 0, near: 0, far: 0 },
-      postProcessStages: { fxaa: { enabled: false } },
+      fog: { enabled: true },
+      postProcessStages: { fxaa: { enabled: false }, add: vi.fn(), remove: vi.fn() },
+      screenSpaceCameraController: { enableZoom: true, enableCollisionDetection: true },
       maximumFrameRate: 0,
       preRender: { addEventListener: vi.fn(), removeEventListener: vi.fn() },
       primitives: { add: vi.fn(), remove: vi.fn() },
@@ -221,6 +259,11 @@ export const createCesiumStub = (): CesiumStub => {
       vi.fn((options: Record<string, unknown>) => ({ ...options })),
       { VERTEX_FORMAT: { position: true, st: true } },
     ),
+    PostProcessStage: vi.fn((options: Record<string, unknown>) => ({
+      name: (options?.name as string) ?? '',
+      fragmentShader: (options?.fragmentShader as string) ?? '',
+      uniforms: { ...((options?.uniforms as Record<string, unknown>) ?? {}) },
+    })),
     ArcType: { GEODESIC: 0, RHUMB: 1 },
     ScreenSpaceEventHandler: vi.fn(() => ({
       setInputAction: vi.fn(),
@@ -248,6 +291,12 @@ export const createCesiumStub = (): CesiumStub => {
       load: vi.fn(async () => ({ entities: { values: [] as StubEntity[] } })),
     },
     SceneMode: { SCENE3D: 0 },
+    Matrix4: { IDENTITY: {} },
+    HeadingPitchRange: vi.fn((heading: number, pitch: number, range: number) => ({
+      heading,
+      pitch,
+      range,
+    })),
     viewers,
   }
 

@@ -16,6 +16,7 @@ import {
 } from '@/theme/dark'
 import type { LiveColorMaterial, LiveGlowMaterial } from '@/theme/dark'
 import type { ThemeDefinition, ThemeRoadColors } from '@/theme/themes/types'
+import { applyFogTheme, createDepthFogStage } from './sceneFog'
 import type {
   BuildingsResponse,
   CityViewState,
@@ -89,6 +90,17 @@ export interface CityScene {
    * 缺省时回落到 `center`。
    */
   streetPosition?: LngLat
+  /**
+   * 底座网格相对**正北**的旋转角（度）。
+   *
+   * 网格必须与**街区轴线**平行，否则两套线在画面里打架（噪点翻倍）。
+   * 角度是实测的：该城所有道路折线的方位角直方图（折叠到 0~90°）的峰值。
+   */
+  gridAngleDeg?: number
+  /**
+   * 平视模式的朝向（度，自北顺时针）。缺省 0（正北）。
+   */
+  streetHeadingDeg?: number
 }
 
 /**
@@ -104,12 +116,23 @@ export const CITY_SCENES: Record<string, CityScene> = {
   barcelona: {
     center: { lng: 2.1652, lat: 41.39585 },
     zoomLevel: 1500,
-    streetPosition: { lng: 2.1736, lat: 41.4026 },
+    // 平视落点：Eixample 对角街上的一处街廊口（实测沿 315° 能看到 539 m 远，
+    // 最近建筑 17 m）—— 站在街上，视线有纵深。
+    // 原来取的是圣家堂南侧 113 m 处，正对着一面 100 m 宽的墙，画面里全是一堵灰墙。
+    streetPosition: { lng: 2.16712, lat: 41.40101 },
+    // Eixample 的街区网格相对正北转了 45.2°（实测：Cerdà 规划是照海岸线走的）。
+    gridAngleDeg: 45,
+    // 平视朝 315° 方向，正对那条对角街 —— 与街区轴线一致。
+    streetHeadingDeg: 315,
   },
   milano: {
     center: { lng: 9.1919, lat: 45.4642 },
     zoomLevel: 1500,
     streetPosition: { lng: 9.1919, lat: 45.46355 },
+    // 米兰老城的街道轴基本是正南北（实测 1.0°）。
+    gridAngleDeg: 1,
+    // 平视朝正北：正对着大教堂。
+    streetHeadingDeg: 0,
   },
   nuernberg: {
     // 老城的市场广场（Hauptmarkt）：中世纪老城的开阔地。
@@ -117,6 +140,9 @@ export const CITY_SCENES: Record<string, CityScene> = {
     zoomLevel: 1500,
     // 平视落点：教堂街（Kirchenplatz）一带，正北朝北能看到圣洛伦佐教堂与城墙塔楼。
     streetPosition: { lng: 11.0768, lat: 49.4543 },
+    // 纽伦堡老城的街道轴实测 4.8°（基本正南北）。
+    gridAngleDeg: 5,
+    streetHeadingDeg: 0,
   },
 }
 
@@ -129,7 +155,21 @@ export interface CityConfig {
    * 缺省时回落到 `center`。
    */
   streetPosition?: LngLat
+  /**
+   * 平视模式的朝向（度，自北顺时针）。
+   *
+   * **逐城实测**：落点要选在「有纵深」的街上 —— 用射线法量过到第一个建筑的距离，
+   * 巴塞罗那最好的街廊是 539 m（沿 Eixample 的对角街，朝 315°），
+   * 米兰 279 m，纽伦堡 514 m。
+   * 原来巴塞罗那取的是圣家堂南侧 113 m 处，正对着一面 100 m 宽的墙，
+   * 平视画面里全是一堵灰墙 —— 那不是「平视」。
+   */
+  streetHeadingDeg?: number
   zoomLevel: number
+  /**
+   * 底座网格相对正北的旋转角（度）—— 逐城实测的街区轴向。
+   */
+  gridAngleDeg?: number
   streetLevel: { height: number; heading: number }
   defaultBuildingHeight: number
   roadTiers: RenderedRoadTier[]
@@ -144,11 +184,13 @@ export const cityConfig: CityConfig = {
   center: { lng: 2.1652, lat: 41.39585 },
   zoomLevel: 1500,
   // 平视模式的落点**单独给一个**：城心在街区内部，1.7 m 的相机停在那里会钻进建筑里。
-  // 这里取圣家堂南侧的**加泰罗尼亚广场**（离最近建筑 47.5 m，离圣家堂 113 m），
-  // 正南朝北（heading=0）能看见圣家堂的塔尖。
-  streetPosition: { lng: 2.1736, lat: 41.4026 },
-  // 平视视角：1.7m 是人眼高度，朝向正北（heading=0）
-  streetLevel: { height: 1.7, heading: 0 },
+  // 巴塞罗那取 Eixample 对角街上的街廊口（实测视线 539 m），
+  // 平视朝 315° 方向正对那条街。
+  streetPosition: { lng: 2.16712, lat: 41.40101 },
+  // 底座网格跟街区轴线平行（实测巴塞罗那 45.2°）。
+  gridAngleDeg: 45,
+  // 平视视角：1.7m 是人眼高度，朝向 315°（沿对角街看出去）
+  streetLevel: { height: 1.7, heading: (315 * Math.PI) / 180 },
   // 建筑没有任何高度标签时的兜底高度（米）
   defaultBuildingHeight: 30,
   // 道路分级表：按 OSM 的 highway 标签分级渲染。
@@ -242,6 +284,11 @@ export function setActiveCityScene(cityId: string): boolean {
   if (!scene) return false
   cityConfig.center = { ...scene.center }
   cityConfig.zoomLevel = scene.zoomLevel
+  cityConfig.gridAngleDeg = scene.gridAngleDeg ?? 0
+  cityConfig.streetLevel = {
+    ...cityConfig.streetLevel,
+    heading: ((scene.streetHeadingDeg ?? 0) * Math.PI) / 180,
+  }
   if (scene.streetPosition) {
     cityConfig.streetPosition = { ...scene.streetPosition }
   } else {
@@ -336,7 +383,13 @@ export const BUILDING_GLOW_WIDTH = 2
 /** 描边相对顶面的抬高（米）：避免与顶面 z-fighting。 */
 export const BUILDING_OUTLINE_LIFT_M = 0.5
 
-/** 流动光效的虚线基准长度（米）。 */
+/**
+ * 流动光效的虚线基准长度（米）。
+ *
+ * 关键不是长度而是**线宽**：7 px 的粗线 + 短虚线 = 一格格亮块；
+ * 细线 + 长虚线 = 路面上一道流动的虚线（像车道线）。
+ * 24 m 配 2~3 px 的线宽刚好是这个效果。
+ */
 export const FLOW_DASH_LENGTH = 24
 
 /** 流动光效一个完整来回的时长（秒）。 */
@@ -383,6 +436,8 @@ export interface ScenePrimitives {
   surfaceMaterial: LiveColorMaterial | null
   /** 道路分级材质 —— 按分级共用（五档各一个实例）。 */
   roadMaterials: Map<RoadColorKey, LiveGlowMaterial>
+  /** 深度雾后处理阶段（换主题改它的 uniform 值，不重建）。 */
+  fogStage: Cesium.PostProcessStage | null
 }
 
 /** 数据的经纬度范围。 */
@@ -615,6 +670,7 @@ export function useSceneStage({ container, buildings, roads }: SceneStageOptions
     buildingMaterial: null,
     surfaceMaterial: null,
     roadMaterials: new Map<RoadColorKey, LiveGlowMaterial>(),
+    fogStage: null,
   }
 
   /**
@@ -644,9 +700,17 @@ export function useSceneStage({ container, buildings, roads }: SceneStageOptions
   }
 
   /**
+
+  /**
    * 画一层发光网格 —— 「数字底座」最有辨识度的一层，成本极低。
    *
    * 走 Primitive（而不是几千个实体）：整层网格只有一次绘制调用。
+   *
+   * **网格方向按城市配**（`cityConfig.gridAngleDeg`）：网格必须和**街区轴线**平行，
+   * 否则两套线（街区轮廓 + 底座网格）在画面里互相打架，噪点翻倍。
+   * 角度是**实测**的：把该城所有道路折线的方位角做直方图（折叠到 0~90°）取峰值 ——
+   * 巴塞罗那 Eixample 的街区网格相对正北转了 **45.2°**（Cerdà 规划是照着海岸线走的），
+   * 米兰老城 **1.0°**、纽伦堡老城 **4.8°**（基本正南北）。
    */
   const createBaseGrid = (extent: MapExtent) => {
     const activeViewer = viewer.value
@@ -657,11 +721,48 @@ export function useSceneStage({ container, buildings, roads }: SceneStageOptions
     const latStep = GRID_SPACING_M / METERS_PER_DEGREE_LAT
 
     const instances: Cesium.GeometryInstance[] = []
-    for (let lng = extent.west; lng <= extent.east + 1e-9; lng += lonStep) {
-      instances.push(gridLine([lng, extent.south], [lng, extent.north]))
-    }
-    for (let lat = extent.south; lat <= extent.north + 1e-9; lat += latStep) {
-      instances.push(gridLine([extent.west, lat], [extent.east, lat]))
+    const angleRad = ((cityConfig.gridAngleDeg ?? 0) * Math.PI) / 180
+    if (Math.abs(angleRad) < 1e-6) {
+      // 正南北：走原来的快路径（正交的矩形网格）。
+      for (let lng = extent.west; lng <= extent.east + 1e-9; lng += lonStep) {
+        instances.push(gridLine([lng, extent.south], [lng, extent.north]))
+      }
+      for (let lat = extent.south; lat <= extent.north + 1e-9; lat += latStep) {
+        instances.push(gridLine([extent.west, lat], [extent.east, lat]))
+      }
+    } else {
+      // 旋转：在以范围中心为原点的 ENU 平面（米）里画两组正交的线，再换算回经纬度。
+      const axisNorth = { x: Math.sin(angleRad), y: Math.cos(angleRad) }
+      const axisEast = { x: Math.cos(angleRad), y: -Math.sin(angleRad) }
+      const centerLng = (extent.west + extent.east) / 2
+      const centerLat = (extent.south + extent.north) / 2
+      const widthM = (extent.east - extent.west) * METERS_PER_DEGREE_LAT * Math.cos(centerLatRad)
+      const heightM = (extent.north - extent.south) * METERS_PER_DEGREE_LAT
+      // 半径取对角线的一半再放大一点：保证旋转后的线能盖住整个范围。
+      const radiusM = (Math.hypot(widthM, heightM) / 2) * 1.2
+      const toLngLat = (x: number, y: number): [number, number] => [
+        centerLng + x / (METERS_PER_DEGREE_LAT * Math.cos(centerLatRad)),
+        centerLat + y / METERS_PER_DEGREE_LAT,
+      ]
+      const count = Math.ceil(radiusM / GRID_SPACING_M)
+      for (let k = -count; k <= count; k++) {
+        const ox = axisEast.x * k * GRID_SPACING_M
+        const oy = axisEast.y * k * GRID_SPACING_M
+        instances.push(
+          gridLine(
+            toLngLat(ox - axisNorth.x * radiusM, oy - axisNorth.y * radiusM),
+            toLngLat(ox + axisNorth.x * radiusM, oy + axisNorth.y * radiusM)
+          )
+        )
+        const px = axisNorth.x * k * GRID_SPACING_M
+        const py = axisNorth.y * k * GRID_SPACING_M
+        instances.push(
+          gridLine(
+            toLngLat(px - axisEast.x * radiusM, py - axisEast.y * radiusM),
+            toLngLat(px + axisEast.x * radiusM, py + axisEast.y * radiusM)
+          )
+        )
+      }
     }
     if (instances.length === 0) return
 
@@ -888,11 +989,12 @@ export function useSceneStage({ container, buildings, roads }: SceneStageOptions
           new Cesium.GeometryInstance({
             geometry: new Cesium.PolylineGeometry({
               positions,
-              // 流动层与道路**同宽**（原来四档都正好等于路宽）。
-              // 之前有个 `Math.max(3, width)` 的下限：路宽砍半后人行道是 2 px，
-              // 那个下限会让流动层（3 px）比路本身还宽 —— 现在直接用路宽，
-              // 保持「流动层正好盖在路面上」这个关系。
-              width,
+              // 流动层比路**窄一截**（路宽的 40%）。
+              // 原来它跟路同宽（主干道 7 px），远看就是**一格格亮块**——
+              // 用户反馈「道路霓虹的高亮块太大」。收窄之后它是一串**细亮刻度**：
+              // 还能看出数据在流动，但不再是一块块的视觉重量。
+              // 宽度也不能太窄（<2 px 会在某些距离上直接消失），下限 2 px。
+              width: Math.max(2, Math.round(width * 0.4)),
               vertexFormat: Cesium.PolylineMaterialAppearance.VERTEX_FORMAT,
               arcType: Cesium.ArcType.GEODESIC
             })
@@ -988,6 +1090,13 @@ export function useSceneStage({ container, buildings, roads }: SceneStageOptions
     } as ViewerConstructorOptions)
 
     applyDarkScene(viewer.value)
+
+    // 深度雾（后处理）：远景融进底色。
+    // 阶段只建一次，之后换主题只改它的 uniform 值 —— 重建会丢掉已编译的着色器程序。
+    const fogStage = createDepthFogStage(currentTheme)
+    primitives.fogStage = fogStage
+    viewer.value.scene.postProcessStages.add(fogStage)
+
     // 相机装上：交互监听 + 每帧自转（自转回调也在相机那边）。
     camera.attach(viewer.value)
 
@@ -996,7 +1105,7 @@ export function useSceneStage({ container, buildings, roads }: SceneStageOptions
     console.log(
       '[SmartCity] Viewer created. imagery layers:',
       viewer.value.imageryLayers.length,
-      '(0 = 底座自绘，没有外部瓦片)'
+      '(0 = 底座自绘，没有外部瓦片)',
     )
 
     // 定位到城市中心（鸟瞰视角），同时把自转的起手位置定好。
@@ -1011,10 +1120,12 @@ export function useSceneStage({ container, buildings, roads }: SceneStageOptions
     // 地面不随太阳变亮：底色恒定（深色大屏要的是「恒定的暗」）
     activeViewer.scene.globe.enableLighting = false
 
-    // 添加雾效果（远处建筑渐隐，减少渲染压力）
-    activeViewer.scene.fog.density = 0.0002
-    activeViewer.scene.fog.near = 1000 // 雾开始生效的距离
-    activeViewer.scene.fog.far = 5000 // 雾完全遮挡的距离
+    // **Cesium 自带的雾要关掉**：它只在地形瓦片的着色器里生效（`czm_fog`），
+    // 我们的建筑走 `MaterialAppearanceFS`，根本不吃雾；而且它的密度是按
+    // 「相机高度 / 地球半径」算的物理量 —— 1500 m 高度下有效密度约 2.4e-6，等于没有；
+    // 雾色还绑在大气上（我们刻意关了大气）。深度雾我们自己用后处理做，
+    // 见 `composables/sceneFog.ts`。
+    activeViewer.scene.fog.enabled = false
 
     // 开启抗锯齿
     activeViewer.scene.postProcessStages.fxaa.enabled = true
@@ -1113,6 +1224,8 @@ export function useSceneStage({ container, buildings, roads }: SceneStageOptions
     setMaterialColor(primitives.flowMaterial, theme.palette.flow, theme.glow.flowAlpha)
     // 地面网格
     setMaterialColor(primitives.gridMaterial, theme.palette.secondary, theme.glow.gridAlpha)
+    // 深度雾：颜色跟着底色走 —— 远景要沉进**底色**（不是白色，白雾会把画面洗灰）。
+    applyFogTheme(primitives.fogStage, theme)
   }
 
   const destroyViewer = () => {

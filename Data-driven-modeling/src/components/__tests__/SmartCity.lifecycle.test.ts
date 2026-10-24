@@ -86,6 +86,9 @@ vi.mock('cesium', () => {
       camera: {
         flyTo: vi.fn(),
         setView: vi.fn(),
+        // 平视锁定：钉住相机（range = 0 → 只转头不挪位置）
+        lookAt: vi.fn(),
+        lookAtTransform: vi.fn(),
         // 自转恢复时要从相机当前位置反算轨道状态
         positionCartographic: { longitude: 0, latitude: 0, height: 0 },
       },
@@ -94,8 +97,10 @@ vi.mock('cesium', () => {
         skyAtmosphere: { show: true },
         skyBox: { show: true },
         backgroundColor: null,
-        fog: {},
-        postProcessStages: { fxaa: {} },
+        fog: { enabled: true },
+        postProcessStages: { fxaa: {}, add: vi.fn(), remove: vi.fn() },
+        // 平视期间要关缩放与碰撞检测（否则相机会被顶上去）
+        screenSpaceCameraController: { enableZoom: true, enableCollisionDetection: true },
         maximumFrameRate: 0,
         // 自转挂在 preRender 上
         preRender: { addEventListener: vi.fn(), removeEventListener: vi.fn() },
@@ -148,6 +153,13 @@ vi.mock('cesium', () => {
       return {}
     }),
     SceneMode: { SCENE3D: 0 },
+    // 平视锁定：解除时传 Matrix4.IDENTITY
+    Matrix4: { IDENTITY: {} },
+    HeadingPitchRange: vi.fn((heading: number, pitch: number, range: number) => ({
+      heading,
+      pitch,
+      range,
+    })),
     // Cesium 1.104+ 把 OpenStreetMapImageryProvider 改成异步工厂 fromUrl。
     OpenStreetMapImageryProvider: Object.assign(vi.fn(), {
       fromUrl: vi.fn().mockResolvedValue({}),
@@ -169,6 +181,12 @@ vi.mock('cesium', () => {
       isConstant: (color as { isConstant?: boolean } | undefined)?.isConstant === true,
     })),
     Material: { fromType: vi.fn((type: string, uniforms: unknown) => ({ type, uniforms })) },
+    // 深度雾后处理阶段（composables/sceneFog.ts）
+    PostProcessStage: vi.fn((options: Record<string, unknown>) => ({
+      name: (options?.name as string) ?? '',
+      fragmentShader: (options?.fragmentShader as string) ?? '',
+      uniforms: { ...((options?.uniforms as Record<string, unknown>) ?? {}) },
+    })),
     CallbackProperty: vi.fn((callback: (...args: unknown[]) => unknown, isConstant = false) => ({
       callback,
       isConstant,
@@ -258,13 +276,24 @@ interface MockViewer {
         orientation: { heading: number; pitch: number; roll: number }
       }) => void
     >
+    /** 平视锁定：把相机钉在眼睛位置上。 */
+    lookAt: Mock<(target: unknown, offset: unknown) => void>
+    /** 解除锁定：传 `Matrix4.IDENTITY`。 */
+    lookAtTransform: Mock<(transform: unknown) => void>
     /** 自转恢复时用它反算轨道状态（经度/纬度是**弧度**）。 */
     positionCartographic: { longitude: number; latitude: number; height: number }
   }
   scene: {
     globe: { enableLighting: boolean; baseColor: unknown }
-    fog: { density: number; near: number; far: number }
-    postProcessStages: { fxaa: { enabled: boolean } }
+    /** Cesium 自带的雾：1.134 的 `Fog` 只有 `enabled` 是真属性。 */
+    fog: { enabled: boolean }
+    postProcessStages: {
+      fxaa: { enabled: boolean }
+      add: Mock<(stage: unknown) => void>
+      remove: Mock<(stage: unknown) => void>
+    }
+    /** 平视期间要关缩放与碰撞检测（否则相机会被顶上去）。 */
+    screenSpaceCameraController: { enableZoom: boolean; enableCollisionDetection: boolean }
     maximumFrameRate: number
     /** 自转挂在 preRender 上；测试要能把它注册的监听器取出来触发。 */
     preRender: {
@@ -694,13 +723,22 @@ describe('SmartCity behaviour', () => {
     await flushPromises()
     const scene = mockViewerOf(wrapper).scene
 
-    // optimizePerformance 在 onMounted 里跑：关光照（底色恒定）、加雾、开 FXAA、限帧
+    // optimizePerformance 在 onMounted 里跑：关光照（底色恒定）、关 Cesium 自带雾、开 FXAA、限帧
     expect(scene.globe.enableLighting).toBe(false)
-    expect(scene.fog.density).toBeGreaterThan(0)
-    expect(scene.fog.near).toBeGreaterThan(0)
-    expect(scene.fog.far).toBeGreaterThan(scene.fog.near)
+    // Cesium 自带的雾只在地形瓦片的着色器里生效（我们的建筑不吃雾），
+    // 而且密度小到等于没有 —— 明确关掉，深度雾走我们自己的后处理阶段。
+    expect(scene.fog.enabled).toBe(false)
     expect(scene.postProcessStages.fxaa.enabled).toBe(true)
     expect(scene.maximumFrameRate).toBe(60)
+    // 深度雾阶段挂上了，而且参数是有效的（far > near、强度 > 0）
+    expect(scene.postProcessStages.add).toHaveBeenCalled()
+    const fogStage = scene.postProcessStages.add.mock.calls[0][0] as {
+      name: string
+      uniforms: { fogNear: number; fogFar: number; fogStrength: number }
+    }
+    expect(fogStage.name).toBe('smart-city-depth-fog')
+    expect(fogStage.uniforms.fogFar).toBeGreaterThan(fogStage.uniforms.fogNear)
+    expect(fogStage.uniforms.fogStrength).toBeGreaterThan(0)
     // 地面底色必须被设成大屏底色（不设的话 Cesium 给的是灰蓝色球体）
     expect(scene.globe.baseColor).toBeTruthy()
 
@@ -1248,19 +1286,48 @@ describe('深色底座', () => {
     const instances = grid!.geometryInstances
     expect(instances.length).toBeGreaterThan(5)
 
-    // 竖线（两端 x 相同）之间的间距 ≈ 200 米
-    const verticals = instances.filter(
-      (instance) => instance.geometry.positions[0].x === instance.geometry.positions[1].x
-    )
-    expect(verticals.length).toBeGreaterThan(1)
-    const xs = verticals.map((instance) => instance.geometry.positions[0].x).sort((a, b) => a - b)
-    const spacingMeters =
-      (xs[1] - xs[0]) * 111320 * Math.cos((CENTER_LAT * Math.PI) / 180)
-    expect(Math.abs(spacingMeters - 200)).toBeLessThan(5)
+    // 网格线的走向必须对齐**街区轴线**：巴塞罗那 Eixample 实测 45°（相对正北）。
+    // 两组正交的线 —— 45°（街区轴向）与 135°（垂直方向）。
+    // （旧断言量的是「两端经度相同」，那是正北网格的假设，旋转后不成立。）
+    const bearingOf = (instance: { geometry: { positions: Array<{ x: number; y: number }> } }) => {
+      const [from, to] = instance.geometry.positions
+      const dLng = to.x - from.x
+      const dLat = to.y - from.y
+      const deg = (Math.atan2(dLng * Math.cos((CENTER_LAT * Math.PI) / 180), dLat) * 180) / Math.PI
+      return Math.round(((deg % 180) + 180) % 180)
+    }
+    const bearings = instances.map(bearingOf)
+    expect([...new Set(bearings)].sort((a, b) => a - b)).toEqual([45, 135])
+
+    // 同一组平行线之间的间距 ≈ 200 米（沿**垂直方向**量偏移；差值与原点无关）
+    const METERS_PER_DEGREE_LAT = 111320
+    const perpendicularOffsets = (bearing: number, axis: { x: number; y: number }) => {
+      const family = instances.filter(instance => bearingOf(instance) === bearing)
+      const points = family.map(instance => {
+        const [from, to] = instance.geometry.positions
+        return {
+          x: ((from.x + to.x) / 2) * METERS_PER_DEGREE_LAT * Math.cos((CENTER_LAT * Math.PI) / 180),
+          y: ((from.y + to.y) / 2) * METERS_PER_DEGREE_LAT,
+        }
+      })
+      const origin = points[0]
+      return points
+        .map(point => (point.x - origin.x) * axis.x + (point.y - origin.y) * axis.y)
+        .sort((a, b) => a - b)
+    }
+    const halfDiagonal = Math.SQRT1_2
+    const offsets = perpendicularOffsets(45, { x: halfDiagonal, y: -halfDiagonal })
+    expect(offsets.length).toBeGreaterThan(1)
+    const gaps = offsets.slice(1).map((value, index) => value - offsets[index])
+    const medianGap = [...gaps].sort((a, b) => a - b)[Math.floor(gaps.length / 2)]
+    expect(Math.abs(medianGap - 200)).toBeLessThan(5)
 
     // 网格要盖住数据范围（2.1574 ~ 2.1874）
-    expect(Math.min(...xs)).toBeGreaterThanOrEqual(2.1564)
-    expect(Math.max(...xs)).toBeLessThanOrEqual(2.1884)
+    const lngs = instances.flatMap(instance =>
+      instance.geometry.positions.map(position => position.x),
+    )
+    expect(Math.min(...lngs)).toBeLessThanOrEqual(2.1574)
+    expect(Math.max(...lngs)).toBeGreaterThanOrEqual(2.1874)
 
     wrapper.unmount()
   })
@@ -1278,8 +1345,9 @@ describe('深色底座', () => {
     expect(flow).toBeDefined()
     expect(flow!.appearance.material.uniforms.dashLength).toBe(24)
     expect(flow!.appearance.material.uniforms.color?.name).toBe(DARK_PALETTE.flow)
-    // 流动层与道路同宽（主干道 7），盖得住路面
-    expect(flow!.geometryInstances[0].geometry.width).toBe(7)
+    // 流动层比道路**窄一截**（路宽的 40%，主干道 7 → 3）：
+    // 同宽 + 长虚线远看就是一格格亮块（用户反馈「道路霓虹的高亮块太大」）。
+    expect(flow!.geometryInstances[0].geometry.width).toBe(3)
 
     wrapper.unmount()
   })

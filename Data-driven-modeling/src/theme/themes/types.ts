@@ -89,6 +89,31 @@ export interface ThemeGlow {
   flowAlpha: number
 }
 
+/**
+ * 深度雾参数。
+ *
+ * 雾是**后处理**做的（见 `composables/sceneFog.ts`）：按屏幕像素算出到相机的距离，
+ * 把远处的像素混进雾色。距离尺度是**场景事实**（鸟瞰 1500 m、俯角 45°，
+ * 城区直径约 1.7 km），所以 near / far 在各主题之间是一致的；
+ * 只有强度是**审美**选择，所以它是主题的一部分。
+ */
+export interface ThemeFog {
+  /** 雾开始生效的距离（米，相机到物体的距离）。 */
+  near: number
+  /** 雾最浓的距离（米）：城区远端就落在这里。 */
+  far: number
+  /**
+   * 回落段长度（米）：从 `far` 再往外这么多米，雾完全退掉。
+   *
+   * **必须有回落段**：深度纹理里地面的深度偏大（椭球体大瓦片的深度插值不准），
+   * 底座网格、流动光效、事件光柱这些吃不到自己深度的东西会读到那一档远距离，
+   * 没有回落段就会被整片糊掉（实测底座网格直接消失）。
+   */
+  falloff: number
+  /** 雾的最大强度（0~1）：1 = 远处完全变成雾色。 */
+  strength: number
+}
+
 /** 一套完整的主题。 */
 export interface ThemeDefinition {
   /** 稳定标识（持久化用）。 */
@@ -103,6 +128,8 @@ export interface ThemeDefinition {
   roadColors: ThemeRoadColors
   /** 辉光参数。 */
   glow: ThemeGlow
+  /** 深度雾参数。 */
+  fog: ThemeFog
 }
 
 /**

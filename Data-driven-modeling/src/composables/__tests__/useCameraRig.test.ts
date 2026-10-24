@@ -59,18 +59,33 @@ const preRenderListenerOf = (stubViewer: StubViewer): (() => void) => {
   return calls[0][0]
 }
 
-/** 取交互监听器注册的回调。 */
+/**
+ * 取交互监听器注册的回调。
+ *
+ * 注意：`attach` 会建**两个** ScreenSpaceEventHandler ——
+ * 相机交互（记「用户操作了」，六个输入）与平视拖拽（自己接管转向，三个输入）。
+ * 这里取**第一个**（相机交互那个）。
+ */
 const interactionActionsOf = (): Array<() => void> => {
-  const handler = (
+  const created = screenSpaceHandlerMock().mock.results[0]
+  return created.value.setInputAction.mock.calls.map(call => call[0] as () => void)
+}
+
+/** 取平视拖拽监听器注册的回调（第二个 handler）。 */
+const streetDragActionsOf = (): Array<() => void> => {
+  const created = screenSpaceHandlerMock().mock.results[1]
+  return created.value.setInputAction.mock.calls.map(call => call[0] as () => void)
+}
+
+/** Cesium.ScreenSpaceEventHandler 这个 mock 本身。 */
+const screenSpaceHandlerMock = () =>
+  (
     Cesium as unknown as {
       ScreenSpaceEventHandler: {
         mock: { results: Array<{ value: { setInputAction: { mock: { calls: unknown[][] } } } }> }
       }
     }
   ).ScreenSpaceEventHandler
-  const created = handler.mock.results[handler.mock.results.length - 1]
-  return created.value.setInputAction.mock.calls.map(call => call[0] as () => void)
-}
 
 describe('useCameraRig', () => {
   it('attach 装上交互监听并把自转挂到 preRender 上', () => {
@@ -79,6 +94,8 @@ describe('useCameraRig', () => {
     expect(stubViewer.scene.preRender.addEventListener).toHaveBeenCalledTimes(1)
     // 六种输入都会记一笔「用户操作了」
     expect(interactionActionsOf().length).toBe(6)
+    // 平视拖拽自己接管转向：按下 / 移动 / 松开 三个动作
+    expect(streetDragActionsOf().length).toBe(3)
   })
 
   it('鸟瞰模式下每帧把视角落回轨道', () => {

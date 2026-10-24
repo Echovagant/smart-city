@@ -33,7 +33,26 @@ const stub = () => getCesiumStub()
 
 /** 网格 Primitive 的形状（只看几何实例的端点）。 */
 interface GridPrimitive {
-  geometryInstances: Array<{ geometry: { positions: Array<{ x: number; z: number }> } }>
+  geometryInstances: Array<{
+    geometry: { positions: Array<{ x: number; y: number; z: number }> }
+  }>
+}
+
+/**
+ * 网格线的方位角（度，相对正北，0~180）。
+ *
+ * 网格要跟**街区轴线**平行（巴塞罗那实测 45°），所以这里量的是**线的走向**，
+ * 不是「两端经度相同」（那是正北网格的旧假设，旋转后不成立）。
+ */
+const gridBearing = (
+  instance: { geometry: { positions: Array<{ x: number; y: number }> } },
+  centerLat: number,
+): number => {
+  const [from, to] = instance.geometry.positions
+  const dLng = to.x - from.x
+  const dLat = to.y - from.y
+  const deg = (Math.atan2(dLng * Math.cos((centerLat * Math.PI) / 180), dLat) * 180) / Math.PI
+  return Math.round(((deg % 180) + 180) % 180)
 }
 
 beforeEach(() => {
@@ -216,17 +235,34 @@ describe('useSceneStage', () => {
     expect(camera.flyToOverhead).toHaveBeenCalledWith({ duration: 2, resync: false })
   })
 
-  it('optimizePerformance 开雾、抗锯齿、限帧', () => {
+  it('optimizePerformance 关掉 Cesium 自带雾、开抗锯齿、限帧', () => {
     const { stage, camera } = makeStage()
     return stage.initCesium(camera).then(() => {
       stage.optimizePerformance()
       const viewer = stage.viewer.value as unknown as StubViewer
-      expect(viewer.scene.fog.density).toBeGreaterThan(0)
-      expect(viewer.scene.fog.near).toBeGreaterThan(0)
-      expect(viewer.scene.fog.far).toBeGreaterThan(viewer.scene.fog.near)
+      // Cesium 自带的雾只在地形瓦片的着色器里生效（`czm_fog`），
+      // 我们的建筑走 `MaterialAppearanceFS`，根本不吃雾；
+      // 密度还是按「相机高度 / 地球半径」算的物理量（1500 m 下约 2.4e-6）—— 等于没有。
+      // 所以明确关掉它，深度雾我们自己用后处理做。
+      expect(viewer.scene.fog.enabled).toBe(false)
       expect(viewer.scene.postProcessStages.fxaa.enabled).toBe(true)
       expect(viewer.scene.maximumFrameRate).toBe(60)
     })
+  })
+
+  it('initCesium 挂上深度雾后处理阶段，参数跟主题走', async () => {
+    const { stage, camera } = makeStage()
+    await stage.initCesium(camera)
+    const viewer = stage.viewer.value as unknown as StubViewer
+
+    expect(viewer.scene.postProcessStages.add).toHaveBeenCalledTimes(1)
+    const fogStage = viewer.scene.postProcessStages.add.mock.calls[0][0] as {
+      name: string
+      uniforms: { fogNear: number; fogFar: number; fogStrength: number }
+    }
+    expect(fogStage.name).toBe('smart-city-depth-fog')
+    expect(fogStage.uniforms.fogFar).toBeGreaterThan(fogStage.uniforms.fogNear)
+    expect(fogStage.uniforms.fogStrength).toBeGreaterThan(0)
   })
 
   it('loadGeoJSONBuildings 没有数据时什么都不做', async () => {
@@ -376,7 +412,7 @@ describe('useSceneStage', () => {
     expect(stub().GeoJsonDataSource.load).not.toHaveBeenCalled()
   })
 
-  it('createBaseGrid 在数据范围上铺一层发光网格', async () => {
+  it('createBaseGrid 在数据范围上铺一层发光网格，方向对齐街区轴线', async () => {
     const { stage, camera } = makeStage()
     await stage.initCesium(camera)
     stage.createBaseGrid({ west: 2.1574, south: 41.3895, east: 2.1874, north: 41.4095 })
@@ -386,11 +422,16 @@ describe('useSceneStage', () => {
     expect(primitive.geometryInstances.length).toBeGreaterThan(0)
     // 网格线抬到 1.5 m，避免与地面 z-fighting
     expect(primitive.geometryInstances[0].geometry.positions[0].z).toBe(GRID_ALTITUDE_M)
-    // 竖线间距 ≈ GRID_SPACING_M
-    const verticals = primitive.geometryInstances.filter(
-      instance => instance.geometry.positions[0].x === instance.geometry.positions[1].x,
-    )
-    expect(verticals.length).toBeGreaterThan(1)
+
+    // 网格必须与**街区轴线**平行，否则两套线在画面里互相打架（噪点翻倍）。
+    // 巴塞罗那 Eixample 的街区轴相对正北转了 45°（实测），所以是两组 45° / 135° 的线。
+    const centerLat = (41.3895 + 41.4095) / 2
+    const bearings = primitive.geometryInstances.map(instance => gridBearing(instance, centerLat))
+    const uniqueBearings = [...new Set(bearings)].sort((a, b) => a - b)
+    expect(uniqueBearings).toEqual([45, 135])
+    // 两组线都要有（否则只画了一组，另一组方向的街区就没网格托着）
+    expect(bearings.filter(b => b === 45).length).toBeGreaterThan(1)
+    expect(bearings.filter(b => b === 135).length).toBeGreaterThan(1)
   })
 
   it('toggleBuildings / toggleRoads 同步实体与 Primitive 的显隐', async () => {
@@ -466,9 +507,12 @@ describe('useSceneStage', () => {
 
   it('城心与网格间距是约定的常量', () => {
     expect(cityConfig.center).toEqual({ lng: 2.1652, lat: 41.39585 })
-    expect(cityConfig.streetPosition).toEqual({ lng: 2.1736, lat: 41.4026 })
+    // 平视落点：Eixample 对角街上的街廊口（实测沿 315° 视线 539 m）
+    expect(cityConfig.streetPosition).toEqual({ lng: 2.16712, lat: 41.40101 })
     expect(cityConfig.zoomLevel).toBe(1500)
-    expect(cityConfig.streetLevel).toEqual({ height: 1.7, heading: 0 })
+    expect(cityConfig.streetLevel.height).toBe(1.7)
+    // 朝向 315°（弧度）
+    expect(cityConfig.streetLevel.heading).toBeCloseTo((315 * Math.PI) / 180, 6)
     expect(GRID_SPACING_M).toBe(200)
     expect(FLOW_DASH_LENGTH).toBe(24)
   })
