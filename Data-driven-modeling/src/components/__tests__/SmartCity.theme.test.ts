@@ -183,9 +183,9 @@ describe('SmartCity theme wiring', () => {
   it('opens and closes the theme panel from the control panel', async () => {
     const wrapper = mount(SmartCity, { attachTo: document.body })
 
-    // 控制面板里多了一个「主题」入口（4 个开关按钮 + 1 个主题入口）
+    // 控制面板里多了一个「主题」入口（4 个开关按钮 + 1 个天气按钮 + 1 个主题入口）
     const buttons = wrapper.findAll('.control-panel button')
-    expect(buttons).toHaveLength(5)
+    expect(buttons).toHaveLength(6)
     expect(buttons[4].text()).toContain('主题')
 
     expect(wrapper.find('.dc-theme-picker').exists()).toBe(false)
@@ -193,7 +193,7 @@ describe('SmartCity theme wiring', () => {
     expect(wrapper.find('.dc-theme-picker').exists()).toBe(true)
 
     // 主题面板自己的按钮**不进**控制面板的按钮集合（DOM 契约要稳）
-    expect(wrapper.findAll('.control-panel button')).toHaveLength(5)
+    expect(wrapper.findAll('.control-panel button')).toHaveLength(6)
 
     await wrapper.find('.control-panel-theme').trigger('click')
     expect(wrapper.find('.dc-theme-picker').exists()).toBe(false)

@@ -932,8 +932,8 @@ describe('SmartCity behaviour', () => {
   it('drives the toggles from the control-panel buttons', async () => {
     const wrapper = mountSmartCity()
     const buttons = wrapper.findAll('.control-panel button')
-    // 4 个开关按钮 + 1 个主题入口（主题面板自己的按钮不在这个集合里）
-    expect(buttons).toHaveLength(5)
+    // 4 个开关按钮 + 1 个天气按钮 + 1 个主题入口（主题面板自己的按钮不在这个集合里）
+    expect(buttons).toHaveLength(6)
 
     // 建筑
     expect(buttons[0].text()).toBe('隐藏建筑')
@@ -962,7 +962,7 @@ describe('SmartCity behaviour', () => {
     await buttons[4].trigger('click')
     expect(wrapper.find('.dc-theme-picker').exists()).toBe(true)
     // 面板展开后控制面板的按钮集合不变
-    expect(wrapper.findAll('.control-panel button')).toHaveLength(5)
+    expect(wrapper.findAll('.control-panel button')).toHaveLength(6)
 
     wrapper.unmount()
   })
@@ -1636,7 +1636,7 @@ describe('大屏骨架的 DOM 契约', () => {
     const panel = wrapper.find('.control-panel')
     expect(panel.exists()).toBe(true)
     const buttons = panel.findAll('button')
-    expect(buttons).toHaveLength(5)
+    expect(buttons).toHaveLength(6)
     expect(buttons.map(button => button.text())).toEqual([
       '隐藏建筑',
       '隐藏道路',
@@ -1644,6 +1644,8 @@ describe('大屏骨架的 DOM 契约', () => {
       '切换平视',
       // 主题入口：按钮上直接写着当前主题名
       expect.stringContaining('主题'),
+      // 天气演示开关：按钮上写着当前天气
+      expect.stringContaining('天气'),
     ])
 
     // 2) 实时交通读数
@@ -1674,7 +1676,7 @@ describe('大屏骨架的 DOM 契约', () => {
     // 控制面板（4 个开关按钮 + 1 个主题入口 + OSM 署名）在通栏底栏右侧
     const bottom = wrapper.find('.dashboard-area-bottom')
     expect(bottom.find('.control-panel').exists()).toBe(true)
-    expect(bottom.findAll('.control-panel button')).toHaveLength(5)
+    expect(bottom.findAll('.control-panel button')).toHaveLength(6)
     expect(bottom.text()).toContain('OpenStreetMap contributors')
 
     // 左列只剩「核心指标」+「24 小时趋势」两块（风格板线框的「左列两卡」）

@@ -110,6 +110,11 @@
               主题 · {{ theme.label }}
             </button>
 
+            <!-- 天气演示开关：真实天气之外能随时切出雨/雪/雾，方便验收与汇报。 -->
+            <button @click="weather.cycleMode()">
+              天气 · {{ weatherLabel }}
+            </button>
+
             <!-- OSM 数据遵循 ODbL：展示这份数据必须署名。删掉这一行等于违反许可证。 -->
             <div class="attribution">数据 © OpenStreetMap contributors</div>
           </div>
@@ -138,6 +143,7 @@ import 'cesium/Build/Cesium/Widgets/widgets.css'
 import { useCityData } from '@/composables/useCityData'
 import { useDashboardState } from '@/composables/useDashboardState'
 import { useCameraRig } from '@/composables/useCameraRig'
+import { useWeather } from '@/composables/useWeather'
 import { useEventMarkers } from '@/composables/useEventMarkers'
 import { useSceneLinkageEffect } from '@/composables/useSceneLinkageEffect'
 import { useSceneStage, computeExtent, nextPaint, setActiveCityScene } from '@/composables/useSceneStage'
@@ -247,6 +253,27 @@ const camera = useCameraRig({
   collider: stage.collider,
 })
 const { toggleView } = camera
+
+// 天气层：把城市当前天气渲染进 3D 场景（雨/雪/雾/地面湿滑）。
+// 真实天气由后端的 open-meteo 指标驱动，另有一个演示开关（自动/雨/雪/雾）。
+const weather = useWeather({
+  viewer,
+  overview: cityOverview,
+  getFogStage: () => stage.primitives.fogStage,
+  getFogBaseStrength: () => theme.value.fog.strength,
+})
+
+/** 天气按钮上的字：演示模式优先，否则报真实天气。 */
+const weatherLabel = computed(() => {
+  if (weather.mode !== 'auto') {
+    return { rain: '雨', snow: '雪', fog: '雾' }[weather.mode]
+  }
+  const effect = weather.effect
+  if (effect.snow > 0.05) return '雪'
+  if (effect.rain > 0.05) return '雨'
+  if (effect.fog > 0.05) return '薄雾'
+  return '晴'
+})
 
 // 车队：车辆与路灯。
 const fleet = useTrafficFleet({ viewer, state })
