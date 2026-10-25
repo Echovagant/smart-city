@@ -1,4 +1,4 @@
-import { markRaw, reactive, ref } from 'vue'
+import { markRaw, reactive, ref, watch } from 'vue'
 import type { Ref } from 'vue'
 import * as Cesium from 'cesium'
 import {
@@ -16,7 +16,7 @@ import {
 } from '@/theme/dark'
 import type { LiveColorMaterial, LiveGlowMaterial } from '@/theme/dark'
 import type { ThemeDefinition, ThemeRoadColors } from '@/theme/themes/types'
-import { applyFogTheme, createDepthFogStage } from './sceneFog'
+import { applyFogTheme, createDepthFogStage, setFogEnabled } from './sceneFog'
 import type {
   BuildingsResponse,
   CityViewState,
@@ -660,6 +660,11 @@ export function useSceneStage({ container, buildings, roads }: SceneStageOptions
     trafficEntities: []
   })
 
+  // 深度雾的**硬开关**：只在鸟瞰开，平视整段关掉。
+  //
+  // 不用「靠距离回落段绕开」那种软办法：平视是 1.7 m 的人眼高度，
+  // 深度纹理在这个高度上的插值最不准（实测地面深度会被算到几公里外），
+  // 开着只会在平视画面上糊出一层不该有的灰蒙。
   const primitives: ScenePrimitives = {
     buildingGlow: null,
     buildingGlowMaterial: null,
@@ -672,6 +677,16 @@ export function useSceneStage({ container, buildings, roads }: SceneStageOptions
     roadMaterials: new Map<RoadColorKey, LiveGlowMaterial>(),
     fogStage: null,
   }
+
+  // 深度雾的**硬开关**：只在鸟瞰开，平视整段关掉。
+  //
+  // 不用「靠距离回落段绕开」那种软办法：平视是 1.7 m 的人眼高度，
+  // 深度纹理在这个高度上的插值最不准（实测地面深度会被算到几公里外），
+  // 开着只会在平视画面上糊出一层不该有的灰蒙。
+  watch(
+    () => state.viewMode,
+    mode => setFogEnabled(primitives.fogStage, mode === 'overhead'),
+  )
 
   /**
    * 当前生效的主题。

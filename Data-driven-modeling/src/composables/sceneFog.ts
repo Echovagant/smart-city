@@ -71,11 +71,18 @@ uniform float fogNear;
 uniform float fogFar;
 uniform float fogFalloff;
 uniform float fogStrength;
+uniform float fogEnabled;
 
 in vec2 v_textureCoordinates;
 
 void main(void) {
   vec4 color = texture(colorTexture, v_textureCoordinates);
+
+  // 硬开关：平视时整个阶段直接不生效（1 = 开，0 = 关）。
+  if (fogEnabled < 0.5) {
+    out_FragColor = color;
+    return;
+  }
 
   // 深度 1.0 = 这一像素没有地面（天空 / 背景），不参与雾。
   float depth = czm_readDepth(depthTexture, v_textureCoordinates);
@@ -123,6 +130,8 @@ export const createDepthFogStage = (theme: ThemeDefinition): Cesium.PostProcessS
       fogFar: theme.fog.far,
       fogFalloff: theme.fog.falloff,
       fogStrength: theme.fog.strength,
+      // 硬开关：默认开；平视时由场景层关掉（见 useSceneStage 的 watch）。
+      fogEnabled: 1,
     },
   })
   return stage
@@ -144,4 +153,19 @@ export const applyFogTheme = (
   stage.uniforms.fogFar = theme.fog.far
   stage.uniforms.fogFalloff = theme.fog.falloff
   stage.uniforms.fogStrength = theme.fog.strength
+}
+
+/**
+ * 深度雾的硬开关。
+ *
+ * **平视直接关掉**，不靠回落段绕：
+ * 平视是 1.7 m 的人眼高度，深度纹理在这个高度上的插值最不准
+ * （实测地面深度会被算到几公里外），开着只会让画面出现不该有的灰蒙。
+ */
+export const setFogEnabled = (
+  stage: Cesium.PostProcessStage | null,
+  enabled: boolean,
+): void => {
+  if (!stage) return
+  stage.uniforms.fogEnabled = enabled ? 1 : 0
 }
