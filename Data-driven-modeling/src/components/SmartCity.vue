@@ -114,6 +114,16 @@
             <div class="attribution">数据 © OpenStreetMap contributors</div>
           </div>
 
+          <!-- 漫游提示：站在街上时给出按键说明（否则没人知道能走）。 -->
+          <div
+            v-if="state.viewMode === 'street' || state.firstPerson"
+            class="street-hint"
+          >
+            <strong>{{ state.firstPerson ? '第一人称漫游' : '街道视角' }}</strong>
+            <span>W A S D 移动 · Shift 跑 · Ctrl 冲刺 · 拖拽转向</span>
+            <span v-if="state.firstPerson">按住 Alt 进入 · 松开 Alt 回鸟瞰</span>
+          </div>
+
           <!-- 主题面板：3 套默认主题 + 自选色 / 辉光 / 不透明度 -->
           <ThemePicker v-if="themePanelOpen" />
         </div>
@@ -229,7 +239,13 @@ const themePanelOpen = ref(false)
 watch(theme, next => stage.applyTheme(next), { immediate: true })
 
 // 相机机位：自转状态（cameraOrbit）归它管。
-const camera = useCameraRig({ viewer, state, primitives: stage.primitives })
+const camera = useCameraRig({
+  viewer,
+  state,
+  primitives: stage.primitives,
+  // 建筑碰撞索引（第一人称漫游挡墙）—— 建筑数据到了之后才会有 ✓。
+  collider: stage.collider,
+})
 const { toggleView } = camera
 
 // 车队：车辆与路灯。
@@ -886,8 +902,40 @@ onUnmounted(() => {
   white-space: nowrap;
 }
 
-/* OSM 署名：ODbL 要求，不可删除（现在跟着控制按钮在底栏右侧） */
-.attribution {
+/* 漫游提示：站在街上时浮在画面上方，给出按键说明 */
+.street-hint {
+  position: absolute;
+  top: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 8px 18px;
+  border: 1px solid color-mix(in srgb, var(--dc-accent, #1e40af) 40%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--dc-panel, #0b1526) 78%, transparent);
+  backdrop-filter: blur(6px);
+  color: var(--dc-text, #cbd5e1);
+  font-size: 12px;
+  line-height: 1.5;
+  letter-spacing: 0.02em;
+  pointer-events: none;
+  z-index: 4;
+}
+
+.street-hint strong {
+  color: var(--dc-accent, #4a7fb5);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.street-hint span {
+  color: color-mix(in srgb, var(--dc-text, #cbd5e1) 72%, var(--dc-screen, #04070f));
+}
+
+/* OSM 署名：ODbL 要求，不可删除（现在跟着控制按钮在底栏右侧） */.attribution {
   margin-top: auto;
   padding-top: 6px;
   border-top: 1px solid color-mix(in srgb, var(--dc-accent, #1e40af) 28%, transparent);

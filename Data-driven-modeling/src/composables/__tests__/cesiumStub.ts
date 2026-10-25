@@ -38,6 +38,8 @@ export interface StubViewer {
     lookAtTransform: Mock<(transform: unknown) => void>
     /** 自转恢复时用它反算轨道（经纬度是**弧度**）。 */
     positionCartographic: { longitude: number; latitude: number; height: number }
+    /** 透视相机的视野角：平视/第一人称会改它，鸟瞰会还原。 */
+    frustum: PerspectiveFrustum
   }
   scene: {
     globe: { enableLighting: boolean; baseColor: unknown; showGroundAtmosphere: boolean }
@@ -122,6 +124,8 @@ export interface CesiumStub {
   SceneMode: { SCENE3D: number }
   /** 4×4 变换矩阵：平视锁定解除时传 `Matrix4.IDENTITY`。 */
   Matrix4: { IDENTITY: Record<string, never> }
+  /** 透视相机（视野角 fov 只在这个类上有）。 */
+  PerspectiveFrustum: typeof PerspectiveFrustum
   /** 相机朝向 + 半径（平视锁定用；range = 0 → 钉在原地只转头）。 */
   HeadingPitchRange: Mock<
     (heading: number, pitch: number, range: number) => {
@@ -132,6 +136,11 @@ export interface CesiumStub {
   >
   /** 桩里创建出来的 Viewer（按创建顺序）。 */
   viewers: StubViewer[]
+}
+
+/** 透视相机（视野角 fov 只在这个类上有）。 */
+class PerspectiveFrustum {
+  fov = 1.047
 }
 
 /** 当前这份桩（测试里用 `getCesiumStub()` 取）。 */
@@ -181,6 +190,8 @@ export const createCesiumStub = (): CesiumStub => {
       lookAt: vi.fn(),
       lookAtTransform: vi.fn(),
       positionCartographic: { longitude: 0, latitude: 0, height: 0 },
+      // 透视相机的视野角：平视/第一人称会改它，鸟瞰会还原。
+      frustum: new PerspectiveFrustum(),
     },
     scene: {
       globe: { enableLighting: false, baseColor: null, showGroundAtmosphere: true },
@@ -292,6 +303,7 @@ export const createCesiumStub = (): CesiumStub => {
     },
     SceneMode: { SCENE3D: 0 },
     Matrix4: { IDENTITY: {} },
+    PerspectiveFrustum,
     HeadingPitchRange: vi.fn((heading: number, pitch: number, range: number) => ({
       heading,
       pitch,

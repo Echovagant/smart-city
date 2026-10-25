@@ -17,6 +17,8 @@ import {
 import type { LiveColorMaterial, LiveGlowMaterial } from '@/theme/dark'
 import type { ThemeDefinition, ThemeRoadColors } from '@/theme/themes/types'
 import { applyFogTheme, createDepthFogStage, setFogEnabled } from './sceneFog'
+import { buildBuildingCollider } from './buildingCollider'
+import type { BuildingCollider } from './buildingCollider'
 import type {
   BuildingsResponse,
   CityViewState,
@@ -404,6 +406,13 @@ export interface SmartCityState extends CityViewState {
   buildingEntities: Cesium.Entity[]
   roadEntities: Cesium.Entity[]
   trafficEntities: Cesium.Entity[]
+  /**
+   * 第一人称漫游中（按住修饰键从鸟瞰临时落到街上）。
+   *
+   * 与 `viewMode === 'street'` 区分：那个是底栏按钮切的「站在街上」，
+   * 这个是**临时**的、松开修饰键就回鸟瞰。
+   */
+  firstPerson: boolean
 }
 
 /**
@@ -439,7 +448,6 @@ export interface ScenePrimitives {
   /** 深度雾后处理阶段（换主题改它的 uniform 值，不重建）。 */
   fogStage: Cesium.PostProcessStage | null
 }
-
 /** 数据的经纬度范围。 */
 export interface MapExtent {
   west: number
@@ -617,6 +625,12 @@ export interface SceneStage {
   viewer: Ref<Cesium.Viewer | null>
   /** 视图状态 + 三组 Cesium 实体列表。 */
   state: SmartCityState
+  /**
+   * 建筑碰撞索引（第一人称漫游挡墙用）。
+   *
+   * 建筑数据到了之后才建好 ✓ —— 所以是 Ref 而不是普通值 ✓。
+   */
+  collider: Ref<BuildingCollider | null>
   /** 场景里所有批量 Primitive 的引用与材质（全项目唯一一份）。 */
   primitives: ScenePrimitives
   /** 组件是否还挂载着（异步装配路径的守卫）。 */
@@ -649,6 +663,8 @@ export interface SceneStage {
 export function useSceneStage({ container, buildings, roads }: SceneStageOptions): SceneStage {
   const viewer = ref<Cesium.Viewer | null>(null)
   const mounted = ref(true)
+  /** 建筑碰撞索引（第一人称漫游挡墙）：建筑数据到了才建好。 */
+  const collider = ref<BuildingCollider | null>(null)
 
   const state = reactive<SmartCityState>({
     buildingVisible: true,
@@ -657,7 +673,8 @@ export function useSceneStage({ container, buildings, roads }: SceneStageOptions
     viewMode: 'overhead', // 'overhead' 鸟瞰 | 'street' 平视
     buildingEntities: [],
     roadEntities: [],
-    trafficEntities: []
+    trafficEntities: [],
+    firstPerson: false
   })
 
   // 深度雾的**硬开关**：只在鸟瞰开，平视整段关掉。
@@ -850,6 +867,12 @@ export function useSceneStage({ container, buildings, roads }: SceneStageOptions
         clampToGround: false,
       })
       if (!mounted.value) return
+
+      // 建筑碰撞索引：第一人称漫游挡墙用（建一次，之后只查不建 ✓）。
+      collider.value = buildBuildingCollider(
+        buildings.value.features as unknown as Parameters<typeof buildBuildingCollider>[0],
+        cityConfig.center,
+      )
 
       const entities = dataSource.entities.values
       // 建筑本体材质 —— **全场共用这一个实例**。
@@ -1252,6 +1275,7 @@ export function useSceneStage({ container, buildings, roads }: SceneStageOptions
   const stage: SceneStage = {
     viewer,
     state,
+    collider,
     primitives,
     mounted,
     initCesium,

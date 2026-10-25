@@ -32,6 +32,7 @@ const makeFleet = () => {
     buildingEntities: [],
     roadEntities: [],
     trafficEntities: [],
+    firstPerson: false,
   })
   const fleet = useTrafficFleet({ viewer: viewer as Ref<never>, state })
   const stubViewer = stub().Viewer() as unknown as StubViewer

@@ -51,6 +51,18 @@ const cesiumMock = vi.hoisted(() => ({
   ionImageryProviderCalls: 0,
 }))
 
+/**
+ * 透视相机（视野角 fov 只在这个类上有）。
+ *
+ * 用 `vi.hoisted` 是因为 `vi.mock` 的工厂会被提升到 import 之前 ——
+ * 直接声明 class 会在工厂执行时还没初始化（`Cannot access before initialization`）。
+ */
+const PerspectiveFrustum = vi.hoisted(() =>
+  class {
+    fov = 1.047
+  },
+)
+
 // Stub cesium BEFORE importing SmartCity. The module exports everything as
 // functions or constructors; returning empty objects is enough to keep
 // SmartCity's onMounted from throwing during a jsdom mount.
@@ -91,6 +103,8 @@ vi.mock('cesium', () => {
         lookAtTransform: vi.fn(),
         // 自转恢复时要从相机当前位置反算轨道状态
         positionCartographic: { longitude: 0, latitude: 0, height: 0 },
+        // 透视相机的视野角：平视/第一人称会改它，鸟瞰会还原。
+        frustum: new PerspectiveFrustum(),
       },
       scene: {
         globe: { enableLighting: false, baseColor: null, showGroundAtmosphere: true },
@@ -155,6 +169,8 @@ vi.mock('cesium', () => {
     SceneMode: { SCENE3D: 0 },
     // 平视锁定：解除时传 Matrix4.IDENTITY
     Matrix4: { IDENTITY: {} },
+    // 透视相机（视野角 fov 只在这个类上有）。
+    PerspectiveFrustum,
     HeadingPitchRange: vi.fn((heading: number, pitch: number, range: number) => ({
       heading,
       pitch,

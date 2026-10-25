@@ -37,6 +37,7 @@ const makeRig = () => {
     buildingEntities: [],
     roadEntities: [],
     trafficEntities: [],
+    firstPerson: false,
   })
   const primitives: ScenePrimitives = {
     ...makeScenePrimitives(),
@@ -116,8 +117,44 @@ describe('useCameraRig', () => {
     nowSpy.mockRestore()
   })
 
-  it('平视模式不自转', () => {
+  it('按住 Alt 落到街上、松开 Alt 飞回鸟瞰', () => {
     const { rig, state, stubViewer } = makeRig()
+    rig.attach(stubViewer as unknown as never)
+    expect(state.firstPerson).toBe(false)
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'AltLeft' }))
+    expect(state.firstPerson).toBe(true)
+    // 街上时视野拉宽（3A 第一人称比默认的 60° 宽）
+    expect(stubViewer.camera.frustum.fov).toBeGreaterThan(1.0)
+
+    window.dispatchEvent(new KeyboardEvent('keyup', { code: 'AltLeft' }))
+    expect(state.firstPerson).toBe(false)
+    // 回到鸟瞰：视野还原
+    expect(stubViewer.camera.frustum.fov).toBeCloseTo(60 / (180 / Math.PI), 5)
+  })
+
+  it('WASD 移动：按住 W 走起来，位置会变', () => {
+    const { rig, state, stubViewer } = makeRig()
+    rig.attach(stubViewer as unknown as never)
+    state.viewMode = 'street'
+    rig.flyToStreetLevel()
+    const listener = preRenderListenerOf(stubViewer)
+    stubViewer.camera.setView.mockClear()
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyW' }))
+    listener()
+    listener()
+    window.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyW' }))
+
+    expect(stubViewer.camera.setView).toHaveBeenCalled()
+    const call = stubViewer.camera.setView.mock.calls[0][0] as {
+      destination: { x: number; y: number; z: number }
+    }
+    // 位置是经纬度换算出来的笛卡尔坐标，z 固定是眼高
+    expect(call.destination.z).toBeCloseTo(1.7, 3)
+  })
+
+  it('平视模式不自转', () => {    const { rig, state, stubViewer } = makeRig()
     rig.attach(stubViewer as unknown as never)
     state.viewMode = 'street'
     const nowSpy = vi.spyOn(performance, 'now').mockReturnValue(performance.now() + 10_000)
